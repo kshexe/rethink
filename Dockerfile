@@ -1,3 +1,7 @@
+# Declared before the first FROM so it's in scope for both stages' FROM lines below - an ARG
+# declared later (e.g. right before the second FROM) is not recognized the same way.
+ARG BUILD_FROM
+
 # Build stage: compile TypeScript. A plain node image is used here (not the HA base) since it's
 # never shipped - only dist/ and node_modules/ are copied out of it below.
 FROM node:20-alpine AS build
@@ -10,7 +14,6 @@ COPY . .
 RUN npm run build && npm prune --omit=dev
 
 # Runtime stage: the Home Assistant add-on base (Alpine + bashio + s6-overlay).
-ARG BUILD_FROM
 FROM $BUILD_FROM
 WORKDIR /app
 
