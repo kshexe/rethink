@@ -12,6 +12,7 @@ MQTT_USER=$(bashio::config 'mqtt_user')
 MQTT_PASS=$(bashio::config 'mqtt_pass')
 DISCOVERY_PREFIX=$(bashio::config 'discovery_prefix')
 LANGUAGE=$(bashio::config 'language')
+ADVERTISE_REQUESTED_HOST=$(bashio::config 'advertise_requested_host')
 
 mkdir -p /data/state
 
@@ -22,8 +23,10 @@ jq -n \
   --arg mqtt_user "$MQTT_USER" \
   --arg mqtt_pass "$MQTT_PASS" \
   --arg language "$LANGUAGE" \
+  --argjson advertise_requested_host "$ADVERTISE_REQUESTED_HOST" \
   '{
     hostname: $hostname,
+    advertise_requested_host: $advertise_requested_host,
     homeassistant: ({
       mqtt_url: $mqtt_url,
       discovery_prefix: $discovery_prefix,

@@ -80,6 +80,35 @@ Notes specific to running it this way:
 - The **management web panel** (port 44401) is the primary way to check device/bridge status;
   there's no need to tail container logs for routine use.
 
+### Adopting a ThinQ2 appliance without SoftAP re-provisioning
+
+`rethink-setup`'s SoftAP pairing is not the only way to hand an appliance to rethink. For a
+**ThinQ2** appliance already registered on your LG account, port-redirecting its existing traffic
+(instead of resetting/re-pairing it) works and leaves the official app and Google Home connected:
+
+1. On your router, DNAT the appliance's outbound `443`/`8883` (matched by its own LAN IP, not a
+   blanket rule) to this add-on's host on the same ports.
+2. Turn on **`advertise_requested_host`** in the add-on options - `/route` then echoes back
+   whatever hostname the appliance already asked for (its real per-unit SNI, e.g.
+   `kic-mclip.lgthinq.com`), instead of forcing everything onto this add-on's own `hostname`. This
+   also makes it survive multiple units of the same model that each expect a different name -
+   rethink issues a matching certificate per requested SNI.
+3. Enable **bridge mode** for the device from the management panel to keep the app/Google Home
+   working. Registration is left alone if the appliance is already in your account (no
+   delete-and-recreate, no `Rethink xxxxxxxx` rename, no Google Home desync).
+4. To revert: disable bridge mode **first**, then remove the DNAT rule, then clear the router's
+   conntrack entry for that device's IP. Removing the DNAT rule before disabling bridge mode
+   leaves the appliance and the bridge fighting over the same AWS IoT client ID (the appliance's
+   own device ID) in a reconnect loop that looks like a dead certificate but isn't.
+
+- Don't redirect DNS for this instead of using port DNAT - the appliance caches the resolved IP,
+  so undoing it later needs a power cycle to clear.
+- This path is ThinQ2-only; ThinQ1 appliances still need real re-provisioning.
+
+(Method and the `advertise_requested_host` fix come from
+[anszom/rethink#107](https://github.com/anszom/rethink/pull/107) and the write-up at
+[cafe.naver.com/koreassistant/23824](https://cafe.naver.com/koreassistant/23824).)
+
 ## Management
 
 A simple web interface is available on a user-defined port (default: 44401). The interface supports:
