@@ -17,12 +17,14 @@ The following appliances are currently supported in rethink:
     - 👍 LG DualCool family (Standard 2, Deluxe with and without air purifier, etc.) wall-mounted Air Conditioner IDUs - high level of support. What's missing are mostly some features of higher-end models and more diagnostic coverage,
     - 👍 LW1822HRSM, Smart Window Air Conditioner - mostly working,
     - 👍 LP1022FVSM Portable Air Conditioner - mostly working,
+    - 👍 CST_570004_WW, LG ceiling-cassette IDU (multi-split) - mostly working,
 - Fridges:
     - 🫤 LF28H8330S, Standard-Depth 4-Door French Door Refrigerator - preliminary support,
     - 🫤 GSJV70PZTE, LG Side by Side Refrigerator - preliminary support,
     - 🫤 GSB470BASZ, American Style Side by Side Refrigerator - preliminary support,
     - 🫤 GA-B509CMUM - preliminary support,
 - Washing Machines:
+    - 👍 FX\_\_\_S, LG front-load washer sold in Korea - mostly working,
     - 🫤 (model name unknown) Washing Machine - preliminary support
     - 👍 F2J7HG1W, Washing Machine - mostly working,
     - 🫤 F4WV508S2E, Front-Loading Washing Machine - preliminary support
@@ -55,6 +57,28 @@ Most of the findings from the reverse engineering process are available on the [
 ## Installation
 
 See the [instructions](https://github.com/anszom/rethink/wiki/Installing-rethink‐cloud).
+
+### As a Home Assistant add-on
+
+This fork also ships as a Home Assistant add-on (`config.yaml`/`Dockerfile`/`rootfs` at the repo
+root), so it can be added directly as an add-on repository:
+**Settings → Add-ons → Add-on Store → ⋮ → Repositories → `https://github.com/kshexe/rethink`**.
+
+Notes specific to running it this way:
+
+- **`hostname`** (add-on option) must resolve via regular DNS on your LAN, not mDNS - point a
+  static DNS entry (e.g. in your router/UniFi) at whatever host the add-on runs on. This is a
+  rethink requirement, not an add-on limitation - see the note in `config.jsonc` upstream.
+- **Ports**: the add-on exposes 443/8883/46030/47878/44401 with their default container-internal
+  binds. Remap the _host_ side from the add-on's **Info → Network** tab if any of those host ports
+  are already taken by something else (e.g. another bridge add-on) - rethink itself keeps listening
+  on the plain defaults inside its own container, so compatibility with devices that dislike
+  non-default ports (see the warning in `config.jsonc`) is unaffected either way.
+- **Persistent state** (CA key/cert, bridge per-device store, generated `config.json`) lives under
+  the add-on's own `/data`, regenerated from the add-on options on every start - editing the add-on
+  options and restarting is enough, no manual `config.json` editing needed.
+- The **management web panel** (port 44401) is the primary way to check device/bridge status;
+  there's no need to tail container logs for routine use.
 
 ## Management
 

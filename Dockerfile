@@ -1,8 +1,7 @@
-# Build stage
-FROM alpine:3.20 AS build
+# Build stage: compile TypeScript. A plain node image is used here (not the HA base) since it's
+# never shipped - only dist/ and node_modules/ are copied out of it below.
+FROM node:20-alpine AS build
 WORKDIR /app
-
-RUN apk add --no-cache nodejs npm
 
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts
@@ -10,20 +9,17 @@ RUN npm ci --ignore-scripts
 COPY . .
 RUN npm run build && npm prune --omit=dev
 
-# Production stage
-FROM alpine:3.20 AS runtime
+# Runtime stage: the Home Assistant add-on base (Alpine + bashio + s6-overlay).
+ARG BUILD_FROM
+FROM $BUILD_FROM
 WORKDIR /app
 
-RUN apk add --no-cache nodejs openssl \
-	&& addgroup -S app \
-	&& adduser -S -G app app
+RUN apk add --no-cache nodejs openssl
 
 COPY --from=build /app/package.json /app/package-lock.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
-COPY config.jsonc /app/config.json
 
-RUN mkdir -p /app/data
+COPY rootfs /
 
-EXPOSE 443 8883 1884 46030 47878 44401
-CMD ["sh", "-c", "[ -f /app/data/config.json ] || cp /app/config.json /app/data/config.json; exec node dist/rethink-cloud.js /app/data/config.json"]
+RUN chmod +x /etc/cont-init.d/*.sh /etc/services.d/rethink/run

@@ -1,0 +1,41 @@
+---
+name: Rethink (LG ThinQ local bridge)
+version: '1.0.0'
+slug: rethink
+description: >-
+    Local-only server that replaces LG's ThinQ cloud for supported appliances,
+    translating their protocol to MQTT for Home Assistant. Optional bridge mode
+    mirrors traffic to the real LG cloud too, so the official app keeps working.
+url: https://github.com/kshexe/rethink
+arch: [amd64, aarch64]
+init: false
+startup: services
+boot: auto
+ports:
+    443/tcp: 443
+    8883/tcp: 8883
+    46030/tcp: 46030
+    47878/tcp: 47878
+    44401/tcp: 44401
+ports_description:
+    443/tcp: ThinQ2 HTTPS (device provisioning)
+    8883/tcp: ThinQ2 MQTTS (device connection) - do not change unless you know what you're doing
+    46030/tcp: ThinQ1 HTTPS (device provisioning)
+    47878/tcp: ThinQ1 device connection
+    44401/tcp: Management web panel (device list, live traffic monitor, bridge mode toggle)
+options:
+    hostname: rethink.lan
+    mqtt_host: core-mosquitto
+    mqtt_port: 1883
+    mqtt_user: ''
+    mqtt_pass: ''
+    discovery_prefix: homeassistant
+    language: ''
+schema:
+    hostname: str
+    mqtt_host: str
+    mqtt_port: port
+    mqtt_user: str?
+    mqtt_pass: password?
+    discovery_prefix: str
+    language: str?
