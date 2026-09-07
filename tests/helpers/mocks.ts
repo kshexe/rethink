@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { setFilter } from '@/util/logging'
 import type { Connection, DeviceDiscovery } from '@/cloud/homeassistant'
+import type { HAConfig } from '@/util/config'
 import type { Metadata } from '@/cloud/thinq'
 import { Device as Thinq2Device } from '@/cloud/thinq2/device'
 import { Device as Thinq1Device } from '@/cloud/thinq1/device'
@@ -20,6 +21,7 @@ export type DeviceInfo = {
 export class MockHAConnection extends EventEmitter {
     devices: Record<string, DeviceInfo> = {}
     isConnected = true
+    config?: Partial<HAConfig>
 
     publishConfig(id: string, config: DeviceDiscovery) {
         if (!this.devices[id]) this.devices[id] = { properties: {} }

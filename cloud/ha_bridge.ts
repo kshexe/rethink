@@ -23,6 +23,8 @@ import RV13B6ES_D_US_WIFI from './devices/RV13B6ES_D_US_WIFI'
 import WTL_FXU_BDV_NA_01 from './devices/WTL_FXU_BDV_NA_01'
 import DHUM_056905_WW from './devices/DHUM_056905_WW'
 import ST_B_E4H01Y_APL from './devices/ST_B_E4H01Y_APL'
+import CST_570004_WW from './devices/CST_570004_WW'
+import FX___S from './devices/FX___S'
 import { Device as T1Device } from './thinq1/device'
 import { Device as T2Device } from './thinq2/device'
 import { type Connection } from './homeassistant'
@@ -70,6 +72,8 @@ const t2deviceTypes: Record<string, T2Factory> = {
     WTL_FXU_BDV_NA_01, // LG WashTower
     DHUM_056905_WW,
     ST_B_E4H01Y_APL,
+    CST_570004_WW, // LG ceiling-cassette IDU (multi-split, deviceType 401); DualCool TLV via ac_common
+    FX___S, // LG front-load washer sold in Korea (deviceType 201, tunnelled 0xEC state frames)
 }
 
 class Bridge {
@@ -103,6 +107,15 @@ class Bridge {
             console.warn(`${thinqdev.platform} device type ${meta.modelId} unknown`)
             return
         }
+
+        /*
+         * A ThinQ appliance may open its replacement MQTT connection before the old one's close
+         * event fires - notably right after a washer powers itself off and back on. The new
+         * handler publishes online during start() below, so dropping the superseded handler here
+         * would only cost every entity a brief unavailable -> available flicker for no reason: the
+         * map entry is about to be replaced. Its timers/listeners still need releasing though.
+         */
+        this.haDevices.get(thinqdev.id)?.cancelPendingWork()
 
         this.haDevices.set(thinqdev.id, hadevice)
         thinqdev.on('close', () => this.dropDevice(hadevice))

@@ -175,6 +175,8 @@ export type OriginInfo = {
 
 export type AvailabilityInfo = {
     topic: string
+    payload_available?: string
+    payload_not_available?: string
 }
 
 export type ComponentInfo = {
@@ -199,6 +201,7 @@ export type ClimateComponent = ComponentInfo & {
     precision?: number
     min_temp?: number
     max_temp?: number
+    modes?: string[]
     fan_modes?: string[]
     swing_modes?: string[]
     swing_horizontal_modes?: string[]
