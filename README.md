@@ -69,12 +69,15 @@ Notes specific to running it this way:
 - **`hostname`** (add-on option) must resolve via regular DNS on your LAN, not mDNS - point a
   static DNS entry (e.g. in your router/UniFi) at whatever host the add-on runs on. This is a
   rethink requirement, not an add-on limitation - see the note in `config.jsonc` upstream.
-- **Ports**: the add-on exposes 443/8883/46030/47878 (device-facing) with their default
-  container-internal binds. Remap the _host_ side from the add-on's **Info → Network** tab if any
-  of those host ports are already taken by something else (e.g. another bridge add-on) - rethink
-  itself keeps listening on the plain defaults inside its own container, so compatibility with
-  devices that dislike non-default ports (see the warning in `config.jsonc`) is unaffected either
-  way.
+- **Ports**: the add-on's ThinQ2 ports default to `4433`/`8886` (both host- and container-side -
+  rethink itself listens directly on these, no internal 443/8883 hop), and ThinQ1 stays on its
+  plain defaults `46030`/`47878`. This has no effect on device compatibility: appliances always
+  connect to LG's real cloud on 443/8883 and never see rethink's own listening port - either
+  they're pointed at rethink via DNS/SoftAP config (which only ever names a host, not a port), or
+  their traffic is DNAT'd here, in which case the router rewrites the destination port
+  transparently before the packet arrives (see below). Remap the _host_ side from the add-on's
+  **Info → Network** tab if any of these host ports are already taken by something else (e.g.
+  another bridge add-on).
 - **Persistent state** (CA key/cert, bridge per-device store, generated `config.json`) lives under
   the add-on's own `/data`, regenerated from the add-on options on every start - editing the add-on
   options and restarting is enough, no manual `config.json` editing needed.
