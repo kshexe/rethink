@@ -91,7 +91,8 @@ Notes specific to running it this way:
 (instead of resetting/re-pairing it) works and leaves the official app and Google Home connected:
 
 1. On your router, DNAT the appliance's outbound `443`/`8883` (matched by its own LAN IP, not a
-   blanket rule) to this add-on's host on the same ports.
+   blanket rule) to this add-on's host on whatever host ports it's actually published on (default
+   `4433`/`8886` - check the add-on's **Info → Network** tab, since this is remappable).
 2. Turn on **`advertise_requested_host`** in the add-on options - `/route` then echoes back
    whatever hostname the appliance already asked for (its real per-unit SNI, e.g.
    `kic-mclip.lgthinq.com`), instead of forcing everything onto this add-on's own `hostname`. This

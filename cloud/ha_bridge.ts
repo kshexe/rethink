@@ -31,6 +31,7 @@ import { type Connection } from './homeassistant'
 import HADevice from './devices/base'
 import { type Metadata } from './thinq'
 import { AnyDevice } from './devmgr'
+import { type Bridge as LgCloudBridge } from '@/bridge'
 
 type T1Factory = new (HA: Connection, thinq: T1Device, metadata: Metadata) => HADevice
 type T2Factory = new (HA: Connection, thinq: T2Device, metadata: Metadata) => HADevice
@@ -78,7 +79,10 @@ const t2deviceTypes: Record<string, T2Factory> = {
 
 class Bridge {
     haDevices = new Map<string, HADevice>()
-    constructor(readonly HA: Connection) {
+    constructor(
+        readonly HA: Connection,
+        readonly lgBridge?: LgCloudBridge,
+    ) {
         HA.on('discovery', () => {
             this.haDevices.forEach((ha) => ha.publishConfig())
         })
@@ -86,6 +90,37 @@ class Bridge {
             const ha = this.haDevices.get(id)
             if (ha) ha.setProperty(prop, value)
         })
+
+        // The owner's real name for the appliance (the same one the LG app shows) is only known
+        // once the LG account is linked (bridge mode, see management/index.ts's login flow) - wrap
+        // publishConfig() so it rides along on every publish, whenever that turns out to be,
+        // instead of a static "LG Air Conditioner"/"LG Washer"/etc.
+        this.lgBridge?.on('namesChanged', () => this.refreshAllNames())
+    }
+
+    private refreshAllNames() {
+        if (!this.lgBridge) return
+        for (const [id, hadevice] of this.haDevices) {
+            const name = this.lgBridge.name(id)
+            if (name && hadevice.config && hadevice.config.device.name !== name) {
+                hadevice.config.device.name = name
+                hadevice.publishConfig()
+            }
+        }
+    }
+
+    private applyDeviceName(id: string, hadevice: HADevice) {
+        const lgBridge = this.lgBridge
+        if (!lgBridge) return
+
+        const originalPublishConfig = hadevice.publishConfig.bind(hadevice)
+        hadevice.publishConfig = () => {
+            const name = hadevice.config && lgBridge.name(id)
+            if (name) hadevice.config!.device.name = name
+            originalPublishConfig()
+        }
+
+        if (hadevice.config) hadevice.publishConfig()
     }
 
     newDevice(thinqdev: AnyDevice) {
@@ -119,6 +154,8 @@ class Bridge {
 
         this.haDevices.set(thinqdev.id, hadevice)
         thinqdev.on('close', () => this.dropDevice(hadevice))
+
+        if (this.lgBridge) this.applyDeviceName(thinqdev.id, hadevice)
 
         // hadevice.publishConfig() not needed anymore, will usually happen in the devclass constructor - or later
         hadevice.start()

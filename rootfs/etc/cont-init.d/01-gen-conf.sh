@@ -10,7 +10,6 @@ MQTT_HOST=$(bashio::config 'mqtt_host')
 MQTT_PORT=$(bashio::config 'mqtt_port')
 MQTT_USER=$(bashio::config 'mqtt_user')
 MQTT_PASS=$(bashio::config 'mqtt_pass')
-DISCOVERY_PREFIX=$(bashio::config 'discovery_prefix')
 LANGUAGE=$(bashio::config 'language')
 ADVERTISE_REQUESTED_HOST=$(bashio::config 'advertise_requested_host')
 
@@ -19,7 +18,6 @@ mkdir -p /data/state
 jq -n \
   --arg hostname "$HOSTNAME" \
   --arg mqtt_url "mqtt://${MQTT_HOST}:${MQTT_PORT}" \
-  --arg discovery_prefix "$DISCOVERY_PREFIX" \
   --arg mqtt_user "$MQTT_USER" \
   --arg mqtt_pass "$MQTT_PASS" \
   --arg language "$LANGUAGE" \
@@ -29,7 +27,7 @@ jq -n \
     advertise_requested_host: $advertise_requested_host,
     homeassistant: ({
       mqtt_url: $mqtt_url,
-      discovery_prefix: $discovery_prefix,
+      discovery_prefix: "homeassistant",
       rethink_prefix: "rethink",
       mqtt_user: $mqtt_user,
       mqtt_pass: $mqtt_pass
@@ -46,7 +44,7 @@ jq -n \
     log: ["status", "incoming", "HTTPS", "publish", "MGMT"]
   }' > /data/config.json
 
-bashio::log.info "Generated /data/config.json (mqtt=${MQTT_HOST}:${MQTT_PORT}, discovery_prefix=${DISCOVERY_PREFIX}, hostname=${HOSTNAME})"
+bashio::log.info "Generated /data/config.json (mqtt=${MQTT_HOST}:${MQTT_PORT}, hostname=${HOSTNAME})"
 
 if [ "$HOSTNAME" = "rethink.lan" ]; then
   bashio::log.warning "hostname is still the default 'rethink.lan' - this needs to resolve via regular DNS on your LAN (not mDNS/.local). Point it at this add-on's host, e.g. a static DNS entry in your router/UniFi."

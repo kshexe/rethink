@@ -140,12 +140,7 @@ function t2setup(manager: DeviceManager) {
 }
 
 // HA connector
-const ha = new HA_bridge(new HA_connection(config.homeassistant))
 const manager = new DeviceManager()
-manager.on('newDevice', (dev) => ha.newDevice(dev))
-
-t1setup(manager)
-t2setup(manager)
 
 let bridge: Bridge | undefined
 if (config.bridge) {
@@ -153,6 +148,12 @@ if (config.bridge) {
     const storage = new JSONStorage(config.bridge.storage_path)
     bridge = new Bridge(storage, manager)
 }
+
+const ha = new HA_bridge(new HA_connection(config.homeassistant), bridge)
+manager.on('newDevice', (dev) => ha.newDevice(dev))
+
+t1setup(manager)
+t2setup(manager)
 
 if (config.management_port)
     Management.app(ha, manager, bridge).listen(config.management_port.bind, config.management_port.address)
