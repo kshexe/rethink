@@ -1,6 +1,6 @@
 ---
 name: Rethink (LG ThinQ local bridge)
-version: '1.1.0'
+version: '1.1.1'
 slug: rethink
 description: >-
     Local-only server that replaces LG's ThinQ cloud for supported appliances,
@@ -11,6 +11,7 @@ arch: [amd64, aarch64]
 init: false
 startup: services
 boot: auto
+webui: http://[HOST]:[PORT:44401]/
 ports:
     443/tcp: 443
     8883/tcp: 8883
