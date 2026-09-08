@@ -122,6 +122,62 @@ A simple web interface is available on a user-defined port (default: 44401). The
 - monitoring their communications (with packet injection)
 - configuring the bridge mode
 
+### Logging into your LG account
+
+Bridge mode (see below) needs your appliance to already be registered on a real LG account, and
+needs rethink to hold a valid LG login session to mirror traffic through. That login happens from
+the management panel, not the add-on's options screen - here's why, and the exact steps.
+
+**Why not just put username/password in the add-on options?** Because it isn't a simple
+username+password REST call. `signInUrl()` builds a link to LG's actual official sign-in page
+(`common.lgthinq.com/signin` - the very page the real LG app opens in its own webview), meant for a
+human to look at and type into, not for a server to submit credentials to on your behalf (it may
+also involve 2FA/CAPTCHA). There's no way around this short of a real browser doing the login.
+
+**Why does *the rest of the panel* also have to be a web page, then?** rethink is a standalone
+Node.js server, not a Python-based Home Assistant integration - so it doesn't get an HA config
+flow. An add-on's options screen can only show a fixed set of predefined key/value fields; it can't
+represent things like a dynamic device list, per-device bridge-mode toggles, or live monitoring.
+Those need a real UI regardless, and the login modal is just part of that same panel.
+
+Steps:
+
+1. In the management panel, click **"Log into your LG account"**. A modal opens - enter your
+   country's 2-letter code (`KR` for Korea) and click **"Log in"**.
+2. LG's real official sign-in page opens in a new tab (not rethink's - LG's own server). Log in
+   there with your actual LG ThinQ account credentials.
+3. On success, LG redirects to its own fixed blank page
+   (`kr.m.lgaccount.com/login/iabClose?code=...`) with the login result (an auth code) in the query
+   string.
+4. rethink has no way to receive that redirect directly (LG's `redirect_uri` is hardcoded to that
+   one fixed LG page - LG's OAuth doesn't support third-party apps registering their own callback
+   URL, and every HA instance's address is different anyway). So instead: copy that final URL in
+   full, paste it into the panel's **"URL"** field, and click **"Continue"**. The server pulls
+   `code` out of it, exchanges it with LG for a token, and finishes the login.
+
+This manual copy-the-final-URL step isn't unique to rethink - it's the standard workaround for LG
+ThinQ's OAuth across the ecosystem (e.g. the HACS `ha-smartthinq-sensors` integration does the same
+thing) because of that hardcoded `redirect_uri`.
+
+### Bridge mode device types
+
+When enabling bridge mode for a device from the panel, "device type" is a 3-digit code, not a free
+text field:
+
+| Code | Device |
+|---|---|
+| 101 | Refrigerator (냉장고) |
+| 201 | Washer (세탁기) |
+| 202 | Dryer (건조기) |
+| 204 | Dishwasher (식기세척기) |
+| 223 | WashTower (워시타워) |
+| 301 | Gas Range (가스레인지) |
+| 302 | Microwave (전자레인지) |
+| 401 | Air Conditioner (에어컨) |
+
+The field autocompletes with these (shown as e.g. `401 (Air Conditioner)`); typing just the number
+works too.
+
 ## Code
 
 The following code is currently available:
