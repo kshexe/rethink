@@ -317,7 +317,12 @@ get('btn_thinq_login_continue').onclick = () => {
 
     const countryCode = get('country_code').value.toUpperCase()
 
-    window.open(`${baseUrl}thinq_login?countryCode=${countryCode}`, '_blank')
+    // Under HA ingress this panel runs inside a sandboxed iframe. window.open() from there can
+    // spawn a popup that the iframe itself can't keep a handle on (and on some browsers is silently
+    // swallowed instead), since the iframe isn't the browsing context the user actually sees as a
+    // tab. window.top.open() opens it from the real top-level tab instead, exactly like clicking a
+    // target="_blank" link typed directly into the address bar would.
+    window.top.open(`${baseUrl}thinq_login?countryCode=${countryCode}`, '_blank')
 }
 
 get('btn_thinq_login_complete').onclick = async () => {
