@@ -69,16 +69,20 @@ Notes specific to running it this way:
 - **`hostname`** (add-on option) must resolve via regular DNS on your LAN, not mDNS - point a
   static DNS entry (e.g. in your router/UniFi) at whatever host the add-on runs on. This is a
   rethink requirement, not an add-on limitation - see the note in `config.jsonc` upstream.
-- **Ports**: the add-on exposes 443/8883/46030/47878/44401 with their default container-internal
-  binds. Remap the _host_ side from the add-on's **Info → Network** tab if any of those host ports
-  are already taken by something else (e.g. another bridge add-on) - rethink itself keeps listening
-  on the plain defaults inside its own container, so compatibility with devices that dislike
-  non-default ports (see the warning in `config.jsonc`) is unaffected either way.
+- **Ports**: the add-on exposes 443/8883/46030/47878 (device-facing) with their default
+  container-internal binds. Remap the _host_ side from the add-on's **Info → Network** tab if any
+  of those host ports are already taken by something else (e.g. another bridge add-on) - rethink
+  itself keeps listening on the plain defaults inside its own container, so compatibility with
+  devices that dislike non-default ports (see the warning in `config.jsonc`) is unaffected either
+  way.
 - **Persistent state** (CA key/cert, bridge per-device store, generated `config.json`) lives under
   the add-on's own `/data`, regenerated from the add-on options on every start - editing the add-on
   options and restarting is enough, no manual `config.json` editing needed.
-- The **management web panel** (port 44401) is the primary way to check device/bridge status;
-  there's no need to tail container logs for routine use.
+- The **management web panel** is the primary way to check device/bridge status; there's no need
+  to tail container logs for routine use. It's served through HA's ingress (the **OPEN WEB UI**
+  button on the add-on's Info page), not a directly-forwarded port, so it works the same way
+  regardless of your router/port-forwarding setup - the same as Music Assistant's or Advanced SSH
+  & Web Terminal's web UI button.
 
 ### Adopting a ThinQ2 appliance without SoftAP re-provisioning
 
