@@ -41,9 +41,8 @@ jq -n \
     mqtt_port: 1884,
     thinq1_https_port: 46030,
     thinq1_port: 47878,
-    management_port: 44401,
     bridge: { storage_path: "/data/state" },
-    log: ["status", "incoming", "HTTPS", "publish", "MGMT"]
+    log: ["status", "incoming", "HTTPS", "publish", "device"]
   }' > /data/config.json
 
 bashio::log.info "Generated /data/config.json (mqtt=${MQTT_HOST}:${MQTT_PORT}, discovery_prefix=${DISCOVERY_PREFIX}, hostname=${HOSTNAME})"

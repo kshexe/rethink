@@ -8,7 +8,6 @@
     "node-fetch": "^3.3.2",
     "strip-json-comments": "^5.0.3",
     "tiny-typed-emitter": "^2.1.0",
-    "websocket-express": "^4.0.1",
     "ws": "^8.19.0"
   },
   "engines": {
@@ -25,7 +24,7 @@
     "typescript": "^5.9.3"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && tsc-alias -p tsconfig.build.json && cp -r html dist/",
+    "build": "tsc -p tsconfig.build.json && tsc-alias -p tsconfig.build.json",
     "check": "tsc --noEmit",
     "dev": "tsx rethink-cloud.ts",
     "start": "node dist/rethink-cloud.js",

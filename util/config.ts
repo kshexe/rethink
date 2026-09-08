@@ -7,7 +7,6 @@ export type RawConfig = {
     https_port: Port | number
     mqtts_port: Port | number
     mqtt_port: Port | number
-    management_port?: Port | number
     thinq1_https_port?: Port | number
     thinq1_port?: Port | number
     mqtt?: boolean
@@ -26,7 +25,6 @@ export type Config = {
     https_port: Port
     mqtts_port: Port
     mqtt_port: Port
-    management_port?: Port
     thinq1_https_port: Port
     thinq1_port: Port
     mqtt: boolean
@@ -80,7 +78,6 @@ export function normalize(config: RawConfig): Config {
         https_port: parsePort(config.https_port),
         mqtts_port: parsePort(config.mqtts_port),
         mqtt_port: parsePort(config.mqtt_port),
-        management_port: parsePort(config.management_port),
         thinq1_https_port: parsePort(config.thinq1_https_port ?? 46030),
         thinq1_port: parsePort(config.thinq1_port ?? 47878),
     }

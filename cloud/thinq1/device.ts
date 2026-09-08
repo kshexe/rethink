@@ -4,6 +4,7 @@ import { Connection } from './connection'
 import { getDeviceMetadata } from './http'
 import { Metadata } from '../thinq'
 import { randomUUID } from 'node:crypto'
+import log from '@/util/logging'
 
 type ConWithExtra = Connection & {
     deviceObj?: Device
@@ -29,6 +30,7 @@ export class Device extends TypedEmitter<DeviceEvents> {
         con.deviceObj = this
         con.on('status', (packet) => {
             this.lastReport = packet
+            log('device', this.id, 'rx', packet.toString('hex'))
             this.emit('data', packet)
         })
         con.on('error', console.log)
@@ -41,6 +43,7 @@ export class Device extends TypedEmitter<DeviceEvents> {
     }
 
     send(body: object) {
+        log('device', this.id, 'tx', JSON.stringify(body))
         this.emit('sendData', body)
         this.con.json({
             Header: { 'x-lgedm-deviceId': this.id },

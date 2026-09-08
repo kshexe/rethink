@@ -31,6 +31,10 @@ import { type Connection } from './homeassistant'
 import HADevice from './devices/base'
 import { type Metadata } from './thinq'
 import { AnyDevice } from './devmgr'
+import { type Bridge as LgCloudBridge } from '@/bridge'
+
+const BRIDGE_ENABLED_PROP = 'bridge_enabled'
+const BRIDGE_DEVICE_TYPE_PROP = 'bridge_device_type'
 
 type T1Factory = new (HA: Connection, thinq: T1Device, metadata: Metadata) => HADevice
 type T2Factory = new (HA: Connection, thinq: T2Device, metadata: Metadata) => HADevice
@@ -78,14 +82,129 @@ const t2deviceTypes: Record<string, T2Factory> = {
 
 class Bridge {
     haDevices = new Map<string, HADevice>()
-    constructor(readonly HA: Connection) {
+    constructor(
+        readonly HA: Connection,
+        readonly lgBridge?: LgCloudBridge,
+    ) {
         HA.on('discovery', () => {
             this.haDevices.forEach((ha) => ha.publishConfig())
         })
         HA.on('setProperty', (id: string, prop: string, value: string) => {
+            // Bridge (LG cloud mirroring) control properties are synthetic - added onto a real
+            // appliance's own discovery config by addBridgeControls() below, but not one of that
+            // appliance's own protocol fields, so they must never reach its setProperty().
+            if (prop === BRIDGE_ENABLED_PROP || prop === BRIDGE_DEVICE_TYPE_PROP) {
+                void this.handleBridgeControlSet(id, prop, value)
+                return
+            }
             const ha = this.haDevices.get(id)
             if (ha) ha.setProperty(prop, value)
         })
+
+        if (this.lgBridge) {
+            this.lgBridge.on('namesChanged', () => this.refreshAllNames())
+            this.lgBridge.on('started', (id) => this.publishBridgeState(id))
+            this.lgBridge.on('stopped', (id) => this.publishBridgeState(id))
+        }
+    }
+
+    private pendingDeviceType = new Map<string, string>()
+
+    private async handleBridgeControlSet(id: string, prop: string, value: string) {
+        const lgBridge = this.lgBridge
+        if (!lgBridge) return
+
+        if (prop === BRIDGE_DEVICE_TYPE_PROP) {
+            this.pendingDeviceType.set(id, value.trim())
+            this.HA.publishProperty(id, BRIDGE_DEVICE_TYPE_PROP, value.trim())
+            return
+        }
+
+        // prop === BRIDGE_ENABLED_PROP
+        if (value === 'ON') {
+            const devType = this.pendingDeviceType.get(id)
+            const ok = await lgBridge.enable(id, devType || undefined)
+            if (!ok) console.warn(`Could not enable the LG cloud bridge for ${id} (not logged in, or bad device type?)`)
+        } else {
+            lgBridge.disable(id)
+        }
+        this.publishBridgeState(id)
+    }
+
+    private publishBridgeState(id: string) {
+        const lgBridge = this.lgBridge
+        if (!lgBridge) return
+        this.HA.publishProperty(id, BRIDGE_ENABLED_PROP, lgBridge.status(id) ? 'ON' : 'OFF')
+    }
+
+    /*
+     * Adds the "bridge mode" switch + device-type field onto an appliance's own discovery config,
+     * so they show up as two more entities on that same HA device - not a separate device. Only
+     * meaningful once an LG account is linked (this.lgBridge is only ever set up from
+     * rethink-cloud.ts when config.bridge is set).
+     *
+     * Most device classes don't have a config yet at this point - they publish it later, once real
+     * status data first arrives (see e.g. tests/cloud/devices/2REB1GLVB1__2.test.ts) - and some
+     * republish it again afterwards (a reconnect, a capability re-query). Rather than injecting the
+     * two components once and hoping nothing overwrites config afterwards, publishConfig() itself
+     * is wrapped so the components (and the LG-account name) get merged in on every publish, no
+     * matter when or how many times that turns out to be.
+     */
+    private addBridgeControls(id: string, hadevice: HADevice, meta: Metadata) {
+        const lgBridge = this.lgBridge
+        if (!lgBridge) return
+
+        const knownDeviceType = meta.deviceType ? String(meta.deviceType) : ''
+        if (knownDeviceType) this.pendingDeviceType.set(id, knownDeviceType)
+
+        const deviceTypeComp = {
+            platform: 'text',
+            unique_id: `$deviceid-${BRIDGE_DEVICE_TYPE_PROP}`,
+            state_topic: `$this/${BRIDGE_DEVICE_TYPE_PROP}`,
+            command_topic: `$this/${BRIDGE_DEVICE_TYPE_PROP}/set`,
+            name: '기기타입 (bridge)',
+            icon: 'mdi:identifier',
+            min: 0,
+            max: 5,
+            entity_category: 'config',
+        } as const
+        const bridgeEnabledComp = {
+            platform: 'switch',
+            unique_id: `$deviceid-${BRIDGE_ENABLED_PROP}`,
+            state_topic: `$this/${BRIDGE_ENABLED_PROP}`,
+            command_topic: `$this/${BRIDGE_ENABLED_PROP}/set`,
+            name: '브릿지 (LG 앱 연동)',
+            icon: 'mdi:cloud-sync',
+            entity_category: 'config',
+        } as const
+
+        const originalPublishConfig = hadevice.publishConfig.bind(hadevice)
+        hadevice.publishConfig = () => {
+            if (hadevice.config) {
+                hadevice.config.components[BRIDGE_DEVICE_TYPE_PROP] = deviceTypeComp
+                hadevice.config.components[BRIDGE_ENABLED_PROP] = bridgeEnabledComp
+                const name = lgBridge.name(id)
+                if (name) hadevice.config.device.name = name
+            }
+            originalPublishConfig()
+            if (hadevice.config) {
+                this.HA.publishProperty(id, BRIDGE_DEVICE_TYPE_PROP, this.pendingDeviceType.get(id) || '')
+                this.publishBridgeState(id)
+            }
+        }
+
+        if (hadevice.config) hadevice.publishConfig()
+    }
+
+    private refreshAllNames() {
+        if (!this.lgBridge) return
+        for (const [id, hadevice] of this.haDevices) {
+            const name = this.lgBridge.name(id)
+            if (name && hadevice.config && hadevice.config.device.name !== name) {
+                hadevice.config.device.name = name
+                hadevice.publishConfig()
+            }
+        }
     }
 
     newDevice(thinqdev: AnyDevice) {
@@ -119,6 +238,8 @@ class Bridge {
 
         this.haDevices.set(thinqdev.id, hadevice)
         thinqdev.on('close', () => this.dropDevice(hadevice))
+
+        if (this.lgBridge) this.addBridgeControls(thinqdev.id, hadevice, meta)
 
         // hadevice.publishConfig() not needed anymore, will usually happen in the devclass constructor - or later
         hadevice.start()

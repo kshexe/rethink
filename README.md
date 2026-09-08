@@ -78,11 +78,9 @@ Notes specific to running it this way:
 - **Persistent state** (CA key/cert, bridge per-device store, generated `config.json`) lives under
   the add-on's own `/data`, regenerated from the add-on options on every start - editing the add-on
   options and restarting is enough, no manual `config.json` editing needed.
-- The **management web panel** is the primary way to check device/bridge status; there's no need
-  to tail container logs for routine use. It's served through HA's ingress (the **OPEN WEB UI**
-  button on the add-on's Info page), not a directly-forwarded port, so it works the same way
-  regardless of your router/port-forwarding setup - the same as Music Assistant's or Advanced SSH
-  & Web Terminal's web UI button.
+- There is no web panel - device status, bridge mode and the LG login flow are all ordinary HA
+  entities (see [Management](#management) below), and routine traffic monitoring is just the
+  add-on's own log (topic `device`, on by default).
 
 ### Adopting a ThinQ2 appliance without SoftAP re-provisioning
 
@@ -97,9 +95,10 @@ Notes specific to running it this way:
    `kic-mclip.lgthinq.com`), instead of forcing everything onto this add-on's own `hostname`. This
    also makes it survive multiple units of the same model that each expect a different name -
    rethink issues a matching certificate per requested SNI.
-3. Enable **bridge mode** for the device from the management panel to keep the app/Google Home
-   working. Registration is left alone if the appliance is already in your account (no
-   delete-and-recreate, no `Rethink xxxxxxxx` rename, no Google Home desync).
+3. Turn on the device's own **"브릿지 (LG 앱 연동)"** switch entity (see
+   [Management](#management)) to keep the app/Google Home working. Registration is left alone if
+   the appliance is already in your account (no delete-and-recreate, no `Rethink xxxxxxxx` rename,
+   no Google Home desync).
 4. To revert: disable bridge mode **first**, then remove the DNAT rule, then clear the router's
    conntrack entry for that device's IP. Removing the DNAT rule before disabling bridge mode
    leaves the appliance and the bridge fighting over the same AWS IoT client ID (the appliance's
@@ -115,11 +114,24 @@ Notes specific to running it this way:
 
 ## Management
 
-A simple web interface is available on a user-defined port (default: 44401). The interface supports:
+There is no separate web panel - device status, the LG-cloud bridge login, and per-device bridge
+mode are all published as ordinary MQTT-discovered HA entities, the same way the appliances
+themselves are:
 
-- listing the devices connected to rethink
-- monitoring their communications (with packet injection)
-- configuring the bridge mode
+- Every mapped appliance gets two extra entities on its existing HA device, alongside its normal
+  ones: a **기기타입 (bridge)** text field (the ThinQ device-type code, e.g. `401` for an air
+  conditioner - usually pre-filled from what the appliance itself reported) and a **브릿지 (LG 앱
+  연동)** switch to turn bridge mode on/off for that device.
+- Logging into the LG account that bridge mode needs happens through a small virtual "Rethink
+  Bridge" device with its own entities: a **국가코드** text field (2-letter country code), a
+  **LG 로그인 URL** sensor holding the actual sign-in link for that country (open it in a real
+  browser - LG's OAuth has no way to redirect back to this add-on, so there is no way around
+  logging in on LG's own page and pasting the final URL back), a **로그인 완료 URL 붙여넣기** text
+  field for that final URL, a **로그인됨** binary sensor, and a **로그아웃** button.
+- Routine monitoring is the add-on's own log (topic `device`, on by default) - each appliance's
+  raw rx/tx traffic is logged there. Packet injection for reverse-engineering (what the old
+  monitor page's inject panel did) is a developer tool now covered by `tools/rethink-capture.ts`
+  and `tools/packet-sender.ts` instead, not a routine end-user feature.
 
 ## Code
 

@@ -45,6 +45,7 @@ export class Device extends TypedEmitter<DeviceEvents> {
     }
 
     send_packet(buf: Buffer) {
+        log('device', this.id, 'tx', buf.toString('hex'))
         this.emit('sendData', buf)
         this.send('packet', 1, buf.toString('hex'))
     }
@@ -103,6 +104,7 @@ export class DeviceAcceptor extends TypedEmitter<DeviceAcceptorEvents> {
             if (payload.cmd === 'device_packet' && payload.did === client.deployMsg?.did) {
                 if (client.deviceObj) {
                     const buf = Buffer.from(payload.data as string, 'hex')
+                    log('device', client.deviceObj.id, 'rx', buf.toString('hex'))
                     client.deviceObj.emit('data', buf)
                 }
             }

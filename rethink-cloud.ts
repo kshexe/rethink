@@ -15,7 +15,7 @@ import HA_bridge from './cloud/ha_bridge'
 import { normalize as normalizeConfig, RawConfig, CA } from './util/config'
 import { createCa } from './util/pki'
 import { CertificateIssuer } from './util/sni'
-import * as Management from './management'
+import { BridgeHA } from './cloud/bridge_ha'
 
 import log, { setFilter as setLogFilter } from './util/logging'
 import { DeviceManager } from './cloud/devmgr'
@@ -140,12 +140,7 @@ function t2setup(manager: DeviceManager) {
 }
 
 // HA connector
-const ha = new HA_bridge(new HA_connection(config.homeassistant))
 const manager = new DeviceManager()
-manager.on('newDevice', (dev) => ha.newDevice(dev))
-
-t1setup(manager)
-t2setup(manager)
 
 let bridge: Bridge | undefined
 if (config.bridge) {
@@ -154,7 +149,13 @@ if (config.bridge) {
     bridge = new Bridge(storage, manager)
 }
 
-if (config.management_port)
-    Management.app(ha, manager, bridge).listen(config.management_port.bind, config.management_port.address)
+const haConnection = new HA_connection(config.homeassistant)
+const ha = new HA_bridge(haConnection, bridge)
+manager.on('newDevice', (dev) => ha.newDevice(dev))
+
+if (bridge) new BridgeHA(bridge, haConnection)
+
+t1setup(manager)
+t2setup(manager)
 
 console.log('Rethink cloud ready')

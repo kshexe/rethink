@@ -39,9 +39,6 @@
   "thinq1_https_port": 46030,
   "thinq1_port": 47878,
 
-  // specify anything you like. Removing this parameter disables the management interface
-  "management_port": 44401,
-
   "bridge": {
     "storage_path": "./state"
   },
