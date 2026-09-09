@@ -273,9 +273,12 @@ export default class TLVDevice extends HADevice {
         }
     }
 
-    /** A frame going out to the appliance: `.. 04 00 00 00 65 .. <tlvLen> <tlv> <crc16>`. */
+    /** A values-write frame going out to the appliance: `b0 b1 04 00 00 00 65 02 <b3> <b4>
+     *  <tlvLen> <tlv> <crc16>`. buf[7]==0x02 is the values channel - buf[7]==0xFD is the
+     *  priv-data command channel, whose body is not a TLV list and must not be parsed as one. */
     inspectOutboundTLV(buf: Buffer) {
-        if (!Buffer.isBuffer(buf) || buf.length < 14 || buf[2] !== 0x04 || buf[6] !== 0x65) return
+        if (!Buffer.isBuffer(buf) || buf.length < 14) return
+        if (buf[2] !== 0x04 || buf[6] !== 0x65 || buf[7] !== 0x02) return
         if (buf[10] !== buf.length - 13) return
         const tlv = TLV.parse(buf.subarray(11, buf.length - 2))
         // The caps/values poll this class sends itself - one tag, 0x1f5 - is not a command.
