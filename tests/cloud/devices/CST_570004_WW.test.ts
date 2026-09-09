@@ -128,9 +128,12 @@ describe(MODEL_ID, () => {
         assert.equal(c.humidity?.device_class, 'humidity')
         assert.equal(c.energy_current?.device_class, 'power', 'power sensor always present, even idle')
 
-        // Energy saving rendered as a plain toggle (no assumed_state buttons).
+        // Energy saving rendered as an assumed-state (optimistic) toggle: the wire write is
+        // skipped while the unit is off or in the wrong mode, so a non-optimistic switch would
+        // look unresponsive when toggled in that state - see modeDependentSwitchOptimistic's
+        // comment in CST_570004_WW.ts.
         assert.ok(c.energysave, 'energysave present')
-        assert.ok(!('optimistic' in c.energysave), 'energysave optimistic flag removed')
+        assert.equal(c.energysave.optimistic, true, 'energysave is optimistic on this model')
 
         // Filter usage comes from value tags 0x355/0x356, not RAC's priv-command (unpopulated on
         // CST). No RAC priv-command filter entities; a remaining % and used-time sensor instead.
