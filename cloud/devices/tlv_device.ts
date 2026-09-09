@@ -248,12 +248,22 @@ export default class TLVDevice extends HADevice {
         /* To be overridden */
     }
 
-    /** Note any TLV tag with no FieldDefinition and no structural meaning - a value the appliance
-     *  reports, or a command the cloud sends, that this handler does not model. Deduped per
-     *  direction+tag; belated (written when parsed, not when the frame arrived) is fine. */
+    /** Every TLV tag this handler does something with. The base set is the fields registered
+     *  through addField plus the structural tags; a subclass that consumes tags directly from
+     *  raw_clip_state (ACDevice does) must add them here or they read as unmodelled. */
+    knownTagIds(): Set<number> {
+        const s = new Set<number>(STRUCTURAL_TAGS)
+        for (const id of Object.keys(this.fields_by_id)) s.add(Number(id))
+        return s
+    }
+
+    /** Note any TLV tag this handler does not model - a value the appliance reports, or a command
+     *  the cloud sends, that never reaches an entity. Deduped per direction+tag; belated (written
+     *  when parsed, not when the frame arrived) is fine. */
     noteUnknownTags(dir: 'from-device' | 'to-device', tlvArray: TLV.TLV[]) {
+        const known = this.knownTagIds()
         for (const { t, v } of tlvArray) {
-            if (this.fields_by_id[t] || STRUCTURAL_TAGS.has(t)) continue
+            if (known.has(t)) continue
             const key = `${dir}:${t}`
             if (this._seenUnknownTags.has(key)) continue
             this._seenUnknownTags.add(key)
@@ -265,7 +275,7 @@ export default class TLVDevice extends HADevice {
 
     /** A frame going out to the appliance: `.. 04 00 00 00 65 .. <tlvLen> <tlv> <crc16>`. */
     inspectOutboundTLV(buf: Buffer) {
-        if (buf.length < 14 || buf[2] !== 0x04 || buf[6] !== 0x65) return
+        if (!Buffer.isBuffer(buf) || buf.length < 14 || buf[2] !== 0x04 || buf[6] !== 0x65) return
         if (buf[10] !== buf.length - 13) return
         const tlv = TLV.parse(buf.subarray(11, buf.length - 2))
         // The caps/values poll this class sends itself - one tag, 0x1f5 - is not a command.

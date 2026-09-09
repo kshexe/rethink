@@ -617,6 +617,26 @@ export default abstract class ACDevice extends TLVDevice {
         return tlvArray.length >= 10 && tlvArray.some(({ t, v }) => t === TAG_POWER)
     }
 
+    /* This class reads most tags straight out of raw_clip_state rather than through addField, so
+     * the base set (fields_by_id + structural) misses them. List them here so the frame recorder's
+     * unmodelled-tag notes flag only the tags an AC actually reports that nothing here consumes. */
+    knownTagIds(): Set<number> {
+        const s = super.knownTagIds()
+        for (const t of [
+            TAG_POWER, TAG_MODE, TAG_FAN, TAG_TEMP_CURRENT, TAG_TEMP_TARGET,
+            TAG_AUTO_DRY, TAG_AUTO_DRY_REMAIN, TAG_POWER_W, TAG_FILTER_REMAINING, TAG_FILTER_LIFE,
+            TAG_IDU_THERMO_ON_OFF, TAG_IDU_RUNNING_ALT,
+            TAG_CAPS_MODES, TAG_CAPS_FANS, TAG_CAPS_FEATURE, TAG_CAPS_JET_SWING, TAG_CAPS_TIMER,
+            TAG_CAPS_EEPROM_CRC, TAG_CAPS_TEMP_MIN, TAG_CAPS_TEMP_MAX,
+            TAG_RES_STOP, TAG_RES_START, TAG_RES_RELATIVE_START, TAG_RES_RELATIVE_STOP,
+            TAG_RES_BAN_DISTURB_SLEEP, TAG_RES_CANCEL, TAG_RES_STOP_HEATING,
+            0x205, 0x206, 0x321, 0x322, // swing axes (SWING_DEFS / addSwingAxis)
+        ]) {
+            s.add(t)
+        }
+        return s
+    }
+
     valuesReceived() {
         if (this.initialValuesReceived) return
         this.initialValuesReceived = true
