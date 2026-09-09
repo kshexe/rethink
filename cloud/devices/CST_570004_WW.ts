@@ -59,16 +59,6 @@ export default class Device extends ACDevice {
      * picker for this cassette tops out at 7 h, confirmed 2026-09-09 against a real unit. */
     readonly sleepTimerMaxMinutes: number = 7 * 60
 
-    /*
-     * energysave/airclean only take effect in a specific mode (cool for energysave), and
-     * write_callback skips the wire write entirely while the unit is off or in the wrong mode -
-     * confirmed 2026-09-09: toggling energysave with the unit powered off produced no frame and
-     * no state update, so the (non-optimistic) switch just sat there looking unresponsive.
-     * Optimistic mode makes the toggle move immediately; the pending value still gets sent for
-     * real once the mode allows it, via the modeChangeHooks re-apply in addModeDependentConfigSwitchField.
-     */
-    readonly modeDependentSwitchOptimistic = true
-
     /* The feature bitmap is reported under 0x2cb; 0x2cc is not sent at all. */
     featureCaps() {
         return this.raw_clip_state[0x2cb]
