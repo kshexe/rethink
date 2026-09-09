@@ -8,11 +8,11 @@ import { MockHAConnection, MockThinq2Device, buf } from '@/tests/helpers/mocks'
 import type { Metadata } from '@/cloud/thinq'
 
 const DEVICE_ID = 'test-id'
-// A 2REB1GLVB1__2 fridge - picked only because it publishes its config synchronously off a
-// single status frame, with no capability/timer dance to set up first (unlike the TLV AC
-// classes). The naming behavior under test is not fridge-specific.
-const META: Metadata = { modelId: '2REB1GLVB1__2', modelName: 'TEST', swVersion: '1.0' }
-const SAMPLE_STATUS = buf('AA1710EB020504010000000201000100000000000099BB')
+// An RD20_S dryer - picked only because it publishes its config synchronously from the
+// constructor, with no capability/timer dance to set up first (unlike the TLV AC classes).
+// The naming behavior under test is not dryer-specific.
+const META: Metadata = { modelId: 'RD20_S', modelName: 'TEST', swVersion: '1.0' }
+const SAMPLE_STATUS = buf('aa083000e50000bb') // RD20_S's power-write ack shape
 
 function state(): BridgeState {
     return {
@@ -39,7 +39,7 @@ describe('HA_bridge device naming from the linked LG account', () => {
         const bridge = new HA_bridge(ha.asConnection())
         makeMappedDevice(bridge)
         try {
-            assert.equal(ha.devices[DEVICE_ID].config!.device.name, 'LG Fridge')
+            assert.equal(ha.devices[DEVICE_ID].config!.device.name, 'LG Dryer')
         } finally {
             bridge.haDevices.get(DEVICE_ID)?.drop()
         }
@@ -51,7 +51,7 @@ describe('HA_bridge device naming from the linked LG account', () => {
         const bridge = new HA_bridge(ha.asConnection(), lgBridge)
         makeMappedDevice(bridge)
         try {
-            assert.equal(ha.devices[DEVICE_ID].config!.device.name, 'LG Fridge')
+            assert.equal(ha.devices[DEVICE_ID].config!.device.name, 'LG Dryer')
         } finally {
             bridge.haDevices.get(DEVICE_ID)?.drop()
         }
@@ -76,7 +76,7 @@ describe('HA_bridge device naming from the linked LG account', () => {
         const bridge = new HA_bridge(ha.asConnection(), lgBridge)
         makeMappedDevice(bridge)
         try {
-            assert.equal(ha.devices[DEVICE_ID].config!.device.name, 'LG Fridge')
+            assert.equal(ha.devices[DEVICE_ID].config!.device.name, 'LG Dryer')
 
             lgBridge.deviceNames = new Map([[DEVICE_ID, '거실에어컨']])
             lgBridge.emit('namesChanged')
