@@ -25,6 +25,9 @@ import DHUM_056905_WW from './devices/DHUM_056905_WW'
 import ST_B_E4H01Y_APL from './devices/ST_B_E4H01Y_APL'
 import CST_570004_WW from './devices/CST_570004_WW'
 import FX___S from './devices/FX___S'
+import MI2D7B from './devices/MI2D7B'
+import RD20_S from './devices/RD20_S'
+import ST_R_ETH01Y_ from './devices/ST_R_ETH01Y_'
 import { Device as T1Device } from './thinq1/device'
 import { Device as T2Device } from './thinq2/device'
 import { type Connection } from './homeassistant'
@@ -75,6 +78,9 @@ const t2deviceTypes: Record<string, T2Factory> = {
     ST_B_E4H01Y_APL,
     CST_570004_WW, // LG ceiling-cassette IDU (multi-split, deviceType 401); DualCool TLV via ac_common
     FX___S, // LG front-load washer sold in Korea (deviceType 201, tunnelled 0xEC state frames)
+    MI2D7B, // LG MiniWash (미니워시, deviceType 201) - power on/off only so far, see MI2D7B.ts
+    RD20_S, // LG dryer (건조기, deviceType 202) - power on/off only so far, see RD20_S.ts
+    ['ST_R_ETH01Y_']: ST_R_ETH01Y_, // LG Styler (스타일러, deviceType 203) - power/course/start, see ST_R_ETH01Y_.ts
 }
 
 class Bridge {
