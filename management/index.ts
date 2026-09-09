@@ -201,6 +201,19 @@ export function app(ha: HA_bridge, manager: DeviceManager, bridge: Bridge | unde
             }),
         )
 
+        // Reverse-engineering aid: relay an arbitrary control-sync body to the LG cloud as the
+        // app would, so the resulting on-wire frame can be studied in the frame recorder.
+        app.post(
+            '/bridge/:deviceId/control',
+            asyncHandler(async (req, res) => {
+                try {
+                    res.json((await bridge.control(req.params.deviceId, req.body)) ?? {})
+                } catch (err) {
+                    res.status(500).end(`${err}`)
+                }
+            }),
+        )
+
         function refreshBridgeStatus() {
             broadcast({ bridge: bridgeStatus() })
         }

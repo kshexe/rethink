@@ -286,6 +286,19 @@ export class Client {
         const { thinq2Uri } = await this.gateway
         return await apiFetch(`${thinq2Uri}/service/devices/${deviceId}`, { headers: this.headers })
     }
+
+    /** Sends a control the same way the LG app does - `control-sync` with a body the caller
+     *  shapes from the model's ControlWifi vocabulary (e.g. {ctrlKey, command, dataKey,
+     *  dataValue} or {command, dataSetList}). Used for reverse-engineering: the resulting frame
+     *  on the wire is LG's own, captured by the bridge. */
+    async controlDevice(deviceId: string, body: unknown) {
+        const { thinq2Uri } = await this.gateway
+        return await apiFetch(`${thinq2Uri}/service/devices/${deviceId}/control-sync`, {
+            headers: this.headers,
+            method: 'POST',
+            body: JSON.stringify(body),
+        })
+    }
 }
 
 export type RouteResponse = { apiServer: string; mqttServer: string }

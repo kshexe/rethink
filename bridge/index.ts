@@ -262,6 +262,19 @@ export class Bridge extends TypedEmitter<BridgeEvents> {
         return { modelName: dev.meta.modelName, modelJson: await client.getModelJson(id, dev.meta.modelName) }
     }
 
+    /** Send a control through the real LG cloud (reverse-engineering aid - the frame that reaches
+     *  the appliance is LG's own and the bridge records it). `body` is shaped by the caller from
+     *  the model's ControlWifi vocabulary. */
+    async control(id: string, body: unknown) {
+        const creds = this.state.getCredentials()
+        if (!creds) throw new Error('Not logged in')
+        if (!this.bridgedDevices.has(id)) throw new Error('Bridge mode is not enabled for this device')
+
+        const client = new ThinqClient(creds.env)
+        await client.auth(creds.refreshToken)
+        return client.controlDevice(id, body)
+    }
+
     isLoggedIn() {
         return !!this.state.getCredentials()
     }
