@@ -53,12 +53,28 @@ import { note as recordNote } from '../frame-recorder'
  * Key 0x7f is FX___S's KEY_RESERVE, a 16-bit delay-end reservation - 0 in every capture, since
  * none was ever armed here.
  *
- * Only two of this styler's 30+ courses have a confirmed id: 0x04 = 강력 스타일링 (스타일러의
- * 기본값) and 0x0a = 표준 살균, both read off real course-select captures. The rest of the app's
- * course list (바이러스살균/인공지능스타일링/급속스타일링/정장코트/울니트/시간건조/실내제습 등,
- * 30여개) has not been swept - see rethink_migration_status memory. The select below only offers
- * the two known courses on purpose: guessing an id for an unswept course would risk starting the
- * wrong one.
+ * COURSE ID SWEEP (2026-09-09). All 41 courses in the app's course picker were clicked through
+ * against the real unit (run, then paused) to see the protocol handle real starts, but only a
+ * subset of the resulting frames could be reliably attributed to a specific course NAME - the app
+ * frequently auto-starts a course the instant its "코스를 바꿀까요?" change-confirmation is
+ * accepted (before any separate "시작" tap), so a same-second retry click sometimes lands on the
+ * device's own PAUSE button instead of sending anything, which breaks naive timestamp-based
+ * reconstruction after the fact. Only the 10 below were confirmed with an unambiguous, single
+ * matching frame (either captured live with an immediate log check, or - for the first two -
+ * captured while 원격제어 was still off, so nothing else could have raced with them):
+ *
+ *   0x01 = 표준 스타일링       0x09 = 미세먼지 제거      0x1C = 담요 데우기
+ *   0x02 = 인공지능 스타일링   0x0A = 표준 살균          0x1D = 목도리 스타일링
+ *   0x03 = 급속 스타일링       0x0B = 바이러스 살균
+ *   0x04 = 강력 스타일링       0x1B = 눈/비 건조
+ *
+ * (강력 스타일링 is also the appliance's own default course.) The remaining ~31 named courses
+ * each produced a start frame during the sweep too, but which id belongs to which name could not
+ * be reconstructed with confidence - see rethink_migration_status memory for the raw frame-log
+ * timeline. The sweep was also cut short by a real "급수통을 확인해 주세요" (refill the water
+ * tank) fault the appliance raised partway through re-verification, which blocks further course
+ * starts until the tank is refilled. The select below only offers the 10 confirmed courses on
+ * purpose: guessing an id for an unswept course would risk starting the wrong one.
  */
 
 const FROM_DEVICE_ACK_OPCODE = 0xe5
@@ -72,10 +88,18 @@ const KEY_RESERVE = 0x7f
 /** Always 0x00 in every capture so far; meaning unconfirmed, reproduced literally. */
 const KEY_UNKNOWN_23 = 0x23
 
-/** The only two course ids confirmed against a real unit; see file header. */
+/** The only course ids confirmed against a real unit; see file header. */
 const COURSES: Record<string, number> = {
     '강력 스타일링': 0x04,
     '표준 살균': 0x0a,
+    '바이러스 살균': 0x0b,
+    '인공지능 스타일링': 0x02,
+    '표준 스타일링': 0x01,
+    '미세먼지 제거': 0x09,
+    '급속 스타일링': 0x03,
+    '눈/비 건조': 0x1b,
+    '담요 데우기': 0x1c,
+    '목도리 스타일링': 0x1d,
 }
 const COURSE_BY_ID: Record<number, string> = Object.fromEntries(Object.entries(COURSES).map(([k, v]) => [v, k]))
 const DEFAULT_COURSE = COURSES['강력 스타일링']

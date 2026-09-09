@@ -24,6 +24,16 @@ const SEND_STRONG_STYLING = buf('aa12f0e5000201ff030a0423007f000013bb')
 // Course start for 강력 스타일링 (the appliance's own default course), captured AFTER the user
 // armed 원격제어 at the appliance and pressing "시작" in the app produced this frame.
 const START_STRONG_STYLING = buf('aa14f0e5000201ff040a0423007f0000030118bb')
+// Course starts for the other 8 courses confirmed during the 2026-09-09 sweep - see the file
+// header for why most of the sweep's ~41 clicks could NOT be attributed to a name this cleanly.
+const START_VIRUS_STERILIZATION = buf('aa14f0e5000201ff040a0b23007f0000030101bb') // 바이러스 살균
+const START_AI_STYLING = buf('aa14f0e5000201ff040a0223007f000003011ebb') // 인공지능 스타일링
+const START_STANDARD_STYLING = buf('aa14f0e5000201ff040a0123007f000003011fbb') // 표준 스타일링
+const START_DUST_REMOVAL = buf('aa14f0e5000201ff040a0923007f0000030107bb') // 미세먼지 제거
+const START_QUICK_STYLING = buf('aa14f0e5000201ff040a0323007f0000030119bb') // 급속 스타일링
+const START_SNOW_RAIN_DRY = buf('aa14f0e5000201ff040a1b23007f0000030131bb') // 눈/비 건조
+const START_BLANKET_WARM = buf('aa14f0e5000201ff040a1c23007f0000030130bb') // 담요 데우기
+const START_SCARF_STYLING = buf('aa14f0e5000201ff040a1d23007f0000030133bb') // 목도리 스타일링
 
 function makeDevice() {
     const ha = new MockHAConnection()
@@ -42,13 +52,45 @@ describe(MODEL_ID, () => {
         assert.equal(components.start.command_topic, '$this/start/set')
     })
 
-    test('the course select only offers the two courses with a confirmed id', () => {
+    test('the course select only offers the courses with a confirmed id', () => {
         const { ha } = makeDevice()
         const course = ha.devices[DEVICE_ID].config!.components.course as unknown as { options: string[] }
-        assert.deepEqual(course.options, ['강력 스타일링', '표준 살균'])
+        assert.deepEqual(course.options, [
+            '강력 스타일링',
+            '표준 살균',
+            '바이러스 살균',
+            '인공지능 스타일링',
+            '표준 스타일링',
+            '미세먼지 제거',
+            '급속 스타일링',
+            '눈/비 건조',
+            '담요 데우기',
+            '목도리 스타일링',
+        ])
         // Matches the appliance's own default, confirmed by START_STRONG_STYLING below being the
         // frame that came back when the user pressed 시작 without touching the course picker.
         assert.equal(ha.devices[DEVICE_ID].properties.course, '강력 스타일링')
+    })
+
+    test('start reproduces the captured start frame for each confirmed course', () => {
+        const cases: [string, Buffer][] = [
+            ['바이러스 살균', START_VIRUS_STERILIZATION],
+            ['인공지능 스타일링', START_AI_STYLING],
+            ['표준 스타일링', START_STANDARD_STYLING],
+            ['미세먼지 제거', START_DUST_REMOVAL],
+            ['급속 스타일링', START_QUICK_STYLING],
+            ['눈/비 건조', START_SNOW_RAIN_DRY],
+            ['담요 데우기', START_BLANKET_WARM],
+            ['목도리 스타일링', START_SCARF_STYLING],
+        ]
+        for (const [name, want] of cases) {
+            const { thinq, dev } = makeDevice()
+            dev.setProperty('course', name)
+            thinq.resetRecorder()
+            dev.setProperty('start', '')
+            assert.equal(thinq.outbox.length, 1, `course=${name} sent one frame`)
+            assert.equal(thinq.outbox[0].toString('hex'), want.toString('hex'), `course=${name}`)
+        }
     })
 
     test('power write reproduces the captured frame byte for byte', () => {
