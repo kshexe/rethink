@@ -55,6 +55,10 @@ export default class Device extends ACDevice {
      */
     readonly powerOnWithModeWrite = true
 
+    /* ac_common's 15 h default is what the wall-mounted units take; the LG app's own 취침예약
+     * picker for this cassette tops out at 7 h, confirmed 2026-09-09 against a real unit. */
+    readonly sleepTimerMaxMinutes: number = 7 * 60
+
     /* The feature bitmap is reported under 0x2cb; 0x2cc is not sent at all. */
     featureCaps() {
         return this.raw_clip_state[0x2cb]
