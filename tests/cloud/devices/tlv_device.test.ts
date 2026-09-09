@@ -145,3 +145,67 @@ test('setProperty with write_attach as array sends additional TLVs', () => {
     assert.equal(tlv[1].t, 0x201)
     assert.equal(tlv[1].v, 9)
 })
+
+// --- unmodelled-tag notes (frame recorder) ---
+import { configure as configureRecorder } from '@/cloud/frame-recorder'
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+async function recorderLines(dir: string) {
+    await new Promise((r) => setTimeout(r, 40))
+    const f = readdirSync(dir)[0]
+    return f ? readFileSync(join(dir, f), 'utf-8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []
+}
+
+test('processTLV notes a from-device tag with no FieldDefinition, once', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'fr-'))
+    try {
+        configureRecorder({ dir, days: 3 })
+        const { dev } = makeDevice()
+        dev.processTLV([{ t: 0x2ff, v: 7 }])
+        dev.processTLV([{ t: 0x2ff, v: 9 }]) // same tag again -> not noted twice
+        const notes = (await recorderLines(dir)).filter((l) => l.kind === 'unmodelled-tlv-tag')
+        assert.equal(notes.length, 1)
+        assert.equal(notes[0].dir, 'from-device')
+        assert.equal(notes[0].tag, '0x2ff')
+        assert.equal(notes[0].value, 7)
+    } finally {
+        configureRecorder({ days: 0 })
+        rmSync(dir, { recursive: true, force: true })
+    }
+})
+
+test('a known field id and a structural tag are not noted', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'fr-'))
+    try {
+        configureRecorder({ dir, days: 3 })
+        const { dev, config } = makeDevice()
+        dev.addField(config, { id: 0x300, name: 'f', comp: 'sensor' })
+        dev.processTLV([{ t: 0x300, v: 1 }, { t: 0x1f5, v: 2 }])
+        assert.equal((await recorderLines(dir)).filter((l) => l.kind === 'unmodelled-tlv-tag').length, 0)
+    } finally {
+        configureRecorder({ days: 0 })
+        rmSync(dir, { recursive: true, force: true })
+    }
+})
+
+test('inspectOutboundTLV notes an unknown tag in a frame pushed to the appliance', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'fr-'))
+    try {
+        configureRecorder({ dir, days: 3 })
+        const { thinq } = makeDevice()
+        // 04 00 00 00 65 01 01 01 <len=2> <tlv: t=0x2fe l=0 v=0> <crc 2b>, wrapped b0 b1
+        const body = [0x04, 0x00, 0x00, 0x00, 0x65, 0x01, 0x01, 0x01, 0x02]
+        const tlv = TLV.build([{ t: 0x2fe, v: 0 }])
+        const frame = Buffer.from([0x01, 0x01, ...body, ...tlv, 0x00, 0x00])
+        thinq.emit('sendData', frame)
+        const notes = (await recorderLines(dir)).filter((l) => l.kind === 'unmodelled-tlv-tag')
+        assert.equal(notes.length, 1)
+        assert.equal(notes[0].dir, 'to-device')
+        assert.equal(notes[0].tag, '0x2fe')
+    } finally {
+        configureRecorder({ days: 0 })
+        rmSync(dir, { recursive: true, force: true })
+    }
+})

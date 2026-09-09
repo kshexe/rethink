@@ -6,6 +6,11 @@ import * as TLV from '@/util/tlv'
 import { Device as Thinq2Device } from '../thinq2/device'
 import { DeviceDiscovery, type Connection } from '../homeassistant'
 import log from '@/util/logging'
+import { note as recordNote } from '../frame-recorder'
+
+/** TLV tags that carry protocol structure, not a device field - never "unknown". 0x1f5 is the
+ *  caps/values query marker; the rest are the capability bitmaps ACDevice consumes directly. */
+const STRUCTURAL_TAGS = new Set([0x1f5, 0x2c1, 0x2c2, 0x2cc, 0x2cd, 0x2d3, 0x2da, 0x2e1, 0x2e2])
 
 export type FieldDefinition = {
     id?: number
@@ -31,12 +36,19 @@ export default class TLVDevice extends HADevice {
     query_caps_timeout: ReturnType<typeof setInterval> | undefined = undefined
     query_values_timeout: ReturnType<typeof setInterval> | undefined = undefined
 
+    /** (dir:tag) pairs already flagged as unknown, so a repeating one is noted once per session. */
+    private _seenUnknownTags = new Set<string>()
+
     constructor(
         HA: Connection,
         readonly thinq: Thinq2Device,
     ) {
         super(HA, thinq.id)
         thinq.on('data', (data) => this.processData(data))
+        // Every frame pushed to the appliance, whether this handler built it or the LG-cloud
+        // bridge forwarded it. Ours only carry tags we know; a bridged one that carries a tag
+        // with no FieldDefinition is a command this handler cannot parse - note it.
+        thinq.on('sendData', (buf) => this.inspectOutboundTLV(buf))
 
         // initial capabilities query
         this.queryCaps()
@@ -236,8 +248,35 @@ export default class TLVDevice extends HADevice {
         /* To be overridden */
     }
 
+    /** Note any TLV tag with no FieldDefinition and no structural meaning - a value the appliance
+     *  reports, or a command the cloud sends, that this handler does not model. Deduped per
+     *  direction+tag; belated (written when parsed, not when the frame arrived) is fine. */
+    noteUnknownTags(dir: 'from-device' | 'to-device', tlvArray: TLV.TLV[]) {
+        for (const { t, v } of tlvArray) {
+            if (this.fields_by_id[t] || STRUCTURAL_TAGS.has(t)) continue
+            const key = `${dir}:${t}`
+            if (this._seenUnknownTags.has(key)) continue
+            this._seenUnknownTags.add(key)
+            const tag = '0x' + t.toString(16)
+            log('status', this.id, `unmodelled TLV tag ${tag} (${dir}) = ${v}`)
+            recordNote(this.id, this.thinq.meta, 'unmodelled-tlv-tag', { dir, tag, value: v })
+        }
+    }
+
+    /** A frame going out to the appliance: `.. 04 00 00 00 65 .. <tlvLen> <tlv> <crc16>`. */
+    inspectOutboundTLV(buf: Buffer) {
+        if (buf.length < 14 || buf[2] !== 0x04 || buf[6] !== 0x65) return
+        if (buf[10] !== buf.length - 13) return
+        const tlv = TLV.parse(buf.subarray(11, buf.length - 2))
+        // The caps/values poll this class sends itself - one tag, 0x1f5 - is not a command.
+        if (tlv.length === 1 && tlv[0].t === 0x1f5) return
+        this.noteUnknownTags('to-device', tlv)
+    }
+
     processTLV(tlvArray: TLV.TLV[]) {
         tlvArray.forEach(({ t, v }) => this.processKeyValue(t, v))
+
+        if (!this.isCapsResponse(tlvArray)) this.noteUnknownTags('from-device', tlvArray)
 
         // capabilities are expected to be received only at the init time
         if (this.query_caps_timeout != undefined && this.isCapsResponse(tlvArray)) {

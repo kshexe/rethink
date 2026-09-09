@@ -67,6 +67,17 @@ export function record(id: string, meta: Metadata | undefined, dir: Dir, buf: Bu
     write(JSON.stringify({ ts: new Date().toISOString(), id, model: meta?.modelId, dir, hex }) + '\n')
 }
 
+/**
+ * A structured note in the same log - used by handlers to flag a frame element they cannot
+ * parse (a TLV tag with no FieldDefinition, a command opcode they don't build). `kind` names
+ * the finding; `extra` carries its detail. Belated by nature: it lands whenever the handler
+ * notices, not in the frame's own instant.
+ */
+export function note(id: string, meta: Metadata | undefined, kind: string, extra: Record<string, unknown>): void {
+    if (!enabled) return
+    write(JSON.stringify({ ts: new Date().toISOString(), id, model: meta?.modelId, kind, ...extra }) + '\n')
+}
+
 /** Appends run through one chain so the file order matches the call order. */
 let writeChain: Promise<void> = Promise.resolve()
 
