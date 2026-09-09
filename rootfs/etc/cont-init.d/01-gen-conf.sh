@@ -12,6 +12,10 @@ MQTT_USER=$(bashio::config 'mqtt_user')
 MQTT_PASS=$(bashio::config 'mqtt_pass')
 LANGUAGE=$(bashio::config 'language')
 ADVERTISE_REQUESTED_HOST=$(bashio::config 'advertise_requested_host')
+# Space-separated rethink log topics. Default is the everyday set; add "bridge" and
+# "outgoing" temporarily when reverse-engineering an appliance to see the frames
+# relayed to/from LG's cloud and the commands pushed down to the device.
+LOG=$(bashio::config 'log' 'status incoming HTTPS publish MGMT')
 
 mkdir -p /data/state
 
@@ -21,6 +25,7 @@ jq -n \
   --arg mqtt_user "$MQTT_USER" \
   --arg mqtt_pass "$MQTT_PASS" \
   --arg language "$LANGUAGE" \
+  --arg logtopics "$LOG" \
   --argjson advertise_requested_host "$ADVERTISE_REQUESTED_HOST" \
   '{
     hostname: $hostname,
@@ -41,7 +46,7 @@ jq -n \
     thinq1_port: 47878,
     management_port: 44401,
     bridge: { storage_path: "/data/state" },
-    log: ["status", "incoming", "HTTPS", "publish", "MGMT"]
+    log: ($logtopics | split(" ") | map(select(length > 0)))
   }' > /data/config.json
 
 bashio::log.info "Generated /data/config.json (mqtt=${MQTT_HOST}:${MQTT_PORT}, hostname=${HOSTNAME})"
