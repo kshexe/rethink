@@ -16,6 +16,9 @@ ADVERTISE_REQUESTED_HOST=$(bashio::config 'advertise_requested_host')
 # "outgoing" temporarily when reverse-engineering an appliance to see the frames
 # relayed to/from LG's cloud and the commands pushed down to the device.
 LOG=$(bashio::config 'log' 'status incoming HTTPS publish MGMT')
+# Raw-frame recorder: keep this many days of per-day JSONL under /share/rethink/frames.
+# 0 (default) disables it. Turn it on while reverse-engineering an appliance.
+FRAME_LOG_DAYS=$(bashio::config 'frame_log_days' '0')
 
 mkdir -p /data/state
 
@@ -26,6 +29,7 @@ jq -n \
   --arg mqtt_pass "$MQTT_PASS" \
   --arg language "$LANGUAGE" \
   --arg logtopics "$LOG" \
+  --argjson frame_log_days "${FRAME_LOG_DAYS:-0}" \
   --argjson advertise_requested_host "$ADVERTISE_REQUESTED_HOST" \
   '{
     hostname: $hostname,
@@ -46,7 +50,9 @@ jq -n \
     thinq1_port: 47878,
     management_port: 44401,
     bridge: { storage_path: "/data/state" },
-    log: ($logtopics | split(" ") | map(select(length > 0)))
+    log: ($logtopics | split(" ") | map(select(length > 0))),
+    frame_log_days: $frame_log_days,
+    frame_log_dir: "/share/rethink/frames"
   }' > /data/config.json
 
 bashio::log.info "Generated /data/config.json (mqtt=${MQTT_HOST}:${MQTT_PORT}, hostname=${HOSTNAME})"

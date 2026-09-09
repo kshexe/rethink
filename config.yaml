@@ -1,6 +1,6 @@
 ---
 name: Rethink (LG ThinQ local bridge)
-version: '1.3.2'
+version: '1.3.3'
 slug: rethink
 description: >-
     Local-only server that replaces LG's ThinQ cloud for supported appliances,
@@ -13,6 +13,8 @@ startup: services
 boot: auto
 ingress: true
 ingress_port: 44401
+map:
+    - share:rw
 ports:
     4433/tcp: 4433
     8886/tcp: 8886
@@ -32,6 +34,7 @@ options:
     language: ''
     advertise_requested_host: false
     log: status incoming HTTPS publish MGMT
+    frame_log_days: 0
 schema:
     hostname: str
     mqtt_host: str
@@ -41,3 +44,4 @@ schema:
     language: str?
     advertise_requested_host: bool
     log: str?
+    frame_log_days: int(0,90)?

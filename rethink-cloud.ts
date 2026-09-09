@@ -21,6 +21,7 @@ import log, { setFilter as setLogFilter } from './util/logging'
 import { DeviceManager } from './cloud/devmgr'
 import { Bridge } from './bridge'
 import { JSONStorage } from './bridge/state'
+import { configure as configureFrameRecorder } from './cloud/frame-recorder'
 
 const configPath = resolve(process.argv[2] ?? './config.json')
 const configDir = dirname(configPath)
@@ -36,6 +37,8 @@ const enabled = Object.fromEntries(config.log.map((key) => [key, true]))
 setLogFilter((topic) => {
     return enabled[topic] || enabled['all']
 })
+
+configureFrameRecorder({ dir: config.frame_log_dir, days: config.frame_log_days })
 
 const caFiles = { certFile: config.ca_cert_file, keyFile: config.ca_key_file }
 

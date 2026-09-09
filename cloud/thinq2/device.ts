@@ -8,6 +8,7 @@ import { ClipDeployMessage, ClipMessage } from './clip'
 
 import log from '@/util/logging'
 import { Metadata } from '../thinq'
+import { record as recordFrame } from '../frame-recorder'
 
 type DeviceEvents = {
     data: (packet: Buffer) => void
@@ -45,6 +46,7 @@ export class Device extends TypedEmitter<DeviceEvents> {
     }
 
     send_packet(buf: Buffer) {
+        recordFrame(this.id, this.meta, 'to-device', buf)
         this.emit('sendData', buf)
         this.send('packet', 1, buf.toString('hex'))
     }
@@ -103,6 +105,7 @@ export class DeviceAcceptor extends TypedEmitter<DeviceAcceptorEvents> {
             if (payload.cmd === 'device_packet' && payload.did === client.deployMsg?.did) {
                 if (client.deviceObj) {
                     const buf = Buffer.from(payload.data as string, 'hex')
+                    recordFrame(client.deviceObj.id, client.deviceObj.meta, 'from-device', buf)
                     client.deviceObj.emit('data', buf)
                 }
             }

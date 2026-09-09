@@ -15,6 +15,9 @@ export type RawConfig = {
         storage_path: string
     }
     log?: string[]
+    /** Raw-frame recorder: keep this many days of per-day JSONL under frame_log_dir. 0 = off. */
+    frame_log_days?: number
+    frame_log_dir?: string
 }
 
 export type Config = {
@@ -34,6 +37,8 @@ export type Config = {
         storage_path: string
     }
     log: string[]
+    frame_log_days: number
+    frame_log_dir: string
 }
 
 export type HAConfig = {
@@ -76,6 +81,8 @@ export function normalize(config: RawConfig): Config {
         log: ['status', 'incoming', 'HTTPS'],
         mqtt: true,
         ...config,
+        frame_log_days: config.frame_log_days ?? 0,
+        frame_log_dir: config.frame_log_dir ?? '/share/rethink/frames',
         advertise_requested_host: config.advertise_requested_host ?? false,
         https_port: parsePort(config.https_port),
         mqtts_port: parsePort(config.mqtts_port),
