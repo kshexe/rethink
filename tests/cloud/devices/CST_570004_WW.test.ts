@@ -35,7 +35,8 @@ const CAPS_RESPONSE_HEX =
 //      0x20E=3   auto-dry setting = 60 min
 //      0x21F=200 display = 100%
 //      0x225=30  auto-dry remaining = 30 min
-//      0x23F=0   comfort saving off
+//      0x23F=0   comfort saving off (tag present but not exposed as an entity - see the file
+//                header comment in CST_570004_WW.ts for why)
 //      0x290..0x3D7 = 0  wind mode = off
 //      0x2B3=0   power = 0 W (compressor idle)
 //      0x336=811 humidity = 81 %RH (raw/10)
@@ -122,7 +123,7 @@ describe(MODEL_ID, () => {
         assert.deepEqual(c.autodry_setting.options, ['off', '10 min', '30 min', '60 min', 'smart'])
         assert.equal(c.autodryremain?.unit_of_measurement, 'min', 'auto-dry remaining is minutes, not %')
         assert.equal(c.display?.platform, 'select')
-        assert.equal(c.comfort_saving?.platform, 'switch')
+        assert.ok(!c.comfort_saving, 'no comfort_saving entity - has no observable effect, no app control either')
         assert.equal(c.wind_mode?.platform, 'select')
         assert.equal(c.humidity?.device_class, 'humidity')
         assert.equal(c.energy_current?.device_class, 'power', 'power sensor always present, even idle')
@@ -156,7 +157,6 @@ describe(MODEL_ID, () => {
         assert.equal(ha.getProperty(DEVICE_ID, 'autodry_setting', 'state'), '60 min') // 0x20E=3
         assert.equal(ha.getProperty(DEVICE_ID, 'autodryremain', 'state'), 30) // 0x225=30
         assert.equal(ha.getProperty(DEVICE_ID, 'display', 'state'), '100%') // 0x21F=200
-        assert.equal(ha.getProperty(DEVICE_ID, 'comfort_saving', 'state'), 'OFF') // 0x23F=0
         assert.equal(ha.getProperty(DEVICE_ID, 'wind_mode', 'state'), 'off') // all wind flags 0
 
         // Filter: 0x355=763 remaining of 0x356=2400 -> 32%, used = 2400-763 = 1637 h.

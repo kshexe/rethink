@@ -100,13 +100,17 @@ export default class Device extends ACDevice {
             ['100%', 200],
         ])
 
-        // Comfort energy saving (0x23f): only effective in cool mode, and distinct from the plain
-        // energy saving of 0x20d that ac_common exposes as "energysave".
-        if (this.raw_clip_state[0x23f] != null) {
-            this.addConfigSwitchField(config, 0x23f, 'comfort_saving', 'Comfort energy saving', 'mdi:leaf')
-        }
+        // 0x23f ("comfort energy saving", distinct from the plain energy saving of 0x20d that
+        // ac_common exposes as "energysave") is deliberately NOT exposed as an entity: confirmed
+        // 2026-09-09 on a real unit that toggling it has no observable effect, and the LG app
+        // itself has no control for it at all - there is nothing here to verify or act on.
 
-        // Humidity (0x336, raw/10 = %RH). A room measurement, not a diagnostic.
+        // Humidity (0x336, raw/10 = %RH). A room measurement, not a diagnostic. Some units
+        // report this tag but never anything other than 0 on it - no room ever reads 0% RH, so
+        // that is this unit not actually having the sensor rather than a real reading (confirmed
+        // 2026-09-09: steady 0 across 40+ min on a real unit). Treating raw 0 as "no value" makes
+        // addOptionalSensorField's own presence check skip the entity for units like that, the
+        // same way it already does for a tag that is not reported at all.
         this.addOptionalSensorField(
             config,
             0x336,
@@ -120,7 +124,7 @@ export default class Device extends ACDevice {
                 suggested_display_precision: 0,
                 entity_category: undefined,
             },
-            (raw) => Math.round(raw / 10),
+            (raw) => (raw === 0 ? undefined : Math.round(raw / 10)),
         )
 
         this.addWindModeSelect(config)
