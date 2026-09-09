@@ -210,6 +210,22 @@ export default class Device extends AABBDevice {
         // parsed yet - see the file header for why the power echo specifically is not readable
         // with confidence from one capture. Note it once per shape so a future session has
         // something to grep for, the same way TLVDevice.noteUnknownTags does for the AC family.
+        //
+        // Two shapes decoded 2026-09-09 from a day of real traffic (buf[0..1] = 0x31 0x0a on
+        // all of these, buf here already has AA/len stripped off the front and checksum/BB off
+        // the back):
+        //   - len 86/87 (by far the most common - 454 of ~600 samples that day) is NOT live
+        //     status: it carries readable ASCII course/program names (ST-1, ST-2, 203-Q1,
+        //     203-2, 203-3, 203-6, 203-7, 203-8, 203-Q3, 203-Q4 in one capture) - a static
+        //     downloadable-course-name table the appliance just resends periodically, the same
+        //     kind of frame ST_B_E4H01Y_APL.ts (upstream, a different styler protocol) calls
+        //     out as its "112/113-byte downloadable-course name lists". Not worth modelling as
+        //     a sensor - the content barely changes.
+        //   - len 30/50/101/141 look like real status (byte values move a lot sample to sample,
+        //     unlike the two above), but this model's frame layout does not match
+        //     ST_B_E4H01Y_APL's fixed header(13)+record(40 bytes) shape, so no field offsets are
+        //     confirmed yet. Needs the same real-time "change one thing, check immediately"
+        //     method used for the course IDs - blocked for now on the water-tank fault.
         const key = buf.length > 0 ? `${buf.length}:${buf[0].toString(16)}:${(buf[1] ?? 0).toString(16)}` : 'empty'
         if (!this.seenUnknown.has(key)) {
             this.seenUnknown.add(key)

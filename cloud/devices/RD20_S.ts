@@ -52,6 +52,15 @@ import { note as recordNote } from '../frame-recorder'
  * the appliance for real (원격제어 was off both times - the app even said so), so this is command
  * *composition* evidence, not proof any of it does what the checkbox claims. Left undecoded on
  * purpose rather than guessed; see RETHINK memory `rethink_migration_status` for the full note.
+ *
+ * Checked 2026-09-09 whether upstream's own RV13B6BSD_D_US_WIFI.ts/RV13B6ES_D_US_WIFI.ts (other
+ * dryers already in this repo) could shortcut decoding the from-device status frames piling up
+ * unmodelled here (kind `unmodelled-aabb-frame` in the frame log). They don't transfer: those
+ * models decode status off a fixed-offset record (buf[1]==0xEC/0xEB, a marker-led record at a
+ * constant offset) - a completely different protocol family from this model's F0E5 key-value
+ * scheme above, so none of their byte offsets apply here. The only thing that carried over is
+ * two frame-type byte VALUES matching by coincidence, not layout: buf[1]==0x72 (heartbeat) and
+ * 0xE2 (idle/keepalive snapshot) appear in both, per upstream's header comment for that model.
  */
 
 const FROM_DEVICE_ACK_OPCODE = 0xe5
