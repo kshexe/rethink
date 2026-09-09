@@ -1,12 +1,17 @@
 /*
- * Rolling on-disk record of every raw device frame, both directions, so an unrecognised
- * command or a state byte no handler reads can be traced back weeks later against "what was
- * pressed in the app at that time".
+ * Rolling on-disk record of the raw device frames worth keeping, so an unrecognised command or a
+ * state change no handler reads can be traced back weeks later against "what was pressed in the
+ * app at that time".
+ *
+ * De-duplicated to keep the signal:
+ *   - to-device (commands): every one is recorded - they are rare and each is a real instruction.
+ *   - from-device (state): recorded only when the frame differs from the last one kept for that
+ *     device, so an idle appliance's identical repeats add nothing and a genuine change stands out.
  *
  * One JSON-lines file per UTC day under the configured directory (default /share/rethink/frames,
  * browsable over Samba / the VS Code add-on). Each line:
  *
- *   {"ts":"2026-09-09T04:53:04.794Z","id":"<uuid>","name":"거실에어컨","model":"CST_570004_WW",
+ *   {"ts":"2026-09-09T04:53:04.794Z","id":"<uuid>","model":"CST_570004_WW",
  *    "dir":"to-device"|"from-device","hex":"AA0DF0E5...BB"}
  *
  * Disabled unless frame_log_days > 0. Files older than that many days are pruned on startup and
@@ -24,6 +29,9 @@ let baseDir = '/share/rethink/frames'
 let keepDays = 0
 let pruneTimer: NodeJS.Timeout | undefined
 
+/** Last from-device frame kept per device id, so identical repeats are skipped. */
+const lastState = new Map<string, string>()
+
 const FILE_RE = /^(\d{4}-\d{2}-\d{2})\.jsonl$/
 
 function dayStamp(d = new Date()): string {
@@ -35,6 +43,7 @@ export function configure(opts: { dir?: string; days?: number }): void {
     keepDays = Math.max(0, Math.floor(opts.days ?? 0))
     enabled = keepDays > 0
 
+    lastState.clear()
     if (pruneTimer) clearInterval(pruneTimer)
     pruneTimer = undefined
     if (!enabled) return
@@ -47,27 +56,33 @@ export function configure(opts: { dir?: string; days?: number }): void {
 
 export function record(id: string, meta: Metadata | undefined, dir: Dir, buf: Buffer): void {
     if (!enabled || !buf?.length) return
-    const line =
-        JSON.stringify({
-            ts: new Date().toISOString(),
-            id,
-            model: meta?.modelId,
-            dir,
-            hex: buf.toString('hex').toUpperCase(),
-        }) + '\n'
-    void write(line)
+    const hex = buf.toString('hex').toUpperCase()
+
+    // Commands are always kept; state frames only when they change from the last one kept.
+    if (dir === 'from-device') {
+        if (lastState.get(id) === hex) return
+        lastState.set(id, hex)
+    }
+
+    write(JSON.stringify({ ts: new Date().toISOString(), id, model: meta?.modelId, dir, hex }) + '\n')
 }
 
-async function write(line: string): Promise<void> {
-    try {
-        await mkdir(baseDir, { recursive: true })
-        await appendFile(join(baseDir, `${dayStamp()}.jsonl`), line)
-    } catch (err) {
-        // A missing /share (add-on without the share mapping) lands here once per frame; drop to
-        // disabled so it is one log line, not a flood.
-        enabled = false
-        log('status', `frame recorder disabled - cannot write ${baseDir}: ${err}`)
-    }
+/** Appends run through one chain so the file order matches the call order. */
+let writeChain: Promise<void> = Promise.resolve()
+
+function write(line: string): void {
+    writeChain = writeChain.then(async () => {
+        if (!enabled) return
+        try {
+            await mkdir(baseDir, { recursive: true })
+            await appendFile(join(baseDir, `${dayStamp()}.jsonl`), line)
+        } catch (err) {
+            // A missing /share (add-on without the share mapping) lands here once per frame; drop
+            // to disabled so it is one log line, not a flood.
+            enabled = false
+            log('status', `frame recorder disabled - cannot write ${baseDir}: ${err}`)
+        }
+    })
 }
 
 async function prune(): Promise<void> {

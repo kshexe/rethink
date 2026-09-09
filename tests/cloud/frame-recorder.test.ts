@@ -71,4 +71,40 @@ describe('frame recorder', () => {
         await new Promise((r) => setTimeout(r, 50))
         assert.equal(readdirSync(dir).length, 0)
     })
+
+    async function linesIn(dir: string) {
+        await new Promise((r) => setTimeout(r, 50))
+        const f = readdirSync(dir)[0]
+        return f ? readFileSync(join(dir, f), 'utf-8').trim().split('\n').map((l) => JSON.parse(l)) : []
+    }
+
+    test('identical from-device frames are recorded once; a change is recorded again', async () => {
+        const dir = freshDir()
+        configure({ dir, days: 7 })
+        const a = Buffer.from('AA0100BB', 'hex')
+        const b = Buffer.from('AA0102BB', 'hex')
+        record('id-1', meta, 'from-device', a)
+        record('id-1', meta, 'from-device', a)
+        record('id-1', meta, 'from-device', a)
+        record('id-1', meta, 'from-device', b)
+        record('id-1', meta, 'from-device', a) // changed back - kept
+        assert.deepEqual((await linesIn(dir)).map((l) => l.hex), ['AA0100BB', 'AA0102BB', 'AA0100BB'])
+    })
+
+    test('dedup is per device', async () => {
+        const dir = freshDir()
+        configure({ dir, days: 7 })
+        record('id-1', meta, 'from-device', Buffer.from('AA00BB', 'hex'))
+        record('id-2', meta, 'from-device', Buffer.from('AA00BB', 'hex'))
+        assert.deepEqual((await linesIn(dir)).map((l) => l.id), ['id-1', 'id-2'])
+    })
+
+    test('to-device commands are always recorded, even identical ones', async () => {
+        const dir = freshDir()
+        configure({ dir, days: 7 })
+        const cmd = Buffer.from('AA09F0241001008DBB', 'hex')
+        record('id-1', meta, 'to-device', cmd)
+        record('id-1', meta, 'to-device', cmd)
+        assert.equal((await linesIn(dir)).filter((l) => l.dir === 'to-device').length, 2)
+    })
 })
