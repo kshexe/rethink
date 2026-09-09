@@ -196,7 +196,7 @@ test('inspectOutboundTLV notes an unknown tag in a frame pushed to the appliance
         configureRecorder({ dir, days: 3 })
         const { thinq } = makeDevice()
         // 04 00 00 00 65 01 01 01 <len=2> <tlv: t=0x2fe l=0 v=0> <crc 2b>, wrapped b0 b1
-        const body = [0x04, 0x00, 0x00, 0x00, 0x65, 0x01, 0x01, 0x01, 0x02]
+        const body = [0x04, 0x00, 0x00, 0x00, 0x65, 0x02, 0x01, 0x00, 0x02]
         const tlv = TLV.build([{ t: 0x2fe, v: 0 }])
         const frame = Buffer.from([0x01, 0x01, ...body, ...tlv, 0x00, 0x00])
         thinq.emit('sendData', frame)
