@@ -147,6 +147,11 @@ if (config.bridge) {
     mkdirSync(config.bridge.storage_path, { recursive: true })
     const storage = new JSONStorage(config.bridge.storage_path)
     bridge = new Bridge(storage, manager)
+    // Refresh the ThinQ-account names once at startup regardless of whether the management panel
+    // is open. The panel's own 15-min timer only runs while a browser is connected, so without
+    // this a device added or renamed since the last panel session would keep a stale name (or,
+    // for a brand-new appliance, the model-name fallback) indefinitely.
+    void bridge.refreshNames()
 }
 
 const ha = new HA_bridge(new HA_connection(config.homeassistant), bridge)

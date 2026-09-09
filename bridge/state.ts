@@ -11,6 +11,10 @@ export type BridgeState = {
     setCredentials(credentials: Credentials | undefined): void
     getDeviceState(id: string): Thinq1DeviceState | Thinq2DeviceState | undefined
     setDeviceState(id: string, state: Thinq1DeviceState | Thinq2DeviceState | undefined): void
+    // The owner's per-appliance names (ThinQ aliases), cached so the first HA discovery after a
+    // restart already carries the real name instead of the model-name fallback.
+    getDeviceNames(): Record<string, string>
+    setDeviceNames(names: Record<string, string>): void
 }
 
 export class JSONStorage implements BridgeState {
@@ -22,6 +26,10 @@ export class JSONStorage implements BridgeState {
 
     devicePath(id: string) {
         return `${this.basePath}/device_${id}.json`
+    }
+
+    namesPath() {
+        return `${this.basePath}/names.json`
     }
 
     getCredentials() {
@@ -50,5 +58,17 @@ export class JSONStorage implements BridgeState {
     setDeviceState(id: string, state: Thinq1DeviceState | Thinq2DeviceState | undefined) {
         if (state) writeFileSync(this.devicePath(id), JSON.stringify(state))
         else unlinkSync(this.devicePath(id))
+    }
+
+    getDeviceNames(): Record<string, string> {
+        try {
+            return JSON.parse(readFileSync(this.namesPath()).toString('utf-8')) as Record<string, string>
+        } catch (err) {
+            return {}
+        }
+    }
+
+    setDeviceNames(names: Record<string, string>) {
+        writeFileSync(this.namesPath(), JSON.stringify(names))
     }
 }

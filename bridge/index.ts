@@ -125,6 +125,10 @@ export class Bridge extends TypedEmitter<BridgeEvents> {
      * rethink knows a device by its id and its model, which is enough to talk to it and useless for
      * telling four identical ceiling cassettes apart. The account already holds the answer; it was
      * only ever read while registering a device (see registrationPlan), so it never reached the panel.
+     *
+     * Seeded from disk in the constructor so the first HA discovery after a restart already carries
+     * the real name - otherwise every restart flashes the model-name fallback until a cloud read
+     * lands, and with no management panel open that read never happens (see management/index.ts).
      */
     deviceNames = new Map<string, string>()
 
@@ -133,6 +137,7 @@ export class Bridge extends TypedEmitter<BridgeEvents> {
         readonly manager: DeviceManager,
     ) {
         super()
+        this.deviceNames = new Map(Object.entries(this.state.getDeviceNames()))
         this.manager.on('newDevice', this.#start.bind(this))
         this.manager.on('dropDevice', this.#stop.bind(this))
         Object.values(this.manager.allDevices).forEach(this.#start.bind(this))
@@ -140,6 +145,10 @@ export class Bridge extends TypedEmitter<BridgeEvents> {
 
     name(id: string) {
         return this.deviceNames.get(id)
+    }
+
+    #persistNames() {
+        this.state.setDeviceNames(Object.fromEntries(this.deviceNames))
     }
 
     /*
@@ -164,6 +173,7 @@ export class Bridge extends TypedEmitter<BridgeEvents> {
             if (this.state.getCredentials()?.refreshToken !== creds.refreshToken) return
 
             this.deviceNames = new Map(devices.filter((dev) => dev.alias).map((dev) => [dev.deviceId, dev.alias]))
+            this.#persistNames()
             this.emit('namesChanged')
         } catch (err) {
             console.warn('Could not read the device names from the ThinQ account:', err)
@@ -174,6 +184,7 @@ export class Bridge extends TypedEmitter<BridgeEvents> {
         if (this.deviceNames.size === 0) return
 
         this.deviceNames = new Map()
+        this.#persistNames()
         this.emit('namesChanged')
     }
 
@@ -303,6 +314,15 @@ export class Bridge extends TypedEmitter<BridgeEvents> {
         await client.auth(creds.refreshToken)
 
         const { removeFirst, alias } = registrationPlan(await client.listDevices(), device.id)
+
+        // The listDevices() call above already holds this appliance's real alias when it was
+        // kept as-is. Seed it now so the HA device wired up right after enable() publishes its
+        // first discovery with the real name, without waiting for the refreshNames() round-trip.
+        if (!removeFirst && alias && this.deviceNames.get(device.id) !== alias) {
+            this.deviceNames.set(device.id, alias)
+            this.#persistNames()
+            this.emit('namesChanged')
+        }
 
         if (removeFirst) {
             statusCallback('Removing device from home')

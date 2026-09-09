@@ -20,6 +20,8 @@ function state(): BridgeState {
         setCredentials: () => {},
         getDeviceState: () => undefined,
         setDeviceState: () => {},
+        getDeviceNames: () => ({}),
+        setDeviceNames: () => {},
     }
 }
 

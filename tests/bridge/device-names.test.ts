@@ -6,8 +6,9 @@ import type { BridgeState, Credentials } from '@/bridge/state'
 
 // Enough of the stored bridge state to answer "are we logged in?", which is the only question
 // refreshNames() asks before deciding whether there is an account to read names from.
-function state(credentials?: Credentials): BridgeState {
+function state(credentials?: Credentials, storedNames: Record<string, string> = {}): BridgeState {
     let creds = credentials
+    let names: Record<string, string> = { ...storedNames }
     return {
         // return a fresh object on each call
         getCredentials: () => (creds ? { ...creds } : undefined),
@@ -16,6 +17,10 @@ function state(credentials?: Credentials): BridgeState {
         },
         getDeviceState: () => undefined,
         setDeviceState: () => {},
+        getDeviceNames: () => ({ ...names }),
+        setDeviceNames: (value) => {
+            names = value
+        },
     }
 }
 
@@ -23,6 +28,22 @@ describe('ThinQ device names', () => {
     test('there are none until an account has been read', () => {
         const bridge = new Bridge(state(), new DeviceManager())
         assert.equal(bridge.name('any-device'), undefined)
+    })
+
+    test('names cached on disk are available immediately, before any cloud read', () => {
+        const bridge = new Bridge(state(undefined, { cassette: '거실에어컨' }), new DeviceManager())
+        assert.equal(bridge.name('cassette'), '거실에어컨')
+    })
+
+    test('logging out also wipes the on-disk cache', async () => {
+        const st = state()
+        const bridge = new Bridge(st, new DeviceManager())
+        bridge.deviceNames = new Map([['cassette', '거실에어컨']])
+
+        bridge.logout()
+        await Promise.resolve()
+
+        assert.deepEqual(st.getDeviceNames(), {})
     })
 
     test('logging out clears them, and says so', async () => {
