@@ -1,8 +1,7 @@
 import { TypedEmitter } from 'tiny-typed-emitter'
-import { Device as T1Device } from './thinq1/device'
 import { Device as T2Device } from './thinq2/device'
 
-export type AnyDevice = T1Device | T2Device
+export type AnyDevice = T2Device
 
 type DeviceManagerEvents = {
     newDevice: (dev: AnyDevice) => void

@@ -18,13 +18,9 @@ map:
 ports:
     4433/tcp: 4433
     8886/tcp: 8886
-    46030/tcp: 46030
-    47878/tcp: 47878
 ports_description:
     4433/tcp: ThinQ2 HTTPS (device provisioning)
     8886/tcp: ThinQ2 MQTTS (device connection) - do not change unless you know what you're doing
-    46030/tcp: ThinQ1 HTTPS (device provisioning)
-    47878/tcp: ThinQ1 device connection
 options:
     hostname: rethink.lan
     mqtt_host: core-mosquitto

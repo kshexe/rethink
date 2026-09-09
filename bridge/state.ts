@@ -1,4 +1,4 @@
-import { Environment, Thinq1DeviceState, Thinq2DeviceState } from './thinqApi'
+import { Environment, Thinq2DeviceState } from './thinqApi'
 import { readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 
 export type Credentials = {
@@ -9,8 +9,8 @@ export type Credentials = {
 export type BridgeState = {
     getCredentials(): Credentials | undefined
     setCredentials(credentials: Credentials | undefined): void
-    getDeviceState(id: string): Thinq1DeviceState | Thinq2DeviceState | undefined
-    setDeviceState(id: string, state: Thinq1DeviceState | Thinq2DeviceState | undefined): void
+    getDeviceState(id: string): Thinq2DeviceState | undefined
+    setDeviceState(id: string, state: Thinq2DeviceState | undefined): void
     // The owner's per-appliance names (ThinQ aliases), cached so the first HA discovery after a
     // restart already carries the real name instead of the model-name fallback.
     getDeviceNames(): Record<string, string>
@@ -47,15 +47,13 @@ export class JSONStorage implements BridgeState {
 
     getDeviceState(id: string) {
         try {
-            return JSON.parse(readFileSync(this.devicePath(id)).toString('utf-8')) as
-                | Thinq1DeviceState
-                | Thinq2DeviceState
+            return JSON.parse(readFileSync(this.devicePath(id)).toString('utf-8')) as Thinq2DeviceState
         } catch (err) {
             return undefined
         }
     }
 
-    setDeviceState(id: string, state: Thinq1DeviceState | Thinq2DeviceState | undefined) {
+    setDeviceState(id: string, state: Thinq2DeviceState | undefined) {
         if (state) writeFileSync(this.devicePath(id), JSON.stringify(state))
         else unlinkSync(this.devicePath(id))
     }

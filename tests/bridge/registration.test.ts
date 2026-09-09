@@ -61,8 +61,6 @@ describe('bridge registration', () => {
         api = new FakeThinqApi()
         baseUrl = await api.listen()
         Client.gatewayCache[COUNTRY] = Promise.resolve({
-            rtiUri: baseUrl,
-            thinq1Uri: baseUrl,
             thinq2Uri: baseUrl,
             uris: { empOauthBaseUri: baseUrl, empFrontBaseUri2: baseUrl },
         })

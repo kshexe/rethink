@@ -6,9 +6,7 @@ import { dirname, resolve } from 'node:path'
 import { Broker } from './cloud/mqtt-broker'
 import * as tls from 'node:tls'
 import * as net from 'node:net'
-import { routes as thinq1Routes } from './cloud/thinq1/http'
 import { routes as thinq2Routes } from './cloud/thinq2/provisioning'
-import { DeviceAcceptor as T1Acceptor } from './cloud/thinq1/device'
 import { DeviceAcceptor as T2Acceptor } from './cloud/thinq2/device'
 import { Connection as HA_connection } from './cloud/homeassistant'
 import HA_bridge from './cloud/ha_bridge'
@@ -79,31 +77,6 @@ const issuer = new CertificateIssuer(caFiles, config.hostname)
 // carries a subjectAltName. The CA has only a subject, which clients are free to stop honouring.
 const tlsOptions = { ...issuer.issue(config.hostname), SNICallback: issuer.SNICallback }
 
-// Thinq1
-function t1setup(manager: DeviceManager) {
-    // Thinq1 HTTPS server
-    const app = express()
-    app.use(function (req, res, next) {
-        log('HTTPS', req.hostname, req.url)
-        next()
-    })
-
-    app.use(thinq1Routes(config))
-
-    // fallback
-    app.use((req, res) => {
-        res.json({})
-    })
-
-    https.createServer(tlsOptions, app).listen(config.thinq1_https_port.bind, config.thinq1_https_port.address)
-    const acceptor = new T1Acceptor()
-    tls.createServer(tlsOptions, acceptor.accept.bind(acceptor)).listen(
-        config.thinq1_port.bind,
-        config.thinq1_port.address,
-    )
-    acceptor.on('newDevice', manager.accept.bind(manager))
-}
-
 // Thinq2
 function t2setup(manager: DeviceManager) {
     // Thinq2 HTTPS server
@@ -160,7 +133,6 @@ if (config.bridge) {
 const ha = new HA_bridge(new HA_connection(config.homeassistant), bridge)
 manager.on('newDevice', (dev) => ha.newDevice(dev))
 
-t1setup(manager)
 t2setup(manager)
 
 if (config.management_port)

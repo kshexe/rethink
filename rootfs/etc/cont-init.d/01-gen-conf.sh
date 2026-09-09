@@ -46,8 +46,6 @@ jq -n \
     https_port: 4433,
     mqtts_port: 8886,
     mqtt_port: 1884,
-    thinq1_https_port: 46030,
-    thinq1_port: 47878,
     management_port: 44401,
     bridge: { storage_path: "/data/state" },
     log: ($logtopics | split(" ") | map(select(length > 0))),

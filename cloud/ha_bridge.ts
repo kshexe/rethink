@@ -3,7 +3,6 @@ import FX___S from './devices/FX___S'
 import MI2D7B from './devices/MI2D7B'
 import RD20_S from './devices/RD20_S'
 import ST_R_ETH01Y_ from './devices/ST_R_ETH01Y_'
-import { Device as T1Device } from './thinq1/device'
 import { Device as T2Device } from './thinq2/device'
 import { type Connection } from './homeassistant'
 import HADevice from './devices/base'
@@ -11,10 +10,7 @@ import { type Metadata } from './thinq'
 import { AnyDevice } from './devmgr'
 import { type Bridge as LgCloudBridge } from '@/bridge'
 
-type T1Factory = new (HA: Connection, thinq: T1Device, metadata: Metadata) => HADevice
 type T2Factory = new (HA: Connection, thinq: T2Device, metadata: Metadata) => HADevice
-
-const t1deviceTypes: Record<string, T1Factory> = {}
 
 const t2deviceTypes: Record<string, T2Factory> = {
     CST_570004_WW, // LG ceiling-cassette IDU (multi-split, deviceType 401); DualCool TLV, self-contained handler
@@ -75,15 +71,8 @@ class Bridge {
         const oldDevice = this.haDevices.get(thinqdev.id)
         if (oldDevice) oldDevice.drop()
 
-        let hadevice: HADevice | undefined
-
-        if (thinqdev.platform === 'thinq1') {
-            const devclass = t1deviceTypes[meta.modelId]
-            if (devclass) hadevice = new devclass(this.HA, thinqdev, meta)
-        } else if (thinqdev.platform === 'thinq2') {
-            const devclass = t2deviceTypes[meta.modelId]
-            if (devclass) hadevice = new devclass(this.HA, thinqdev, meta)
-        }
+        const devclass = t2deviceTypes[meta.modelId]
+        const hadevice = devclass ? new devclass(this.HA, thinqdev, meta) : undefined
 
         if (!hadevice) {
             console.warn(`${thinqdev.platform} device type ${meta.modelId} unknown`)

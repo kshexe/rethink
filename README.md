@@ -70,14 +70,12 @@ Notes specific to running it this way:
   static DNS entry (e.g. in your router/UniFi) at whatever host the add-on runs on. This is a
   rethink requirement, not an add-on limitation - see the note in `config.jsonc` upstream.
 - **Ports**: the add-on's ThinQ2 ports default to `4433`/`8886` (both host- and container-side -
-  rethink itself listens directly on these, no internal 443/8883 hop), and ThinQ1 stays on its
-  plain defaults `46030`/`47878`. This has no effect on device compatibility: appliances always
-  connect to LG's real cloud on 443/8883 and never see rethink's own listening port - either
-  they're pointed at rethink via DNS/SoftAP config (which only ever names a host, not a port), or
-  their traffic is DNAT'd here, in which case the router rewrites the destination port
-  transparently before the packet arrives (see below). Remap the _host_ side from the add-on's
-  **Info → Network** tab if any of these host ports are already taken by something else (e.g.
-  another bridge add-on).
+  rethink itself listens directly on these, no internal 443/8883 hop). This has no effect on
+  device compatibility: appliances always connect to LG's real cloud on 443/8883 and never see
+  rethink's own listening port - their traffic is DNAT'd here, and the router rewrites the
+  destination port transparently before the packet arrives (see below). Remap the _host_ side from
+  the add-on's **Info → Network** tab if any of these host ports are already taken by something
+  else (e.g. another bridge add-on).
 - **Persistent state** (CA key/cert, bridge per-device store, generated `config.json`) lives under
   the add-on's own `/data`, regenerated from the add-on options on every start - editing the add-on
   options and restarting is enough, no manual `config.json` editing needed.
@@ -87,11 +85,13 @@ Notes specific to running it this way:
   regardless of your router/port-forwarding setup - the same as Music Assistant's or Advanced SSH
   & Web Terminal's web UI button.
 
-### Adopting a ThinQ2 appliance without SoftAP re-provisioning
+### Adopting a ThinQ2 appliance by port redirection
 
-`rethink-setup`'s SoftAP pairing is not the only way to hand an appliance to rethink. For a
-**ThinQ2** appliance already registered on your LG account, port-redirecting its existing traffic
-(instead of resetting/re-pairing it) works and leaves the official app and Google Home connected:
+For a **ThinQ2** appliance already registered on your LG account, port-redirecting its existing
+traffic (instead of resetting/re-pairing it) works and leaves the official app and Google Home
+connected. This is the only appliance-adoption method this fork supports - it only bridges the
+household's own ThinQ2 appliances, so SoftAP re-provisioning (`rethink-setup`) and ThinQ1 support
+were dropped:
 
 1. On your router, DNAT the appliance's outbound `443`/`8883` (matched by its own LAN IP, not a
    blanket rule) to this add-on's host on whatever host ports it's actually published on (default
@@ -111,7 +111,6 @@ Notes specific to running it this way:
 
 - Don't redirect DNS for this instead of using port DNAT - the appliance caches the resolved IP,
   so undoing it later needs a power cycle to clear.
-- This path is ThinQ2-only; ThinQ1 appliances still need real re-provisioning.
 
 (Method and the `advertise_requested_host` fix come from
 [anszom/rethink#107](https://github.com/anszom/rethink/pull/107) and the write-up at
@@ -137,7 +136,7 @@ username+password REST call. `signInUrl()` builds a link to LG's actual official
 human to look at and type into, not for a server to submit credentials to on your behalf (it may
 also involve 2FA/CAPTCHA). There's no way around this short of a real browser doing the login.
 
-**Why does *the rest of the panel* also have to be a web page, then?** rethink is a standalone
+**Why does _the rest of the panel_ also have to be a web page, then?** rethink is a standalone
 Node.js server, not a Python-based Home Assistant integration - so it doesn't get an HA config
 flow. An add-on's options screen can only show a fixed set of predefined key/value fields; it can't
 represent things like a dynamic device list, per-device bridge-mode toggles, or live monitoring.
@@ -167,16 +166,16 @@ thing) because of that hardcoded `redirect_uri`.
 When enabling bridge mode for a device from the panel, "device type" is a 3-digit code, not a free
 text field:
 
-| Code | Device |
-|---|---|
-| 101 | Refrigerator (냉장고) |
-| 201 | Washer (세탁기) |
-| 202 | Dryer (건조기) |
-| 204 | Dishwasher (식기세척기) |
-| 223 | WashTower (워시타워) |
-| 301 | Gas Range (가스레인지) |
-| 302 | Microwave (전자레인지) |
-| 401 | Air Conditioner (에어컨) |
+| Code | Device                   |
+| ---- | ------------------------ |
+| 101  | Refrigerator (냉장고)    |
+| 201  | Washer (세탁기)          |
+| 202  | Dryer (건조기)           |
+| 204  | Dishwasher (식기세척기)  |
+| 223  | WashTower (워시타워)     |
+| 301  | Gas Range (가스레인지)   |
+| 302  | Microwave (전자레인지)   |
+| 401  | Air Conditioner (에어컨) |
 
 The field autocompletes with these (shown as e.g. `401 (Air Conditioner)`); typing just the number
 works too.
@@ -185,7 +184,6 @@ works too.
 
 The following code is currently available:
 
-- [rethink-setup](rethink-setup.ts) - a simple tool to perform the "initial setup" from a Wi-Fi connected PC, without using the official LG app
 - [rethink-cloud](rethink-cloud.ts) - a server that replaces LG's cloud service. It's meant to be installed on your local network and hosts its own simplistic MQTT broker.
 
 Miscelanneous utilities:

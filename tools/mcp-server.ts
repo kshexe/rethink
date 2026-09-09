@@ -269,7 +269,7 @@ const tools: Record<string, { description: string; inputSchema: object; handler:
 
     list_devices: {
         description:
-            'Enumerate devices currently connected to rethink-cloud and their status (from the management interface). Per device: model, deviceType, platform (thinq1/thinq2), whether rethink maps it to Home Assistant (mapped), and its bridge/cloud status (bridged). Also returns global bridge-login (bridge) and HA-connection (ha) state. Read-only — usually the first call, to discover device ids for inject/probe.',
+            'Enumerate devices currently connected to rethink-cloud and their status (from the management interface). Per device: model, deviceType, platform (thinq2), whether rethink maps it to Home Assistant (mapped), and its bridge/cloud status (bridged). Also returns global bridge-login (bridge) and HA-connection (ha) state. Read-only — usually the first call, to discover device ids for inject/probe.',
         inputSchema: {
             type: 'object',
             properties: {},

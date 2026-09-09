@@ -6,13 +6,13 @@ import WebSocket from 'ws'
 import type HA_bridge from '@/cloud/ha_bridge'
 import { DeviceManager } from '@/cloud/devmgr'
 import { app } from '@/management'
-import { MockThinq1Device } from '../helpers/mocks'
+import { MockThinq2Device } from '../helpers/mocks'
 
 test('device monitor detaches device and manager listeners after a real WebSocket close', async () => {
     const haStatus = Object.assign(new EventEmitter(), { isConnected: true })
     const ha = { HA: haStatus, haDevices: new Map() } as unknown as HA_bridge
     const manager = new DeviceManager()
-    const device = new MockThinq1Device('device-1', {
+    const device = new MockThinq2Device('device-1', {
         modelId: 'model-id',
         modelName: 'model-name',
         deviceType: '401',
@@ -53,7 +53,7 @@ test('server shutdown closes a connected device monitor and detaches all listene
     const haStatus = Object.assign(new EventEmitter(), { isConnected: true })
     const ha = { HA: haStatus, haDevices: new Map() } as unknown as HA_bridge
     const manager = new DeviceManager()
-    const device = new MockThinq1Device('device-1', {
+    const device = new MockThinq2Device('device-1', {
         modelId: 'model-id',
         modelName: 'model-name',
         deviceType: '401',

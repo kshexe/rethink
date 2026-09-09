@@ -1,17 +1,8 @@
-import {
-    Client as ThinqClient,
-    Device as ClientDevice,
-    Environment,
-    signInUrl,
-    Thinq1Device,
-    Thinq2Device,
-} from './thinqApi'
+import { Client as ThinqClient, Device as ClientDevice, Environment, signInUrl, Thinq2Device } from './thinqApi'
 import { AnyDevice, DeviceManager } from '../cloud/devmgr'
 import * as OAuth2 from './oauth2'
 import { BridgeState } from './state'
-import { Connection as Thinq1Connection } from './thinq1connection'
 import { Connection as Thinq2Connection } from './thinq2connection'
-import { Device as T1Downstream } from '@/cloud/thinq1/device'
 import { Device as T2Downstream } from '@/cloud/thinq2/device'
 import { TypedEmitter } from 'tiny-typed-emitter'
 
@@ -60,18 +51,12 @@ class BridgedDevice {
     onDownstreamData: (packet: Buffer) => void
     onDownstreamClose: () => void
 
-    connection: Thinq1Connection | Thinq2Connection | undefined
+    connection: Thinq2Connection | undefined
 
     reconnectNow() {
         const U = this.upstream
         const D = this.downstream
-        if (U instanceof Thinq1Device && D instanceof T1Downstream) {
-            this.connection = new Thinq1Connection(U)
-            // feed the initial state to the connection
-            if (D.lastReport) this.connection.send(D.lastReport)
-
-            this.connection.on('data', (payload) => D.send(payload))
-        } else if (U instanceof Thinq2Device && D instanceof T2Downstream) {
+        if (U instanceof Thinq2Device && D instanceof T2Downstream) {
             // Forward the physical device's real deploy appInfo/platformInfo so the upstream
             // preDeploy reports its true protocolVer/softVer/etc. instead of placeholders.
             this.connection = new Thinq2Connection(U, D.deployAppInfo, D.deployPlatformInfo)
@@ -342,20 +327,9 @@ export class Bridge extends TypedEmitter<BridgeEvents> {
             await client.removeDevice(device.id)
         }
 
-        let clientDevice: Thinq1Device | Thinq2Device
+        let clientDevice: Thinq2Device
 
-        if (device.platform === 'thinq1') {
-            const gateway = await client.gateway
-            const state = {
-                httpServer: gateway.thinq1Uri.replace(/\/api$/, ''),
-                rtiServer: gateway.rtiUri,
-            }
-
-            clientDevice = new Thinq1Device(device.id, device.meta, state)
-            statusCallback('Adding device to home')
-
-            await client.addDevice(clientDevice, alias, deviceType)
-        } else if (device.platform === 'thinq2') {
+        if (device.platform === 'thinq2') {
             statusCallback('Fetching otp key')
             const otp = await client.prepareNewT2Device()
 
@@ -393,14 +367,8 @@ export class Bridge extends TypedEmitter<BridgeEvents> {
 
     loadSavedDevice(device: AnyDevice) {
         const state = this.state.getDeviceState(device.id)
-        if (state) {
-            if ('rtiServer' in state) {
-                // thinq1
-                return new Thinq1Device(device.id, device.meta, state)
-            } else if ('mqttServer' in state) {
-                // thinq2
-                return new Thinq2Device(device.id, device.meta, state)
-            }
+        if (state && 'mqttServer' in state) {
+            return new Thinq2Device(device.id, device.meta, state)
         }
 
         return undefined

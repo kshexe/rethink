@@ -59,8 +59,6 @@ export class RemoteError extends Error {
 }
 
 type GatewayResponse = {
-    rtiUri: string
-    thinq1Uri: string
     thinq2Uri: string
     uris: {
         empOauthBaseUri: string
@@ -335,23 +333,9 @@ type CertResponse = {
 }
 
 export type Device = {
-    platformType: 'thinq1' | 'thinq2'
+    platformType: 'thinq2'
     deviceId: string
     meta: Metadata
-}
-
-export type Thinq1DeviceState = {
-    rtiServer: string
-    httpServer: string
-}
-
-export class Thinq1Device implements Device {
-    readonly platformType = 'thinq1'
-    constructor(
-        readonly deviceId: string,
-        readonly meta: Metadata,
-        readonly state: Thinq1DeviceState,
-    ) {}
 }
 
 export type Thinq2DeviceState = {

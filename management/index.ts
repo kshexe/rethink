@@ -8,7 +8,6 @@ import HA_bridge from '@/cloud/ha_bridge'
 import { AnyDevice, DeviceManager } from '@/cloud/devmgr'
 import { Bridge } from '@/bridge'
 import { Request, Response } from 'express'
-import { Device as T1Device } from '@/cloud/thinq1/device'
 import { Device as T2Device } from '@/cloud/thinq2/device'
 
 // refresh bridged device names policy:
@@ -320,15 +319,6 @@ export function app(ha: HA_bridge, manager: DeviceManager, bridge: Bridge | unde
                 const dev = manager.allDevices[id]
 
                 try {
-                    if (typeof json.sendToDevice === 'object' && dev && dev instanceof T1Device) {
-                        try {
-                            injectFlag = true
-                            dev.send(json.sendToDevice)
-                        } finally {
-                            injectFlag = false
-                        }
-                    }
-
                     if (typeof json.sendToDevice === 'string' && dev && dev instanceof T2Device) {
                         try {
                             injectFlag = true

@@ -35,10 +35,6 @@
   // useful for local testing & debugging, not used by Thinq2
   "mqtt_port": 1884,
 
-  // the defaults should not be changed unless you know what you're doing
-  "thinq1_https_port": 46030,
-  "thinq1_port": 47878,
-
   // specify anything you like. Removing this parameter disables the management interface
   "management_port": 44401,
 
