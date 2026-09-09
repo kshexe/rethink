@@ -631,6 +631,10 @@ export default abstract class ACDevice extends TLVDevice {
             TAG_RES_STOP, TAG_RES_START, TAG_RES_RELATIVE_START, TAG_RES_RELATIVE_STOP,
             TAG_RES_BAN_DISTURB_SLEEP, TAG_RES_CANCEL, TAG_RES_STOP_HEATING,
             0x205, 0x206, 0x321, 0x322, // swing axes (SWING_DEFS / addSwingAxis)
+            0x323, // jet (addJetField - only wired when the caps bitmap advertises jet)
+            0x21f, // display light (addDisplayField, capability-gated)
+            0x2f9, 0x2fa, 0x2fb, // fan-RPM diagnostics
+            0x20d, // energy-save partner tag (addField'd alongside 0x20f)
         ]) {
             s.add(t)
         }
