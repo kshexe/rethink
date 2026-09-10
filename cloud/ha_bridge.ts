@@ -6,6 +6,7 @@ import ST_R_ETH01Y_ from './devices/ST_R_ETH01Y_'
 import H01 from './devices/H01'
 import Fridge_2REF21EBNSX_3 from './devices/2REF21EBNSX_3'
 import ML32PWFOTA from './devices/ML32PWFOTA'
+import KimchiFridge_3REK2G03VI200S_2 from './devices/3REK2G03VI200S_2'
 import { Device as T2Device } from './thinq2/device'
 import { type Connection } from './homeassistant'
 import HADevice from './devices/base'
@@ -24,6 +25,7 @@ const t2deviceTypes: Record<string, T2Factory> = {
     ['H01']: H01, // LG dishwasher (식기세척기) - power on/off only so far, see H01.ts
     ['2REF21EBNSX_3']: Fridge_2REF21EBNSX_3, // LG fridge (냉장고) - fridge/freezer temp + express freeze, see 2REF21EBNSX_3.ts
     ['ML32PWFOTA']: ML32PWFOTA, // LG combi oven (광파오븐) - course select + cook time + send/cancel, never start; see ML32PWFOTA.ts
+    ['3REK2G03VI200S_2']: KimchiFridge_3REK2G03VI200S_2, // LG kimchi fridge (김치냉장고) - per-compartment storage mode + one-touch deodorize + door, see 3REK2G03VI200S_2.ts
 }
 
 class Bridge {

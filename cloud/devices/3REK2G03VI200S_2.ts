@@ -1,0 +1,408 @@
+import { Device as Thinq2Device } from '../thinq2/device'
+import { type Connection, type DeviceDiscovery } from '../homeassistant'
+import { type Metadata } from '../thinq'
+import { allowExtendedType } from '@/util/casting'
+import HADevice from './base'
+import AABBDevice from './aabb_device'
+import log from '@/util/logging'
+import { note as recordNote } from '../frame-recorder'
+
+/*
+ * LG kimchi fridge (김치냉장고), ThinQ model 3REK2G03VI200S_2, a 3-compartment unit (상칸/중칸/하칸
+ * - "top/middle/bottom"). Shares the AA..BB envelope with the rest of this fork's AABB-family
+ * handlers, but its own opcode sub-byte is `0x11` (2REF21EBNSX_3's fridge uses `0x10`) - a
+ * different physical protocol family under the same envelope, not the same device with a
+ * different model string.
+ *
+ * Everything below was captured live 2026-09-10 by driving my.lgthinq.com directly (Playwright)
+ * against the real unit, one compartment/option at a time, and reading rethink's on-box capture
+ * log for the same timestamps - the same method used throughout this fork. Compartment storage
+ * modes were swept exhaustively (every option in every compartment's own menu); the door/dedorize
+ * bits were isolated the same way the fridge's own door-by-compartment finding was.
+ *
+ * QUERY: byte-for-byte the same frame 2REF21EBNSX_3.ts already uses (this fork's rethink
+ * apparently reuses one fixed query frame across this whole GGM-20 fridge family):
+ *
+ *   to-device   aa 0e f0 ed 12 11 01 00 00 01 04 00 <ck> bb             (fixed, no parameters)
+ *   from-device aa 10 11 eb <10-byte record, see RECORD_* offsets> <ck> bb
+ *
+ * WRITE: a single positional frame, one compartment/option per write - unlike 2REF21EBNSX_3's
+ * "many settings in one 43-byte frame" style, this model's write only ever carries one change:
+ *
+ *   to-device   aa 0f f0 e5 00 02 01 ff 01 00 <byteIndex> 00 <value> <ck> bb
+ *   from-device aa 07 11 00 e5 <ck> bb                                        (ack, 3-byte body)
+ *   from-device aa 18 11 e6 00 02 01 ff 01 00 <byteIndex> 00 <value> <10-byte record> <ck> bb
+ *
+ * The write's selector byte is simply the target field's own byte index into the 10-byte state
+ * record below - confirmed across all 4 writable fields (RECORD_TOP=1, RECORD_MIDDLE=3,
+ * RECORD_BOTTOM=4, RECORD_ONE_TOUCH_DEODORIZE=6), so building a write needs no separate lookup
+ * table. The `e6` echo's trailing 10 bytes look like a state record but are NOT the new one -
+ * confirmed live: right after a 중칸 write, its embedded record[3] still read the OLD value, not
+ * the one just written, and a 하칸 write's own echo carried 중칸's already-applied change from an
+ * *earlier* write but its own field still at the old value too. It appears to snapshot whatever
+ * was true right before this particular write landed, not after - recognised by shape and
+ * silently dropped rather than applied as state (see processAABB); the real update always arrives
+ * moments later as a proper `ec` push anyway.
+ *
+ * STATE: byte-for-byte the same old/new record-pair convention every other AABB fridge-family
+ * handler in this fork uses:
+ *
+ *   from-device aa 1a 11 ec <old 10-byte record><new 10-byte record> <ck> bb
+ *
+ * 10-byte record layout (offsets confirmed by sweeping every compartment through its own full
+ * menu and diffing before/after - see RECORD_TOP_MODE_NAMES etc. below for the per-compartment
+ * value tables):
+ *
+ *   record[0]  = 0x02, constant in every capture - not established what this is.
+ *   record[1]  = 상칸(top) storage mode - see RECORD_TOP_MODE_NAMES.
+ *   record[2]  = 0xff, constant in every capture - modelJSON documents a 4th room
+ *                (room2Temp/room4Temp alongside room1/room3) this physical 3-door unit doesn't
+ *                have; most likely this offset (and record[5], see below) is that room's slot,
+ *                permanently "not present" on this unit.
+ *   record[3]  = 중칸(middle) storage mode - see RECORD_MIDDLE_MODE_NAMES. Its own menu is
+ *                different from 상칸's (no 냉동/냉장 options, has 구입 김치 instead) and the two
+ *                compartments don't share a value scheme even where option names overlap - e.g.
+ *                맛지킴 김치 (중/강/약) happen to be 0/1/2 in both, but that's the only overlap.
+ *   record[4]  = 하칸(bottom) storage mode - see RECORD_BOTTOM_MODE_NAMES. A third, again
+ *                different menu (no 냉동/냉장/구입김치/유산균+/익힘 - has 육류/생선 and 오래 보관
+ *                instead).
+ *   record[5]  = 0xff, constant - see record[2].
+ *   record[6]  = 원터치 탈취(one-touch deodorize), 0x00 off / 0x01 on. The appliance describes
+ *                this in-app as self-limiting ("탈취가 완료되면 자동으로 꺼져요") - confirmed live
+ *                that toggling it on and back off both reach the device.
+ *   record[7]  = 상칸-specific "closed" flag, 1=closed / 0=open - confirmed live: opening/closing
+ *                상칸's door flips this, opening/closing 중칸 or 하칸's door does NOT move it at
+ *                all. Unlike 2REF21EBNSX_3, only 상칸 gets an individual flag here - 중칸/하칸
+ *                have no bit of their own in this record, only the aggregate below.
+ *   record[8]  = aggregate "at least one door open", 0=all closed / 1=at least one open -
+ *                confirmed live for all three compartments (each one's door event flips this).
+ *   record[9]  = 0x01, constant in every capture - not established what this is.
+ *
+ * Per-compartment storage modes confirmed live (2026-09-10, every option in each compartment's
+ * own menu, one at a time, via the appliance's own confirm dialog - "식품이 상하지 않도록
+ * 주의하세요. 온도(모드)를 바꿀까요?"):
+ *
+ *   상칸(top):    맛지킴 김치 (중)=0x00, (강)=0x01, (약)=0x02, 냉장 (상)=0x03, 냉장 (중)=0x04,
+ *                 냉장 (약)=0x05, 냉동=0x06, 익힘=0x07, 유산균 김치+=0x0a
+ *   중칸(middle): 맛지킴 김치 (중)=0x00, (강)=0x01, (약)=0x02, 구입 김치=0x06,
+ *                 유산균 김치+=0x07, 익힘=0x0b
+ *   하칸(bottom): 맛지킴 김치 (중)=0x00, (강)=0x01, (약)=0x02, 육류/생선=0x07, 오래 보관=0x08
+ *
+ * Baseline confirmed against the real unit's own device page: 상칸=냉동, 중칸=맛지킴 김치 (중),
+ * 하칸=맛지킴 김치 (중), 원터치 탈취=off - all three compartments restored to this after testing.
+ *
+ * NOT YET DECODED, left deliberately unmodelled:
+ *   - `11 31` (51 bytes): fires rarely, contains two readable ASCII part/serial-number-looking
+ *     strings (e.g. "SAA42276301") - an identification/inventory block, not live state. Recognised
+ *     by shape and silently dropped (see processAABB) rather than re-flagged every time, the same
+ *     way 2REF21EBNSX_3.ts drops its own periodic full-status dump.
+ *   - `11 3e` (7 bytes): a plain periodic tick, not tied to any command or door/mode/deodorize
+ *     change - confirmed live across 3 occurrences, exactly 15 minutes apart each time, with its
+ *     last payload byte incrementing by exactly 1 between occurrences (a rolling counter, most
+ *     likely uptime-related). Left unrecognised (still generates unmodelled-frame notes) since
+ *     nothing about it looks energy-related - not worth silencing like `11 31` until its counter
+ *     is understood.
+ *   - Energy usage: the ThinQ app shows an hourly/daily kWh figure for this unit (a live baseline
+ *     was noted 2026-09-10: 22-23시=63Wh, daily=1.01kWh) but no frame carrying anything like it has
+ *     been spotted yet - unlike 2REF21EBNSX_3, this model hasn't even produced a large periodic
+ *     full-status dump to go looking in. Needs a capture right as the app's displayed figure
+ *     visibly changes - see RETHINK memory `rethink_migration_status` for the baseline value/time.
+ *   - room2Temp/room4Temp (modelJSON fields with no corresponding physical compartment on this
+ *     unit - see record[2]/record[5] above).
+ *
+ * See RETHINK memory `rethink_migration_status` for the raw capture log this was built from.
+ */
+
+const ACK_SUB = 0x11
+const ACK_OPCODE = 0xe5
+
+const STATE_SUB = 0x11
+const STATE_OPCODE = 0xec
+const STATE_RECORD_LEN = 10
+
+const QUERY_SUB = 0x11
+const QUERY_OPCODE = 0xeb
+/** Fixed, parameterless - byte-for-byte the same frame 2REF21EBNSX_3.ts uses for its own query. */
+const QUERY_FRAME = Buffer.from('f0ed1211010000010400', 'hex')
+const QUERY_INTERVAL_MS = 5 * 60 * 1000
+
+const WRITE_ECHO_SUB = 0x11
+const WRITE_ECHO_OPCODE = 0xe6
+/** `f0 e5 00 02 01 ff 01 00` - constant across every write captured; only the selector (= the
+ *  target's own record byte index) and the value after it ever change. */
+const WRITE_HEADER = Buffer.from('f0e5000201ff0100', 'hex')
+
+const RECORD_TOP = 1
+const RECORD_MIDDLE = 3
+const RECORD_BOTTOM = 4
+const RECORD_ONE_TOUCH_DEODORIZE = 6
+const RECORD_TOP_DOOR_CLOSED = 7
+const RECORD_ANY_DOOR_OPEN = 8
+
+/** record[RECORD_TOP] values - see the file header for how these were confirmed. */
+const RECORD_TOP_MODE_NAMES: Record<number, string> = {
+    0x00: '맛지킴 김치 (중)',
+    0x01: '맛지킴 김치 (강)',
+    0x02: '맛지킴 김치 (약)',
+    0x03: '냉장 (상)',
+    0x04: '냉장 (중)',
+    0x05: '냉장 (약)',
+    0x06: '냉동',
+    0x07: '익힘',
+    0x0a: '유산균 김치+',
+}
+/** record[RECORD_MIDDLE] values - a different menu than 상칸's (see the file header). */
+const RECORD_MIDDLE_MODE_NAMES: Record<number, string> = {
+    0x00: '맛지킴 김치 (중)',
+    0x01: '맛지킴 김치 (강)',
+    0x02: '맛지킴 김치 (약)',
+    0x06: '구입 김치',
+    0x07: '유산균 김치+',
+    0x0b: '익힘',
+}
+/** record[RECORD_BOTTOM] values - a third, again different menu (see the file header). */
+const RECORD_BOTTOM_MODE_NAMES: Record<number, string> = {
+    0x00: '맛지킴 김치 (중)',
+    0x01: '맛지킴 김치 (강)',
+    0x02: '맛지킴 김치 (약)',
+    0x07: '육류/생선',
+    0x08: '오래 보관',
+}
+
+function decodeMode(names: Record<number, string>, raw: number): string {
+    return names[raw] ?? `unknown_${raw}`
+}
+
+/** Reverse lookup for setProperty - the exact Korean label HA sends back must be one of this
+ *  compartment's own known options, since the select entity only ever offers those. */
+function encodeMode(names: Record<number, string>, label: string): number | undefined {
+    for (const [raw, name] of Object.entries(names)) {
+        if (name === label) return Number(raw)
+    }
+    return undefined
+}
+
+function buildWrite(byteIndex: number, value: number): Buffer {
+    return Buffer.concat([WRITE_HEADER, Buffer.from([byteIndex, 0x00, value])])
+}
+
+export default class Device extends AABBDevice {
+    topMode: string | undefined
+    middleMode: string | undefined
+    bottomMode: string | undefined
+    oneTouchDeodorize: boolean | undefined
+    topDoorOpen: boolean | undefined
+    anyDoorOpen: boolean | undefined
+
+    /** (dir:tag) pairs already flagged as unrecognised, so a repeating one is noted once. */
+    private seenUnknown = new Set<string>()
+    private queryTimer: ReturnType<typeof setInterval> | undefined
+
+    constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
+        super(HA, thinq)
+
+        const config: DeviceDiscovery = allowExtendedType({
+            ...HADevice.config(meta, { name: 'LG Kimchi Fridge' }),
+            components: {
+                top_compartment: {
+                    platform: 'select',
+                    unique_id: '$deviceid-top_compartment',
+                    name: 'Top compartment (상칸)',
+                    icon: 'mdi:fridge-top',
+                    options: Object.values(RECORD_TOP_MODE_NAMES),
+                    state_topic: '$this/top_compartment',
+                    command_topic: '$this/top_compartment/set',
+                },
+                middle_compartment: {
+                    platform: 'select',
+                    unique_id: '$deviceid-middle_compartment',
+                    name: 'Middle compartment (중칸)',
+                    icon: 'mdi:fridge-industrial',
+                    options: Object.values(RECORD_MIDDLE_MODE_NAMES),
+                    state_topic: '$this/middle_compartment',
+                    command_topic: '$this/middle_compartment/set',
+                },
+                bottom_compartment: {
+                    platform: 'select',
+                    unique_id: '$deviceid-bottom_compartment',
+                    name: 'Bottom compartment (하칸)',
+                    icon: 'mdi:fridge-bottom',
+                    options: Object.values(RECORD_BOTTOM_MODE_NAMES),
+                    state_topic: '$this/bottom_compartment',
+                    command_topic: '$this/bottom_compartment/set',
+                },
+                one_touch_deodorize: {
+                    platform: 'switch',
+                    unique_id: '$deviceid-one_touch_deodorize',
+                    name: 'One-touch deodorize',
+                    icon: 'mdi:air-purifier',
+                    state_topic: '$this/one_touch_deodorize',
+                    command_topic: '$this/one_touch_deodorize/set',
+                },
+                top_door_open: {
+                    platform: 'binary_sensor',
+                    unique_id: '$deviceid-top_door_open',
+                    name: 'Top compartment door open',
+                    icon: 'mdi:fridge-top',
+                    device_class: 'door',
+                    state_topic: '$this/top_door_open',
+                },
+                any_door_open: {
+                    platform: 'binary_sensor',
+                    unique_id: '$deviceid-any_door_open',
+                    name: 'Any door open',
+                    icon: 'mdi:fridge-alert-outline',
+                    device_class: 'door',
+                    state_topic: '$this/any_door_open',
+                },
+            },
+        })
+
+        this.setConfig(config)
+        log(
+            'status',
+            this.id,
+            '3REK2G03VI200S_2 (김치냉장고) handler started - per-compartment storage mode + one-touch deodorize + door sensors, see file header',
+        )
+    }
+
+    start() {
+        super.start()
+        this.query()
+        this.queryTimer = setInterval(() => this.query(), QUERY_INTERVAL_MS)
+    }
+
+    cancelPendingWork() {
+        clearInterval(this.queryTimer)
+        this.queryTimer = undefined
+        super.cancelPendingWork()
+    }
+
+    query() {
+        this.send(QUERY_FRAME)
+    }
+
+    /** Applies a state record (10 bytes) - shared between the `ec` state frame's current half and
+     *  the `eb` query response, which are the same layout (the `e6` write echo's own trailing 10
+     *  bytes look identical but are NOT a live record - see the file header). */
+    private applyStateRecord(record: Buffer) {
+        const topMode = decodeMode(RECORD_TOP_MODE_NAMES, record[RECORD_TOP])
+        if (topMode !== this.topMode) {
+            this.topMode = topMode
+            this.publishProperty('top_compartment', topMode)
+        }
+
+        const middleMode = decodeMode(RECORD_MIDDLE_MODE_NAMES, record[RECORD_MIDDLE])
+        if (middleMode !== this.middleMode) {
+            this.middleMode = middleMode
+            this.publishProperty('middle_compartment', middleMode)
+        }
+
+        const bottomMode = decodeMode(RECORD_BOTTOM_MODE_NAMES, record[RECORD_BOTTOM])
+        if (bottomMode !== this.bottomMode) {
+            this.bottomMode = bottomMode
+            this.publishProperty('bottom_compartment', bottomMode)
+        }
+
+        const oneTouchDeodorize = record[RECORD_ONE_TOUCH_DEODORIZE] === 1
+        if (oneTouchDeodorize !== this.oneTouchDeodorize) {
+            this.oneTouchDeodorize = oneTouchDeodorize
+            this.publishProperty('one_touch_deodorize', oneTouchDeodorize ? 'ON' : 'OFF')
+        }
+
+        const topDoorOpen = record[RECORD_TOP_DOOR_CLOSED] !== 1
+        if (topDoorOpen !== this.topDoorOpen) {
+            this.topDoorOpen = topDoorOpen
+            this.publishProperty('top_door_open', topDoorOpen ? 'ON' : 'OFF')
+        }
+
+        const anyDoorOpen = record[RECORD_ANY_DOOR_OPEN] === 1
+        if (anyDoorOpen !== this.anyDoorOpen) {
+            this.anyDoorOpen = anyDoorOpen
+            this.publishProperty('any_door_open', anyDoorOpen ? 'ON' : 'OFF')
+        }
+    }
+
+    private setCompartment(names: Record<number, string>, byteIndex: number, label: string) {
+        const raw = encodeMode(names, label)
+        if (raw === undefined) {
+            console.warn(`3REK2G03VI200S_2: unknown compartment mode "${label}"`)
+            return
+        }
+        this.send(buildWrite(byteIndex, raw))
+        // Published optimistically for a snappy UI; the real `ec` state frame (or the write's own
+        // `e6` echo) that follows corrects this if needed - see the file header.
+        this.publishProperty(
+            byteIndex === RECORD_TOP
+                ? 'top_compartment'
+                : byteIndex === RECORD_MIDDLE
+                  ? 'middle_compartment'
+                  : 'bottom_compartment',
+            label,
+        )
+    }
+
+    setProperty(prop: string, mqttValue: string) {
+        switch (prop) {
+            case 'top_compartment':
+                this.topMode = mqttValue
+                this.setCompartment(RECORD_TOP_MODE_NAMES, RECORD_TOP, mqttValue)
+                return
+            case 'middle_compartment':
+                this.middleMode = mqttValue
+                this.setCompartment(RECORD_MIDDLE_MODE_NAMES, RECORD_MIDDLE, mqttValue)
+                return
+            case 'bottom_compartment':
+                this.bottomMode = mqttValue
+                this.setCompartment(RECORD_BOTTOM_MODE_NAMES, RECORD_BOTTOM, mqttValue)
+                return
+            case 'one_touch_deodorize': {
+                const on = mqttValue === 'ON'
+                this.send(buildWrite(RECORD_ONE_TOUCH_DEODORIZE, on ? 0x01 : 0x00))
+                this.oneTouchDeodorize = on
+                this.publishProperty('one_touch_deodorize', on ? 'ON' : 'OFF')
+                return
+            }
+            default:
+                console.warn(`3REK2G03VI200S_2: attempting to set unknown property ${prop}`)
+        }
+    }
+
+    processAABB(buf: Buffer) {
+        // ack: <sub=0x11> 00 <opcode=0xe5> (3 bytes) - nothing to publish, just confirms the write landed
+        if (buf.length === 3 && buf[0] === ACK_SUB && buf[1] === 0x00 && buf[2] === ACK_OPCODE) return
+
+        // state: <sub=0x11> ec <old 10-byte record><new 10-byte record> - see the file header.
+        if (buf.length === 2 + 2 * STATE_RECORD_LEN && buf[0] === STATE_SUB && buf[1] === STATE_OPCODE) {
+            this.applyStateRecord(buf.subarray(2 + STATE_RECORD_LEN, 2 + 2 * STATE_RECORD_LEN))
+            return
+        }
+
+        // query response: <sub=0x11> eb <10-byte record> - see the file header.
+        if (buf.length === 2 + STATE_RECORD_LEN && buf[0] === QUERY_SUB && buf[1] === QUERY_OPCODE) {
+            this.applyStateRecord(buf.subarray(2, 2 + STATE_RECORD_LEN))
+            return
+        }
+
+        // write echo: <sub=0x11> e6 <8-byte header echo><10 bytes that look like a record but
+        // are not a live one - see the file header>. Recognised by shape and silently dropped -
+        // the real update always arrives moments later as a proper `ec` push anyway.
+        if (buf.length === 2 + 8 + STATE_RECORD_LEN && buf[0] === WRITE_ECHO_SUB && buf[1] === WRITE_ECHO_OPCODE) return
+
+        // identification block: <sub=0x11> 31 <49 bytes, two ASCII serial/part-number strings> -
+        // see the file header's NOT YET DECODED note. Recognised by shape and silently dropped, the
+        // same way 2REF21EBNSX_3.ts drops its own periodic full-status dump - it's a fixed
+        // inventory block, not live state, so there's nothing to gain from re-flagging it.
+        if (buf.length === 51 && buf[0] === 0x11 && buf[1] === 0x31) return
+
+        // Anything else is a frame this handler does not parse yet (`11 3e`, the still-open energy
+        // question, among them). Note it once per shape so a future session has something to grep
+        // for, the same way TLVDevice.noteUnknownTags does for the AC family.
+        const key = buf.length > 0 ? `${buf.length}:${buf[0].toString(16)}:${(buf[1] ?? 0).toString(16)}` : 'empty'
+        if (!this.seenUnknown.has(key)) {
+            this.seenUnknown.add(key)
+            log('status', this.id, `3REK2G03VI200S_2: unrecognised frame shape (len=${buf.length}, buf[0..1]=${key})`)
+            recordNote(this.id, this.thinq.meta, 'unmodelled-aabb-frame', { len: buf.length, head: key })
+        }
+    }
+}
