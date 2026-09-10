@@ -112,6 +112,7 @@ export function app(ha: HA_bridge, manager: DeviceManager, bridge: Bridge | unde
                 platform: dev.platform,
                 mapped: ha.haDevices.has(id),
                 bridged: bridge ? bridge.status(id) : false,
+                controlEnabled: ha.isControlEnabled(id),
             }
         }
         return allDevices
@@ -130,6 +131,20 @@ export function app(ha: HA_bridge, manager: DeviceManager, bridge: Bridge | unde
     disposers.push(() => {
         manager.removeListener('newDevice', onNewDevice)
         manager.removeListener('dropDevice', refreshDevices)
+    })
+
+    // Independent of bridge mode (LG cloud relay) - this only gates commands coming back from HA,
+    // so it's available whether or not an LG account is linked.
+    app.post('/control/:deviceId/enable', (req, res) => {
+        ha.setControlEnabled(req.params.deviceId, true)
+        refreshDevices()
+        res.status(204).end()
+    })
+
+    app.post('/control/:deviceId/disable', (req, res) => {
+        ha.setControlEnabled(req.params.deviceId, false)
+        refreshDevices()
+        res.status(204).end()
     })
 
     if (bridge) {

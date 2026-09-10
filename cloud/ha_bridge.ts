@@ -12,6 +12,7 @@ import HADevice from './devices/base'
 import { type Metadata } from './thinq'
 import { AnyDevice } from './devmgr'
 import { type Bridge as LgCloudBridge } from '@/bridge'
+import { type ControlState } from './control_state'
 
 type T2Factory = new (HA: Connection, thinq: T2Device, metadata: Metadata) => HADevice
 
@@ -28,14 +29,35 @@ const t2deviceTypes: Record<string, T2Factory> = {
 
 class Bridge {
     haDevices = new Map<string, HADevice>()
+
+    /*
+     * Devices the management panel has deliberately put into read-only mode: their state still
+     * flows to Home Assistant as normal (nothing here touches processAABB/publishProperty), but HA
+     * never even gets a control entity for them to begin with (see applyControlFilter below) -
+     * meant for watching a food-safety-critical appliance (fridge, kimchi fridge) settle in before
+     * trusting it with real control, without a switch sitting in the dashboard that looks live but
+     * silently does nothing.
+     *
+     * Persisted through `controlState` when one is given (real startup always gives one - see
+     * rethink-cloud.ts; tests mostly don't, and get in-memory-only behavior instead).
+     */
+    private controlDisabled: Set<string>
+
     constructor(
         readonly HA: Connection,
         readonly lgBridge?: LgCloudBridge,
+        readonly controlState?: ControlState,
     ) {
+        this.controlDisabled = new Set(controlState?.getDisabledDevices() ?? [])
+
         HA.on('discovery', () => {
             this.haDevices.forEach((ha) => ha.publishConfig())
         })
         HA.on('setProperty', (id: string, prop: string, value: string) => {
+            // Defense in depth: with applyControlFilter in place HA should have no entity left to
+            // send this from, but a client that hasn't picked up the discovery update yet (a
+            // cached dashboard, a race on toggle) could still have one queued.
+            if (this.controlDisabled.has(id)) return
             const ha = this.haDevices.get(id)
             if (ha) ha.setProperty(prop, value)
         })
@@ -56,6 +78,43 @@ class Bridge {
                 hadevice.publishConfig()
             }
         }
+    }
+
+    /*
+     * Wraps publishConfig() so a read-only device's discovery payload never lists a control
+     * component (switch/select/number/button/... - anything with a command_topic) in the first
+     * place, rather than publishing one HA would create and then silently ignore every command
+     * sent to it. HA's device-based MQTT discovery removes an entity whose component drops out of
+     * a later publish, so toggling this back on brings the controls back the same way.
+     *
+     * Applied before applyDeviceName so that wrapper (device name) ends up outermost: it mutates
+     * hadevice.config.device.name first, then calls down into this one, which reads that already-
+     * corrected config. Order matters here - the other way around, a disabled device's filtered
+     * publish would go out with the name renaming not yet applied.
+     */
+    private applyControlFilter(id: string, hadevice: HADevice) {
+        const originalPublishConfig = hadevice.publishConfig.bind(hadevice)
+        hadevice.publishConfig = () => {
+            if (!this.controlDisabled.has(id) || !hadevice.config) {
+                originalPublishConfig()
+                return
+            }
+
+            const fullConfig = hadevice.config
+            hadevice.config = {
+                ...fullConfig,
+                components: Object.fromEntries(
+                    Object.entries(fullConfig.components).filter(([, comp]) => !('command_topic' in comp)),
+                ),
+            }
+            try {
+                originalPublishConfig()
+            } finally {
+                hadevice.config = fullConfig
+            }
+        }
+
+        if (hadevice.config) hadevice.publishConfig()
     }
 
     private applyDeviceName(id: string, hadevice: HADevice) {
@@ -97,10 +156,22 @@ class Bridge {
         this.haDevices.set(thinqdev.id, hadevice)
         thinqdev.on('close', () => this.dropDevice(hadevice))
 
+        this.applyControlFilter(thinqdev.id, hadevice)
         if (this.lgBridge) this.applyDeviceName(thinqdev.id, hadevice)
 
         // hadevice.publishConfig() not needed anymore, will usually happen in the devclass constructor - or later
         hadevice.start()
+    }
+
+    isControlEnabled(id: string) {
+        return !this.controlDisabled.has(id)
+    }
+
+    setControlEnabled(id: string, enabled: boolean) {
+        if (enabled) this.controlDisabled.delete(id)
+        else this.controlDisabled.add(id)
+        this.controlState?.setDisabledDevices([...this.controlDisabled])
+        this.haDevices.get(id)?.publishConfig()
     }
 
     dropDevice(ha: HADevice) {

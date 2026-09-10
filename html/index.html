@@ -28,7 +28,8 @@
                 height: 24px;
             }
 
-            .dev-bridge {
+            .dev-bridge,
+            .dev-control {
                 width: 10em;
             }
 
@@ -47,12 +48,12 @@
 
                 #devices_table tbody tr {
                     display: grid;
-                    grid-template-columns: minmax(0, 1fr) auto auto;
+                    grid-template-columns: minmax(0, 1fr) auto auto auto;
                     grid-template-areas:
-                        'name     bridge actions'
-                        'model    bridge actions'
-                        'platform bridge actions'
-                        'id       bridge actions';
+                        'name     bridge control actions'
+                        'model    bridge control actions'
+                        'platform bridge control actions'
+                        'id       bridge control actions';
                     gap: 0 0.5rem;
                     align-items: center;
                     padding: 0.5rem 0;
@@ -79,6 +80,10 @@
                 }
                 #devices_table .dev-bridge {
                     grid-area: bridge;
+                    width: auto;
+                }
+                #devices_table .dev-control {
+                    grid-area: control;
                     width: auto;
                 }
                 #devices_table .dev-actions {
@@ -144,6 +149,7 @@
                         <th>Model</th>
                         <th>Platform</th>
                         <th>Bridge</th>
+                        <th>Control</th>
                         <th>Actions</th>
                     </tr>
                 </thead>
