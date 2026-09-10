@@ -44,30 +44,42 @@ import { note as recordNote } from '../frame-recorder'
  *   offset 5   express freeze, 0x01 = off, 0x02 = on
  *   offset 10  0x01 whenever offset 3 or 4 is being written, 0xff (untouched) otherwise - copied
  *              verbatim from the real captures; what it actually means is not established
+ *   offset 19  Smart Care+ (스마트케어+) master switch, 0x01 = on. Turning it off in the app sent
+ *              TWO separate writes - this one at 0x00, and a second frame with offset 6 = 0x06 -
+ *              while turning it back on sent only the first (offset 19 = 0x01, offset 6 untouched
+ *              at 0xff). Both writes are replayed on OFF, matching the app exactly; only the
+ *              first is needed for ON. What offset 6 = 0x06 specifically means is not established
+ *              (Smart Care+ is a bundle over three sub-features - it may pin one of them rather
+ *              than being part of the on/off state itself), so nothing here writes offset 6 on
+ *              its own or reads it back.
  *
  * Read-side: every write's ack is followed by a `10 ec` frame carrying two back-to-back 18-byte
  * records - the value just replaced, then the value now in effect (confirmed against all 8 sweep
- * captures: the "before" record of each write byte-for-byte matches the "after" record of the
- * write that preceded it). Only the second (current) record is read here:
+ * captures plus the Smart Care+ toggle: the "before" record of each write byte-for-byte matches
+ * the "after" record of the write that preceded it). Only the second (current) record is read
+ * here:
  *
  *   record[1]  fridge compartment setpoint, raw = degC directly
  *   record[2]  freezer compartment setpoint, raw = -14 - degC
  *   record[3]  express freeze, 0x01 = off, 0x02 = on
+ *   record[4]  Smart Care+, 0x02 = off, 0x07 = on (confirmed both directions: this flipped
+ *              0x07->0x02 in the state frame right after the offset-19/offset-6 OFF write pair,
+ *              and 0x02->0x07 right after the offset-19-only ON write)
  *
- * The remaining bytes of both records (0,4-17) never changed across the sweep, so they are read
- * but not asserted on. This frame is what actually keeps the three entities below in sync -
- * `setProperty` also publishes optimistically first, for a snappy UI, but this real reading is
- * what corrects it if anything else (the appliance's own panel, the LG app, ...) changes a
- * setting instead.
+ * The remaining bytes of both records (0,5-17) never changed across a full day's captures, so
+ * they are read but not asserted on - see the note above 0x39 (57, the food-poisoning-index shown
+ * on the Smart Care+ / 스마트 안심 보관 page) not appearing anywhere in this record: that value is
+ * described in the app as computed from temperature *and* humidity, so it is likely derived
+ * cloud-side rather than transmitted as a single number, and was not pursued further. This frame
+ * is what actually keeps the four entities below in sync - `setProperty` also publishes
+ * optimistically first, for a snappy UI, but this real reading is what corrects it if anything
+ * else (the appliance's own panel, the LG app, ...) changes a setting instead.
  *
  * NOT YET DECODED, left deliberately unmodelled:
- *   - Smart Care+ (스마트케어+) and its three sub-features (스마트 안심 보관/AI 신선 케어/에너지
- *     절약 모드): toggling the master switch off produced TWO writes in the one capture taken
- *     (offset 19 -> 0x00, and a separate frame with offset 6 -> 0x06), while turning it back on
- *     produced only ONE (offset 19 -> 0x01). That asymmetry means offset 6's role isn't
- *     established - it might not even be part of Smart Care+ - so nothing here acts on it.
- *   - the periodic ~5-minute full status dump (`10 cf`, 250 bytes) - unrelated to the three
- *     settings here as far as sweeping them showed, not investigated further.
+ *   - Smart Care+'s three sub-features individually (스마트 안심 보관/AI 신선 케어/에너지 절약
+ *     모드) - only the master switch above is exposed.
+ *   - the periodic ~5-minute full status dump (`10 cf`, 250 bytes) - looked at for the
+ *     food-poisoning-index (see above) and otherwise not investigated further.
  *
  * See RETHINK memory `rethink_migration_status` for the raw capture log this was built from.
  */
@@ -79,6 +91,9 @@ const OFFSET_FRIDGE_TEMP = 3
 const OFFSET_FREEZER_TEMP = 4
 const OFFSET_EXPRESS_FREEZE = 5
 const OFFSET_APPLY_FLAG = 10
+const OFFSET_SMART_CARE = 19
+/** Only ever sent alongside offset 19 = 0x00 when turning Smart Care+ off - see the file header. */
+const OFFSET_SMART_CARE_OFF_EXTRA = 6
 
 const STATE_SUB = 0x10
 const STATE_OPCODE = 0xec
@@ -88,6 +103,7 @@ const STATE_RECORD_LEN = 18
 const RECORD_FRIDGE_TEMP = 1
 const RECORD_FREEZER_TEMP = 2
 const RECORD_EXPRESS_FREEZE = 3
+const RECORD_SMART_CARE = 4
 
 const QUERY_SUB = 0x10
 const QUERY_OPCODE = 0xeb
@@ -130,10 +146,23 @@ function buildExpressFreezeWrite(on: boolean): Buffer {
     return body
 }
 
+/** ON is a single write; OFF is the two-frame sequence the app itself sends - see the file
+ *  header for why the second frame (offset 6 = 0x06) is replayed verbatim rather than modelled. */
+function buildSmartCareWrites(on: boolean): Buffer[] {
+    const first = newWriteBody()
+    first[OFFSET_SMART_CARE] = on ? 0x01 : 0x00
+    if (on) return [first]
+
+    const second = newWriteBody()
+    second[OFFSET_SMART_CARE_OFF_EXTRA] = 0x06
+    return [first, second]
+}
+
 export default class Device extends AABBDevice {
     fridgeTemp: number | undefined
     freezerTemp: number | undefined
     expressFreeze: boolean | undefined
+    smartCare: boolean | undefined
 
     /** (dir:tag) pairs already flagged as unrecognised, so a repeating one is noted once. */
     private seenUnknown = new Set<string>()
@@ -180,6 +209,14 @@ export default class Device extends AABBDevice {
                     icon: 'mdi:snowflake',
                     state_topic: '$this/express_freeze',
                     command_topic: '$this/express_freeze/set',
+                },
+                smart_care: {
+                    platform: 'switch',
+                    unique_id: '$deviceid-smart_care',
+                    name: 'Smart Care+',
+                    icon: 'mdi:shield-check-outline',
+                    state_topic: '$this/smart_care',
+                    command_topic: '$this/smart_care/set',
                 },
             },
         })
@@ -228,6 +265,12 @@ export default class Device extends AABBDevice {
             this.expressFreeze = expressFreeze
             this.publishProperty('express_freeze', expressFreeze ? 'ON' : 'OFF')
         }
+
+        const smartCare = record[RECORD_SMART_CARE] === 0x07
+        if (smartCare !== this.smartCare) {
+            this.smartCare = smartCare
+            this.publishProperty('smart_care', smartCare ? 'ON' : 'OFF')
+        }
     }
 
     setProperty(prop: string, mqttValue: string) {
@@ -257,6 +300,13 @@ export default class Device extends AABBDevice {
                 this.send(buildExpressFreezeWrite(on))
                 this.expressFreeze = on
                 this.publishProperty('express_freeze', on ? 'ON' : 'OFF')
+                return
+            }
+            case 'smart_care': {
+                const on = mqttValue === 'ON'
+                for (const frame of buildSmartCareWrites(on)) this.send(frame)
+                this.smartCare = on
+                this.publishProperty('smart_care', on ? 'ON' : 'OFF')
                 return
             }
             default:

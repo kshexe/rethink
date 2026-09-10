@@ -25,6 +25,11 @@ const STATE_EXPRESS_ON = buf('aa2a10ec020404010700ff00010001ffffffffffff01020404
 // express=1) captured mid-day, unrelated to any write of ours - see the file header.
 const QUERY_FRAME_HEX = 'aa0ef0ed1211010000010400ebbb'
 const QUERY_RESPONSE = buf('aa1810eb020404010700ff00010001ffffffffffff019ebb')
+// The state frame that followed the Smart Care+ OFF write pair: old record (smart_care raw=7,
+// on) then new record (smart_care raw=2, off).
+const STATE_SMART_CARE_OFF = buf('aa2a10ec020404010700ff00010001ffffffffffff01020404010200ff00010001ffffffffffff00b3bb')
+// ...and back ON: old record (raw=2, off) then new record (raw=7, on).
+const STATE_SMART_CARE_ON = buf('aa2a10ec020404010200ff00010001ffffffffffff00020404010700ff00010001ffffffffffff01b3bb')
 
 function makeDevice() {
     const ha = new MockHAConnection()
@@ -34,10 +39,15 @@ function makeDevice() {
 }
 
 describe(MODEL_ID, () => {
-    test('declares the three writable components', () => {
+    test('declares the four writable components', () => {
         const { ha } = makeDevice()
         const components = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
-        assert.deepEqual(Object.keys(components).sort(), ['express_freeze', 'freezer_temp', 'fridge_temp'])
+        assert.deepEqual(Object.keys(components).sort(), [
+            'express_freeze',
+            'freezer_temp',
+            'fridge_temp',
+            'smart_care',
+        ])
         assert.equal(components.fridge_temp.min, 1)
         assert.equal(components.fridge_temp.max, 7)
         assert.equal(components.freezer_temp.min, -23)
@@ -95,7 +105,7 @@ describe(MODEL_ID, () => {
         assert.equal(thinq.outbox[0].subarray(6, 7).toString('hex'), '09', 'clamped to -23 (raw 9)')
     })
 
-    test('all three are published optimistically as soon as they are set', () => {
+    test('all four are published optimistically as soon as they are set', () => {
         const { ha, dev } = makeDevice()
         dev.setProperty('fridge_temp', '5')
         assert.equal(ha.devices[DEVICE_ID].properties.fridge_temp, 5)
@@ -103,6 +113,40 @@ describe(MODEL_ID, () => {
         assert.equal(ha.devices[DEVICE_ID].properties.freezer_temp, -20)
         dev.setProperty('express_freeze', 'ON')
         assert.equal(ha.devices[DEVICE_ID].properties.express_freeze, 'ON')
+        dev.setProperty('smart_care', 'OFF')
+        assert.equal(ha.devices[DEVICE_ID].properties.smart_care, 'OFF')
+    })
+
+    test('smart_care ON sends a single write; OFF sends the real two-frame sequence', () => {
+        const { thinq, dev } = makeDevice()
+
+        thinq.resetRecorder()
+        dev.setProperty('smart_care', 'ON')
+        assert.equal(thinq.outbox.length, 1, 'ON is a single frame')
+        assert.equal(
+            thinq.outbox[0].toString('hex'),
+            'aa2ff017ffffffffffffffffffffffffffffffffff01ffffff000000ffff00ffffffff00ffffffffffffffffffebbb',
+        )
+
+        thinq.resetRecorder()
+        dev.setProperty('smart_care', 'OFF')
+        assert.equal(thinq.outbox.length, 2, 'OFF replays the real two-frame sequence')
+        assert.equal(
+            thinq.outbox[0].toString('hex'),
+            'aa2ff017ffffffffffffffffffffffffffffffffff00ffffff000000ffff00ffffffff00ffffffffffffffffffe8bb',
+        )
+        assert.equal(
+            thinq.outbox[1].toString('hex'),
+            'aa2ff017ffffffff06ffffffffffffffffffffffffffffffff000000ffff00ffffffff00ffffffffffffffffff96bb',
+        )
+    })
+
+    test('the state frame publishes the real smart_care reading, both directions', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', STATE_SMART_CARE_OFF)
+        assert.equal(ha.devices[DEVICE_ID].properties.smart_care, 'OFF', 'raw 2 -> off')
+        thinq.emit('data', STATE_SMART_CARE_ON)
+        assert.equal(ha.devices[DEVICE_ID].properties.smart_care, 'ON', 'raw 7 -> on')
     })
 
     test('the ack frame is accepted and publishes nothing', () => {
