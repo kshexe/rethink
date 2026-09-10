@@ -16,11 +16,13 @@ import { note as recordNote } from '../frame-recorder'
  * alone". Captured directly against a real unit on 2026-09-10 via my.lgthinq.com (DNAT-redirected
  * to rethink, bridge mode relaying to the real LG cloud), matched to each UI action by timestamp:
  *
- *   to-device   aa 2f f0 17 <43 bytes, see WRITE_TEMPLATE> <ck> bb
+ *   to-device   aa 2f f0 17 <43 bytes, see newWriteBody()> <ck> bb
  *   from-device aa 08 10 00 17 00 <ck> bb                                (ack)
+ *   from-device aa 2a 10 ec <36 bytes, see READ_* offsets> <ck> bb       (state, follows the ack)
  *
- * Byte offsets confirmed by sweeping each control through its real range and diffing the frames
- * (offsets counted from the start of the 43-byte body, i.e. byte 0 is the 0xf0 of the opcode):
+ * Write-side offsets confirmed by sweeping each control through its real range and diffing the
+ * frames (offsets counted from the start of the 43-byte body, i.e. byte 0 is the 0xf0 of the
+ * opcode):
  *
  *   offset 3   fridge compartment setpoint, raw = degC directly (confirmed 1, 4, 7)
  *   offset 4   freezer compartment setpoint, raw = -14 - degC   (confirmed -23->9, -18->4, -15->1)
@@ -28,17 +30,29 @@ import { note as recordNote } from '../frame-recorder'
  *   offset 10  0x01 whenever offset 3 or 4 is being written, 0xff (untouched) otherwise - copied
  *              verbatim from the real captures; what it actually means is not established
  *
+ * Read-side: every write's ack is followed by a `10 ec` frame carrying two back-to-back 18-byte
+ * records - the value just replaced, then the value now in effect (confirmed against all 8 sweep
+ * captures: the "before" record of each write byte-for-byte matches the "after" record of the
+ * write that preceded it). Only the second (current) record is read here:
+ *
+ *   record[1]  fridge compartment setpoint, raw = degC directly
+ *   record[2]  freezer compartment setpoint, raw = -14 - degC
+ *   record[3]  express freeze, 0x01 = off, 0x02 = on
+ *
+ * The remaining bytes of both records (0,4-17) never changed across the sweep, so they are read
+ * but not asserted on. This frame is what actually keeps the three entities below in sync -
+ * `setProperty` also publishes optimistically first, for a snappy UI, but this real reading is
+ * what corrects it if anything else (the appliance's own panel, the LG app, ...) changes a
+ * setting instead.
+ *
  * NOT YET DECODED, left deliberately unmodelled:
  *   - Smart Care+ (스마트케어+) and its three sub-features (스마트 안심 보관/AI 신선 케어/에너지
  *     절약 모드): toggling the master switch off produced TWO writes in the one capture taken
  *     (offset 19 -> 0x00, and a separate frame with offset 6 -> 0x06), while turning it back on
  *     produced only ONE (offset 19 -> 0x01). That asymmetry means offset 6's role isn't
  *     established - it might not even be part of Smart Care+ - so nothing here acts on it.
- *   - all read-side (from-device) status frames: this handler does not know how to parse the
- *     unit's actual current setpoints/state off the wire, so every number/switch entity below is
- *     optimistic (published from the command just sent, never corrected from a real reading) -
- *     the same tradeoff MI2D7B/RD20_S/H01 make for `power`, just extended to setpoints here
- *     because nothing about the read side is understood yet.
+ *   - the periodic ~5-minute full status dump (`10 cf`, 250 bytes) - unrelated to the three
+ *     settings here as far as sweeping them showed, not investigated further.
  *
  * See RETHINK memory `rethink_migration_status` for the raw capture log this was built from.
  */
@@ -50,6 +64,14 @@ const OFFSET_FRIDGE_TEMP = 3
 const OFFSET_FREEZER_TEMP = 4
 const OFFSET_EXPRESS_FREEZE = 5
 const OFFSET_APPLY_FLAG = 10
+
+const STATE_SUB = 0x10
+const STATE_OPCODE = 0xec
+const STATE_RECORD_LEN = 18
+/** Offsets within the current-value record (the second of the two 18-byte records). */
+const RECORD_FRIDGE_TEMP = 1
+const RECORD_FREEZER_TEMP = 2
+const RECORD_EXPRESS_FREEZE = 3
 
 const FRIDGE_TEMP_MIN = 1
 const FRIDGE_TEMP_MAX = 7
@@ -154,7 +176,8 @@ export default class Device extends AABBDevice {
                 if (!Number.isFinite(degC)) return
                 const clamped = Math.min(Math.max(degC, FRIDGE_TEMP_MIN), FRIDGE_TEMP_MAX)
                 this.send(buildFridgeTempWrite(clamped))
-                // Optimistic: see the file header for why this is not read back off the wire.
+                // Published optimistically for a snappy UI; the real `10 ec` state frame that
+                // follows the ack corrects this if needed - see the file header.
                 this.fridgeTemp = clamped
                 this.publishProperty('fridge_temp', clamped)
                 return
@@ -185,9 +208,33 @@ export default class Device extends AABBDevice {
         if (buf.length === 4 && buf[0] === ACK_SUB && buf[1] === 0x00 && buf[2] === ACK_OPCODE && buf[3] === 0x00)
             return
 
-        // Anything else is a frame this handler does not parse yet (status reports). Note it once
-        // per shape so a future session has something to grep for, the same way
-        // TLVDevice.noteUnknownTags does for the AC family.
+        // state: <sub=0x10> ec <old 18-byte record><new 18-byte record> - see the file header.
+        if (buf.length === 2 + 2 * STATE_RECORD_LEN && buf[0] === STATE_SUB && buf[1] === STATE_OPCODE) {
+            const current = buf.subarray(2 + STATE_RECORD_LEN, 2 + 2 * STATE_RECORD_LEN)
+
+            const fridgeTemp = current[RECORD_FRIDGE_TEMP]
+            if (fridgeTemp !== this.fridgeTemp) {
+                this.fridgeTemp = fridgeTemp
+                this.publishProperty('fridge_temp', fridgeTemp)
+            }
+
+            const freezerTemp = -14 - current[RECORD_FREEZER_TEMP]
+            if (freezerTemp !== this.freezerTemp) {
+                this.freezerTemp = freezerTemp
+                this.publishProperty('freezer_temp', freezerTemp)
+            }
+
+            const expressFreeze = current[RECORD_EXPRESS_FREEZE] === 0x02
+            if (expressFreeze !== this.expressFreeze) {
+                this.expressFreeze = expressFreeze
+                this.publishProperty('express_freeze', expressFreeze ? 'ON' : 'OFF')
+            }
+            return
+        }
+
+        // Anything else is a frame this handler does not parse yet (the periodic full status
+        // dump, Smart Care+). Note it once per shape so a future session has something to grep
+        // for, the same way TLVDevice.noteUnknownTags does for the AC family.
         const key = buf.length > 0 ? `${buf.length}:${buf[0].toString(16)}:${(buf[1] ?? 0).toString(16)}` : 'empty'
         if (!this.seenUnknown.has(key)) {
             this.seenUnknown.add(key)

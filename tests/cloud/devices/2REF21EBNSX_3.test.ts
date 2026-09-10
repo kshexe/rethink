@@ -15,6 +15,11 @@ const META: Metadata = { modelId: MODEL_ID, modelName: MODEL_ID, swVersion: '1.0
  * see 2REF21EBNSX_3.ts's file header.
  */
 const ACK = buf('aa08100017008cbb')
+// The "10 ec" state frame that followed the fridge_temp=7 write in the real sweep: old record
+// (fridge=4, freezer raw=4, express=1) then new record (fridge=7, freezer raw=4, express=1).
+const STATE_FRIDGE_7 = buf('aa2a10ec020404010700ff00010001ffffffffffff01020704010700ff00010001ffffffffffff01babb')
+// Followed express_freeze=ON: old record (fridge=4, freezer raw=4, express=1) then new (express=2).
+const STATE_EXPRESS_ON = buf('aa2a10ec020404010700ff00010001ffffffffffff01020404020700ff00010001ffffffffffff01b8bb')
 
 function makeDevice() {
     const ha = new MockHAConnection()
@@ -99,5 +104,32 @@ describe(MODEL_ID, () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', ACK)
         assert.equal(ha.devices[DEVICE_ID].properties.fridge_temp, undefined)
+    })
+
+    test('the state frame publishes the real reading, from the second (current) record', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', STATE_FRIDGE_7)
+        assert.equal(ha.devices[DEVICE_ID].properties.fridge_temp, 7)
+        assert.equal(ha.devices[DEVICE_ID].properties.freezer_temp, -18, 'raw 4 -> -14-4=-18')
+        assert.equal(ha.devices[DEVICE_ID].properties.express_freeze, 'OFF', 'raw 1 -> off')
+    })
+
+    test('a real reading corrects an optimistic guess that turns out wrong', () => {
+        const { ha, thinq, dev } = makeDevice()
+        // Optimistic guess says ON...
+        dev.setProperty('express_freeze', 'ON')
+        assert.equal(ha.devices[DEVICE_ID].properties.express_freeze, 'ON')
+        // ...but STATE_FRIDGE_7's current record reports express raw=1 (off) - the real reading
+        // must win over the optimistic guess.
+        thinq.emit('data', STATE_FRIDGE_7)
+        assert.equal(ha.devices[DEVICE_ID].properties.express_freeze, 'OFF')
+    })
+
+    test('the state frame is read from the second record even when unrelated fields are present', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', STATE_EXPRESS_ON)
+        assert.equal(ha.devices[DEVICE_ID].properties.fridge_temp, 4)
+        assert.equal(ha.devices[DEVICE_ID].properties.freezer_temp, -18)
+        assert.equal(ha.devices[DEVICE_ID].properties.express_freeze, 'ON')
     })
 })
