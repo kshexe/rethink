@@ -44,6 +44,39 @@ const STATE_MICROWAVE_PREFERENCE_0C = buf(
     'aa3e40ec000000000000000001000000000000000000000000000000000000000713000000000004000000000000000000000000000000000000000066bb',
 )
 
+// A real physical cook: the user queued a 10-second 레인지 run remotely, then pressed Start on
+// the appliance itself and let it finish - see ML32PWFOTA.ts's "A REAL COOK" section. These 4
+// frames are consecutive, real, in order.
+const STATE_PRE_RUN = buf(
+    'aa3e40ec000000000000000001000000000000000000000000000000000000000701000000000000000000000000000000000000000000000000000048bb',
+)
+const STATE_COOKING_10S = buf(
+    'aa3e40ec0701000000000000000000000000000000000000000000000000000002010000000a000000000000000000000000000000000000000000007cbb',
+)
+const STATE_DONE = buf(
+    'aa3e40ec02010000000a000000000000000000000000000000000000000000000500000000000000010000000000000000000000000000000000000072bb',
+)
+const STATE_DONE_BACK_TO_INITIAL = buf(
+    'aa3e40ec05000000000000000100000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000004ebb',
+)
+
+// A second real cook, from a larger ~10-minute session of real runs: 오븐 at 185C, deliberately
+// stopped with the physical Stop button while 5 seconds remained - confirms "paused" (0x04)
+// against the official integration, which read "paused" at this exact moment.
+const STATE_OVEN_COOKING_185 = buf(
+    'aa3e40ec070400000000b900000000000000000000000000000000000000000002040000000ab9000000000000000000000000000000000000000000f4bb',
+)
+const STATE_OVEN_PAUSED_185 = buf(
+    'aa3e40ec02040000000ab9000000000000000000000000000000000000000000040400000005b9000000000000000000000000000000000000000000f6bb',
+)
+
+// One of 5 real maintenance-menu runs (스팀청소탈취/스팀발생기세정/잔수제거/조리실건조/스팀청소,
+// all triggered from the appliance's own panel, not anything this handler can send) - confirms
+// "cleaning" (0x03) against the official integration.
+const STATE_CLEANING = buf(
+    'aa3e40ec07000000000000000000000000000000000000000000000000000000031201000b000000000000000000000000000000000000000000000069bb',
+)
+
 function makeDevice() {
     const ha = new MockHAConnection()
     const thinq = new MockThinq2Device(DEVICE_ID, META)
@@ -175,5 +208,37 @@ describe(MODEL_ID, () => {
         thinq.emit('data', STATE_MICROWAVE_PREFERENCE_0C)
         assert.equal(ha.devices[DEVICE_ID].properties.current_status, 'preference')
         assert.equal(ha.devices[DEVICE_ID].properties.oven_temperature, 0)
+    })
+
+    test('a real physical cook publishes cooking_in_progress then done, matching the official integration', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', STATE_PRE_RUN)
+        assert.equal(ha.devices[DEVICE_ID].properties.current_status, 'preference')
+        thinq.emit('data', STATE_COOKING_10S)
+        assert.equal(ha.devices[DEVICE_ID].properties.current_status, 'cooking_in_progress')
+        thinq.emit('data', STATE_DONE)
+        assert.equal(ha.devices[DEVICE_ID].properties.current_status, 'done')
+        thinq.emit('data', STATE_DONE_BACK_TO_INITIAL)
+        assert.equal(
+            ha.devices[DEVICE_ID].properties.current_status,
+            'initial',
+            'falls back on its own, no user action needed',
+        )
+    })
+
+    test('stopping a real cook mid-run publishes paused, and temperature stays at the real target (185C)', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', STATE_OVEN_COOKING_185)
+        assert.equal(ha.devices[DEVICE_ID].properties.current_status, 'cooking_in_progress')
+        assert.equal(ha.devices[DEVICE_ID].properties.oven_temperature, 185)
+        thinq.emit('data', STATE_OVEN_PAUSED_185)
+        assert.equal(ha.devices[DEVICE_ID].properties.current_status, 'paused')
+        assert.equal(ha.devices[DEVICE_ID].properties.oven_temperature, 185)
+    })
+
+    test('a real maintenance-menu run (steam clean etc.) publishes cleaning', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', STATE_CLEANING)
+        assert.equal(ha.devices[DEVICE_ID].properties.current_status, 'cleaning')
     })
 })

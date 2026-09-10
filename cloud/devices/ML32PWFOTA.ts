@@ -76,10 +76,47 @@ import { note as recordNote } from '../frame-recorder'
  *                record[0], reproduced literally since nothing yet explains why the appliance
  *                repeats the idle/non-idle distinction at two separate offsets.
  *   record[2..5,9..27] = `0x00` in every capture so far.
- * Only "initial" and "preference" have ever been observed - a real cook can only be started by a
- * physical button press (see above), so no capture exists yet for what the appliance reports
- * while actually cooking, paused, or finished. `current_status` below passes through any other
- * status byte as a plain `unknown_<n>` string rather than guessing a name for it.
+ *
+ * REAL COOKS (2026-09-10): the user physically started several real runs at the appliance itself
+ * (course queued remotely first, then started with a physical button press - this handler still
+ * never sends a start command, see above), giving three more confirmed status values, again
+ * matching the official sensor's own strings exactly:
+ *
+ *   0x02 = "cooking_in_progress"   0x04 = "paused"   0x05 = "done"
+ *
+ * The first was a single 10-second 레인지 run left to finish on its own: record[1] was `0x01`
+ * (not "preference"'s usual `0x13`) right before it started and stayed `0x01` into
+ * "cooking_in_progress", dropping to `0x00` at "done". record[5] read `0x0a` (10) during
+ * "cooking_in_progress", matching the course's 10-second length. "done" persisted for about 80
+ * seconds (matching the appliance's own completion chime/display) before falling back to
+ * "initial" on its own - no user action was needed to clear it.
+ *
+ * A later, much larger session (~10 minutes, roughly a dozen separate real runs across 오븐/
+ * 레인지/스팀-combo modes, several deliberately stopped mid-run with the physical Stop button)
+ * confirmed "paused" and strengthened the record[5] countdown reading: it tracked seconds
+ * remaining consistently within each run (e.g. one 오븐 run stopped with `record[5]` reading 5
+ * right as the appliance was paused, exactly where the user reported stopping it), and a 50-second
+ * run's countdown was also observed correctly. It is still not exposed as its own entity here -
+ * confirming that its scale (seconds vs minutes) holds for courses lasting many minutes to hours,
+ * rather than only the short test runs captured so far, needs one more real long-running capture.
+ *
+ * The same session also strongly suggests record[1] is a per-course identifier, not a generic
+ * companion flag: it read a stable `0x04` across two separate 오븐 runs (180 and 185°C) and a
+ * stable `0x02` during the 50-second steam-microwave run, changing to a new value for what looked
+ * like most of the other named courses too - but matching each specific value to the exact course
+ * the user ran, in order, was not done with full confidence from the frame log and official sensor
+ * timestamps alone (a few quick, ambiguous extra transitions do not cleanly fit the stated order),
+ * so it is not exposed as its own field yet either. Both record[1] and record[5] are read but not
+ * published - see NOT-YET-DECODED below.
+ *
+ * Immediately after that session, the user ran 5 of the appliance's own maintenance functions
+ * (스팀청소탈취/스팀발생기세정/잔수제거/조리실건조/스팀청소 - all under the physical panel's own
+ * cleaning menu, not anything this handler can trigger) back to back. Each produced the exact same
+ * preference -> `0x03` -> (`0x04` sometimes, if stopped early) -> initial shape as a cooking run,
+ * and the official sensor named `0x03` "cleaning" every time - added to STATUS_NAMES below.
+ *
+ * `current_status` below passes through any other status byte as a plain `unknown_<n>` string
+ * rather than guessing a name for it - a real fault mid-cook is still unconfirmed.
  *
  * CANCEL/STOP: `aa 07 f0 44 00 <ck> bb` - clicking "전송 취소" in the UI. Confirmed to cancel a
  * pending queued course (used repeatedly during capture to back out of every test send below).
@@ -101,10 +138,11 @@ import { note as recordNote } from '../frame-recorder'
  * suggested default cook time. Reproduced as-is rather than guessed away.
  *
  * NOT-YET-DECODED: rack position (단 위치) and accessory (부속품) selection - each course above
- * bakes in whatever the UI's own default was, not independently controllable here. The `40 ec`
- * state-echo record layout. Also 스팀 mode pops a "물통을 채워주세요" (fill the water tank)
- * confirm dialog in the UI before it will send - not reproduced or needed here since this
- * handler only ever queues a course, never starts one.
+ * bakes in whatever the UI's own default was, not independently controllable here. record[1]
+ * (likely a per-course id) and record[5] (likely seconds remaining, unconfirmed at longer
+ * timescales) from the state record - see REAL COOKS above. Also 스팀 mode pops a "물통을
+ * 채워주세요" (fill the water tank) confirm dialog in the UI before it will send - not
+ * reproduced or needed here since this handler only ever queues a course, never starts one.
  */
 
 const ACK_OPCODE_SEND = 0x43
@@ -118,6 +156,10 @@ const STATE_RECORD_LEN = 28
 const STATUS_NAMES: Record<number, string> = {
     0x00: 'initial',
     0x07: 'preference',
+    0x02: 'cooking_in_progress',
+    0x03: 'cleaning',
+    0x04: 'paused',
+    0x05: 'done',
 }
 function decodeStatus(b: number): string {
     return STATUS_NAMES[b] ?? `unknown_${b}`
