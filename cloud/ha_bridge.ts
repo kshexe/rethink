@@ -5,6 +5,7 @@ import RD20_S from './devices/RD20_S'
 import ST_R_ETH01Y_ from './devices/ST_R_ETH01Y_'
 import H01 from './devices/H01'
 import Fridge_2REF21EBNSX_3 from './devices/2REF21EBNSX_3'
+import ML32PWFOTA from './devices/ML32PWFOTA'
 import { Device as T2Device } from './thinq2/device'
 import { type Connection } from './homeassistant'
 import HADevice from './devices/base'
@@ -22,6 +23,7 @@ const t2deviceTypes: Record<string, T2Factory> = {
     ['ST_R_ETH01Y_']: ST_R_ETH01Y_, // LG Styler (스타일러, deviceType 203) - power/course/start, see ST_R_ETH01Y_.ts
     ['H01']: H01, // LG dishwasher (식기세척기) - power on/off only so far, see H01.ts
     ['2REF21EBNSX_3']: Fridge_2REF21EBNSX_3, // LG fridge (냉장고) - fridge/freezer temp + express freeze, see 2REF21EBNSX_3.ts
+    ['ML32PWFOTA']: ML32PWFOTA, // LG combi oven (광파오븐) - course select + cook time + send/cancel, never start; see ML32PWFOTA.ts
 }
 
 class Bridge {
