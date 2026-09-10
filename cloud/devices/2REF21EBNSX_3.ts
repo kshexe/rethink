@@ -20,6 +20,24 @@ import { note as recordNote } from '../frame-recorder'
  *   from-device aa 08 10 00 17 00 <ck> bb                                (ack)
  *   from-device aa 2a 10 ec <36 bytes, see READ_* offsets> <ck> bb       (state, follows the ack)
  *
+ * Entity/property names below follow this model's own modelJSON (fetched via rethink's bridge
+ * mode - `GET /bridge/<id>/modeljson`, LG's own field-name schema for this exact model) rather
+ * than names invented for this handler:
+ *
+ *   fridgeTemp    -> fridge_temp    (already matched)
+ *   freezerTemp   -> freezer_temp   (already matched)
+ *   expressMode   -> express_mode   (was `express_freeze` - the modelJSON's own comment for this
+ *                   field is "Express Fridge, ExpressFreeze, Rapid Freeze", a single tri-state
+ *                   covering both compartments' quick modes, not a freezer-only "freeze" toggle -
+ *                   the old name mis-described what this actually is)
+ *   smartCareV2   -> smart_care_v2  (was `smart_care` - this model's config explicitly reports
+ *                   `smartCareVersion: "V2"`, so the plain "smartCare" name in other models' modelJSON
+ *                   is a different, older feature - keeping "v2" in the name says this is that one)
+ *
+ * modelJSON's `expressMode` is documented as three-valued (OFF / EXPRESS_ON / RAPID_ON), but only
+ * two wire values were ever captured (0x01/0x02 below) - a third RAPID_ON wire value likely exists
+ * and is simply unconfirmed, not ruled out. This handler still only exposes a binary switch.
+ *
  * Query: unlike the TLV family (TLVDevice queries its own caps/values on a timer, independent of
  * bridge mode), AABBDevice has no active-query mechanism at all - every AABB handler in this fork
  * so far has been purely reactive. That works by accident for a bridged device (the real cloud's
@@ -39,45 +57,50 @@ import { note as recordNote } from '../frame-recorder'
  * frames (offsets counted from the start of the 43-byte body, i.e. byte 0 is the 0xf0 of the
  * opcode):
  *
- *   offset 3   fridge compartment setpoint, raw = degC directly (confirmed 1, 4, 7)
- *   offset 4   freezer compartment setpoint, raw = -14 - degC   (confirmed -23->9, -18->4, -15->1)
- *   offset 5   express freeze, 0x01 = off, 0x02 = on
+ *   offset 3   fridgeTemp setpoint, raw = degC directly (confirmed 1, 4, 7)
+ *   offset 4   freezerTemp setpoint, raw = -14 - degC   (confirmed -23->9, -18->4, -15->1)
+ *   offset 5   expressMode, 0x01 = off, 0x02 = on (see modelJSON note above re: a third value)
  *   offset 10  0x01 whenever offset 3 or 4 is being written, 0xff (untouched) otherwise - copied
  *              verbatim from the real captures; what it actually means is not established
- *   offset 19  Smart Care+ (스마트케어+) master switch, 0x01 = on. Turning it off in the app sent
- *              TWO separate writes - this one at 0x00, and a second frame with offset 6 = 0x06 -
- *              while turning it back on sent only the first (offset 19 = 0x01, offset 6 untouched
- *              at 0xff). Both writes are replayed on OFF, matching the app exactly; only the
- *              first is needed for ON. What offset 6 = 0x06 specifically means is not established
- *              (Smart Care+ is a bundle over three sub-features - it may pin one of them rather
- *              than being part of the on/off state itself), so nothing here writes offset 6 on
- *              its own or reads it back.
+ *   offset 19  smartCareV2 master switch, 0x01 = on. Turning it off in the app sent TWO separate
+ *              writes - this one at 0x00, and a second frame with offset 6 = 0x06 - while turning
+ *              it back on sent only the first (offset 19 = 0x01, offset 6 untouched at 0xff). Both
+ *              writes are replayed on OFF, matching the app exactly; only the first is needed for
+ *              ON. What offset 6 = 0x06 specifically means is not established (Smart Care+ is a
+ *              bundle over three sub-features - it may pin one of them rather than being part of
+ *              the on/off state itself), so nothing here writes offset 6 on its own or reads it
+ *              back.
  *
  * Read-side: every write's ack is followed by a `10 ec` frame carrying two back-to-back 18-byte
  * records - the value just replaced, then the value now in effect (confirmed against all 8 sweep
- * captures plus the Smart Care+ toggle: the "before" record of each write byte-for-byte matches
+ * captures plus the smartCareV2 toggle: the "before" record of each write byte-for-byte matches
  * the "after" record of the write that preceded it). Only the second (current) record is read
  * here:
  *
- *   record[1]  fridge compartment setpoint, raw = degC directly
- *   record[2]  freezer compartment setpoint, raw = -14 - degC
- *   record[3]  express freeze, 0x01 = off, 0x02 = on
- *   record[4]  Smart Care+, 0x02 = off, 0x07 = on (confirmed both directions: this flipped
+ *   record[1]  fridgeTemp setpoint, raw = degC directly
+ *   record[2]  freezerTemp setpoint, raw = -14 - degC
+ *   record[3]  expressMode, 0x01 = off, 0x02 = on
+ *   record[4]  smartCareV2, 0x02 = off, 0x07 = on (confirmed both directions: this flipped
  *              0x07->0x02 in the state frame right after the offset-19/offset-6 OFF write pair,
  *              and 0x02->0x07 right after the offset-19-only ON write)
  *
  * The remaining bytes of both records (0,5-17) never changed across a full day's captures, so
  * they are read but not asserted on - see the note above 0x39 (57, the food-poisoning-index shown
- * on the Smart Care+ / 스마트 안심 보관 page) not appearing anywhere in this record: that value is
- * described in the app as computed from temperature *and* humidity, so it is likely derived
- * cloud-side rather than transmitted as a single number, and was not pursued further. This frame
- * is what actually keeps the four entities below in sync - `setProperty` also publishes
- * optimistically first, for a snappy UI, but this real reading is what corrects it if anything
- * else (the appliance's own panel, the LG app, ...) changes a setting instead.
+ * on the Smart Care+ / 스마트 안심 보관 page) not appearing anywhere in this record, nor as any
+ * field in modelJSON's MonitoringValue table at all: that value is described in the app as
+ * computed from temperature *and* humidity, so it is derived cloud-side rather than transmitted
+ * as a single number by the appliance, and was not pursued further. This frame is what actually
+ * keeps the four entities below in sync - `setProperty` also publishes optimistically first, for
+ * a snappy UI, but this real reading is what corrects it if anything else (the appliance's own
+ * panel, the LG app, ...) changes a setting instead.
  *
  * NOT YET DECODED, left deliberately unmodelled:
- *   - Smart Care+'s three sub-features individually (스마트 안심 보관/AI 신선 케어/에너지 절약
+ *   - smartCareV2's three sub-features individually (스마트 안심 보관/AI 신선 케어/에너지 절약
  *     모드) - only the master switch above is exposed.
+ *   - modelJSON also documents `atLeastOneDoorOpen` (door sensor) and a `convertibleTemp`
+ *     compartment this unit's Info doesn't advertise - not captured yet, since (unlike the fields
+ *     above) nothing in a full day's traffic ever changed to correlate against; would need a real
+ *     door-open event watched live against the frame log the way every field above was found.
  *   - the periodic ~5-minute full status dump (`10 cf`, 250 bytes) - looked at for the
  *     food-poisoning-index (see above) and otherwise not investigated further.
  *
@@ -89,11 +112,11 @@ const ACK_OPCODE = 0x17
 
 const OFFSET_FRIDGE_TEMP = 3
 const OFFSET_FREEZER_TEMP = 4
-const OFFSET_EXPRESS_FREEZE = 5
+const OFFSET_EXPRESS_MODE = 5
 const OFFSET_APPLY_FLAG = 10
-const OFFSET_SMART_CARE = 19
+const OFFSET_SMART_CARE_V2 = 19
 /** Only ever sent alongside offset 19 = 0x00 when turning Smart Care+ off - see the file header. */
-const OFFSET_SMART_CARE_OFF_EXTRA = 6
+const OFFSET_SMART_CARE_V2_OFF_EXTRA = 6
 
 const STATE_SUB = 0x10
 const STATE_OPCODE = 0xec
@@ -102,8 +125,8 @@ const STATE_RECORD_LEN = 18
  *  record an `eb` query response carries). */
 const RECORD_FRIDGE_TEMP = 1
 const RECORD_FREEZER_TEMP = 2
-const RECORD_EXPRESS_FREEZE = 3
-const RECORD_SMART_CARE = 4
+const RECORD_EXPRESS_MODE = 3
+const RECORD_SMART_CARE_V2 = 4
 
 const QUERY_SUB = 0x10
 const QUERY_OPCODE = 0xeb
@@ -140,29 +163,29 @@ function buildFreezerTempWrite(degC: number): Buffer {
     return body
 }
 
-function buildExpressFreezeWrite(on: boolean): Buffer {
+function buildExpressModeWrite(on: boolean): Buffer {
     const body = newWriteBody()
-    body[OFFSET_EXPRESS_FREEZE] = on ? 0x02 : 0x01
+    body[OFFSET_EXPRESS_MODE] = on ? 0x02 : 0x01
     return body
 }
 
 /** ON is a single write; OFF is the two-frame sequence the app itself sends - see the file
  *  header for why the second frame (offset 6 = 0x06) is replayed verbatim rather than modelled. */
-function buildSmartCareWrites(on: boolean): Buffer[] {
+function buildSmartCareV2Writes(on: boolean): Buffer[] {
     const first = newWriteBody()
-    first[OFFSET_SMART_CARE] = on ? 0x01 : 0x00
+    first[OFFSET_SMART_CARE_V2] = on ? 0x01 : 0x00
     if (on) return [first]
 
     const second = newWriteBody()
-    second[OFFSET_SMART_CARE_OFF_EXTRA] = 0x06
+    second[OFFSET_SMART_CARE_V2_OFF_EXTRA] = 0x06
     return [first, second]
 }
 
 export default class Device extends AABBDevice {
     fridgeTemp: number | undefined
     freezerTemp: number | undefined
-    expressFreeze: boolean | undefined
-    smartCare: boolean | undefined
+    expressMode: boolean | undefined
+    smartCareV2: boolean | undefined
 
     /** (dir:tag) pairs already flagged as unrecognised, so a repeating one is noted once. */
     private seenUnknown = new Set<string>()
@@ -202,21 +225,21 @@ export default class Device extends AABBDevice {
                     state_topic: '$this/freezer_temp',
                     command_topic: '$this/freezer_temp/set',
                 },
-                express_freeze: {
+                express_mode: {
                     platform: 'switch',
-                    unique_id: '$deviceid-express_freeze',
-                    name: 'Express freeze',
+                    unique_id: '$deviceid-express_mode',
+                    name: 'Express mode',
                     icon: 'mdi:snowflake',
-                    state_topic: '$this/express_freeze',
-                    command_topic: '$this/express_freeze/set',
+                    state_topic: '$this/express_mode',
+                    command_topic: '$this/express_mode/set',
                 },
-                smart_care: {
+                smart_care_v2: {
                     platform: 'switch',
-                    unique_id: '$deviceid-smart_care',
+                    unique_id: '$deviceid-smart_care_v2',
                     name: 'Smart Care+',
                     icon: 'mdi:shield-check-outline',
-                    state_topic: '$this/smart_care',
-                    command_topic: '$this/smart_care/set',
+                    state_topic: '$this/smart_care_v2',
+                    command_topic: '$this/smart_care_v2/set',
                 },
             },
         })
@@ -225,7 +248,7 @@ export default class Device extends AABBDevice {
         log(
             'status',
             this.id,
-            '2REF21EBNSX_3 (냉장고) handler started - fridge/freezer temp + express freeze only, see file header',
+            '2REF21EBNSX_3 (냉장고) handler started - fridge/freezer temp + express mode + Smart Care+ only, see file header',
         )
     }
 
@@ -260,16 +283,16 @@ export default class Device extends AABBDevice {
             this.publishProperty('freezer_temp', freezerTemp)
         }
 
-        const expressFreeze = record[RECORD_EXPRESS_FREEZE] === 0x02
-        if (expressFreeze !== this.expressFreeze) {
-            this.expressFreeze = expressFreeze
-            this.publishProperty('express_freeze', expressFreeze ? 'ON' : 'OFF')
+        const expressMode = record[RECORD_EXPRESS_MODE] === 0x02
+        if (expressMode !== this.expressMode) {
+            this.expressMode = expressMode
+            this.publishProperty('express_mode', expressMode ? 'ON' : 'OFF')
         }
 
-        const smartCare = record[RECORD_SMART_CARE] === 0x07
-        if (smartCare !== this.smartCare) {
-            this.smartCare = smartCare
-            this.publishProperty('smart_care', smartCare ? 'ON' : 'OFF')
+        const smartCareV2 = record[RECORD_SMART_CARE_V2] === 0x07
+        if (smartCareV2 !== this.smartCareV2) {
+            this.smartCareV2 = smartCareV2
+            this.publishProperty('smart_care_v2', smartCareV2 ? 'ON' : 'OFF')
         }
     }
 
@@ -295,18 +318,18 @@ export default class Device extends AABBDevice {
                 this.publishProperty('freezer_temp', clamped)
                 return
             }
-            case 'express_freeze': {
+            case 'express_mode': {
                 const on = mqttValue === 'ON'
-                this.send(buildExpressFreezeWrite(on))
-                this.expressFreeze = on
-                this.publishProperty('express_freeze', on ? 'ON' : 'OFF')
+                this.send(buildExpressModeWrite(on))
+                this.expressMode = on
+                this.publishProperty('express_mode', on ? 'ON' : 'OFF')
                 return
             }
-            case 'smart_care': {
+            case 'smart_care_v2': {
                 const on = mqttValue === 'ON'
-                for (const frame of buildSmartCareWrites(on)) this.send(frame)
-                this.smartCare = on
-                this.publishProperty('smart_care', on ? 'ON' : 'OFF')
+                for (const frame of buildSmartCareV2Writes(on)) this.send(frame)
+                this.smartCareV2 = on
+                this.publishProperty('smart_care_v2', on ? 'ON' : 'OFF')
                 return
             }
             default:
@@ -332,8 +355,8 @@ export default class Device extends AABBDevice {
         }
 
         // Anything else is a frame this handler does not parse yet (the periodic full status
-        // dump, Smart Care+). Note it once per shape so a future session has something to grep
-        // for, the same way TLVDevice.noteUnknownTags does for the AC family.
+        // dump, the door sensor, convertibleTemp). Note it once per shape so a future session has
+        // something to grep for, the same way TLVDevice.noteUnknownTags does for the AC family.
         const key = buf.length > 0 ? `${buf.length}:${buf[0].toString(16)}:${(buf[1] ?? 0).toString(16)}` : 'empty'
         if (!this.seenUnknown.has(key)) {
             this.seenUnknown.add(key)
