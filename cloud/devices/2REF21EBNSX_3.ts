@@ -143,7 +143,9 @@ import { note as recordNote } from '../frame-recorder'
  *   - modelJSON also documents a `convertibleTemp` compartment this unit's Info doesn't advertise
  *     - likely does not apply to this physical unit at all.
  *   - the periodic ~5-minute full status dump (`10 cf`, 250 bytes) - looked at for the
- *     food-poisoning-index (see above) and otherwise not investigated further.
+ *     food-poisoning-index (see above) and otherwise not investigated further. Recognised in
+ *     processAABB (by shape only) and silently dropped, so it no longer trips the generic
+ *     unmodelled-frame note every cycle - see the comment there.
  *
  * See RETHINK memory `rethink_migration_status` for the raw capture log this was built from.
  */
@@ -453,9 +455,16 @@ export default class Device extends AABBDevice {
             return
         }
 
-        // Anything else is a frame this handler does not parse yet (the periodic full status
-        // dump, convertibleTemp). Note it once per shape so a future session has something to
-        // grep for, the same way TLVDevice.noteUnknownTags does for the AC family.
+        // periodic full status dump: <sub=0x10> cf <248 bytes> - see the file header's
+        // NOT YET DECODED note (food-poisoning-index, MonitoringValue table). Recognised and
+        // silently dropped rather than left to keep tripping the unmodelled-frame note below on
+        // every ~5-minute cycle - there's nothing new to learn from it that hasn't already been
+        // looked at, just noise.
+        if (buf.length === 250 && buf[0] === STATE_SUB && buf[1] === 0xcf) return
+
+        // Anything else is a frame this handler does not parse yet (convertibleTemp among them).
+        // Note it once per shape so a future session has something to grep for, the same way
+        // TLVDevice.noteUnknownTags does for the AC family.
         const key = buf.length > 0 ? `${buf.length}:${buf[0].toString(16)}:${(buf[1] ?? 0).toString(16)}` : 'empty'
         if (!this.seenUnknown.has(key)) {
             this.seenUnknown.add(key)

@@ -93,6 +93,11 @@ const STATE_STEAM_FERMENT_COOKING_9H = buf(
     'aa3e40ec07160000001d2800000000000000000000000000000000000000000002160009000028000000000000000000000000000000000000000000eabb',
 )
 
+// `40 eb`: real captures of the periodic single-record heartbeat, unrelated to any write this
+// handler sent - see ML32PWFOTA.ts's processAABB `40 eb` branch. This one was caught mid-cook,
+// carrying the same info a `40 ec` current-half would: 레인지, 27s remaining.
+const STATE_HEARTBEAT_RANGE_COOKING_27S = buf('aa2240eb02010000001b0000000000000000000000000000000000000000000040bb')
+
 // All 5 of the appliance's own maintenance functions, run live one at a time - see ML32PWFOTA.ts's
 // ACTIVE CLEANING FUNCTION section. record[1] reads the same 0x12 "cleaning" marker in every one
 // (not a course id), and record[3] - "hours remaining" while actually cooking - is repurposed as
@@ -434,6 +439,14 @@ describe(MODEL_ID, () => {
         // switching to it should publish the real value again, not stay suppressed.
         thinq.emit('data', STATE_FERMENT_COOKING_1H15M)
         assert.equal(ha.devices[DEVICE_ID].properties.oven_temperature, 40)
+    })
+
+    test("the 40 eb periodic heartbeat is read the same way as 40 ec's current half - not left unmodelled", () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', STATE_HEARTBEAT_RANGE_COOKING_27S)
+        assert.equal(ha.devices[DEVICE_ID].properties.current_status, 'cooking_in_progress')
+        assert.equal(ha.devices[DEVICE_ID].properties.active_course, '레인지')
+        assert.equal(ha.devices[DEVICE_ID].properties.remaining_time, 27)
     })
 
     test('active_course and remaining_time are not published while merely queued (preference)', () => {

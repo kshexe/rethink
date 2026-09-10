@@ -192,7 +192,10 @@ import { note as recordNote } from '../frame-recorder'
  * decoded for reading but this handler cannot send them. Whether sending a
  * multi-hour 식품건조/발효 duration actually reaches the appliance correctly (see MIN/MAX SECONDS
  * above). The `40 bf` and `40 72` frames that appeared alongside real cooks and maintenance runs
- * (something event/notification-shaped, given the timing) - not decoded at all. A real fault
+ * (something event/notification-shaped, given the timing) - not decoded at all (`40 eb`, a
+ * similarly-shaped frame this handler used to leave unmodelled too, turned out to be a plain
+ * periodic heartbeat carrying the same 28-byte record as `40 ec`'s current half - see
+ * QUERY_OPCODE_LO - but `40 bf`/`40 72` are a different shape and remain unexplained). A real fault
  * mid-cook. Whether the oven itself reports its own door open/closed the way the fridge does. Also
  * 스팀 mode pops a "물통을 채워주세요" (fill the water tank) confirm dialog in the UI before it
  * will send - not reproduced or needed here since this handler only ever queues a course, never
@@ -207,6 +210,8 @@ const ACK_OPCODE_SEND = 0x43
 const ACK_OPCODE_CANCEL = 0x44
 const STATE_OPCODE_HI = 0x40
 const STATE_OPCODE_LO = 0xec
+/** The periodic single-record heartbeat sibling of `40 ec` - see processAABB's `40 eb` branch. */
+const QUERY_OPCODE_LO = 0xeb
 const STATE_RECORD_LEN = 28
 
 /** record[0] values confirmed against the official lg_thinq integration's own status strings -
@@ -630,6 +635,34 @@ export default class Device extends AABBDevice {
         }
     }
 
+    /** Applies a 28-byte state record - shared between `40 ec`'s current (second) half and `40
+     *  eb`'s single record, which are the same layout (see QUERY_OPCODE's header comment). Same
+     *  convention 2REF21EBNSX_3.ts uses for its own `10 ec`/`10 eb` pairing. */
+    private applyStateRecord(current: Buffer) {
+        const status = current[0]
+        this.publishProperty('current_status', decodeStatus(status))
+        this.publishProperty('oven_temperature', NO_TEMPERATURE_COURSE_IDS.has(current[1]) ? undefined : current[6])
+
+        // Only meaningful while actually preheating/cooking/cleaning/paused - see file header's
+        // ACTIVE COURSE, ACTIVE CLEANING FUNCTION, and REMAINING TIME sections for why this is
+        // skipped in every other status, and why "paused" needs record[1] to tell a cooking pause
+        // from a cleaning one (current_status alone can't - both report "paused"). Preheating
+        // (0x01) and preheating_is_done (0x06) carry the same record[1] course id as a real cook -
+        // confirmed live with a 180C 오븐 preheat.
+        if (status === 0x01 || status === 0x02 || status === 0x03 || status === 0x04 || status === 0x06) {
+            if (current[1] === CLEANING_MARKER) {
+                this.publishProperty('active_cleaning_function', decodeCleaningFunction(current[2]))
+                this.publishProperty('remaining_time', current[4] * 60 + current[5])
+            } else if (current[1] === MY_RECIPE_MARKER) {
+                this.publishProperty('active_course', '내가 만든 레시피')
+                this.publishProperty('remaining_time', current[3] * 3600 + current[4] * 60 + current[5])
+            } else {
+                this.publishProperty('active_course', decodeCourseId(current[1]))
+                this.publishProperty('remaining_time', current[3] * 3600 + current[4] * 60 + current[5])
+            }
+        }
+    }
+
     processAABB(buf: Buffer) {
         // acks: <sub> 00 <opcode> 00  (4 bytes) - nothing to publish, just confirms the write landed
         if (
@@ -641,32 +674,20 @@ export default class Device extends AABBDevice {
             return
 
         // `40 ec` state-echo: two 28-byte records (old, new) after the opcode - see file header's
-        // STATE section. Only the second (current) record is published, the same convention
-        // 2REF21EBNSX_3.ts uses for its own old/new state pairing.
+        // STATE section. Only the second (current) record is applied.
         if (buf.length === 2 + 2 * STATE_RECORD_LEN && buf[0] === STATE_OPCODE_HI && buf[1] === STATE_OPCODE_LO) {
-            const current = buf.subarray(2 + STATE_RECORD_LEN, 2 + 2 * STATE_RECORD_LEN)
-            const status = current[0]
-            this.publishProperty('current_status', decodeStatus(status))
-            this.publishProperty('oven_temperature', NO_TEMPERATURE_COURSE_IDS.has(current[1]) ? undefined : current[6])
+            this.applyStateRecord(buf.subarray(2 + STATE_RECORD_LEN, 2 + 2 * STATE_RECORD_LEN))
+            return
+        }
 
-            // Only meaningful while actually preheating/cooking/cleaning/paused - see file
-            // header's ACTIVE COURSE, ACTIVE CLEANING FUNCTION, and REMAINING TIME sections for
-            // why this is skipped in every other status, and why "paused" needs record[1] to
-            // tell a cooking pause from a cleaning one (current_status alone can't - both report
-            // "paused"). Preheating (0x01) and preheating_is_done (0x06) carry the same
-            // record[1] course id as a real cook - confirmed live with a 180C 오븐 preheat.
-            if (status === 0x01 || status === 0x02 || status === 0x03 || status === 0x04 || status === 0x06) {
-                if (current[1] === CLEANING_MARKER) {
-                    this.publishProperty('active_cleaning_function', decodeCleaningFunction(current[2]))
-                    this.publishProperty('remaining_time', current[4] * 60 + current[5])
-                } else if (current[1] === MY_RECIPE_MARKER) {
-                    this.publishProperty('active_course', '내가 만든 레시피')
-                    this.publishProperty('remaining_time', current[3] * 3600 + current[4] * 60 + current[5])
-                } else {
-                    this.publishProperty('active_course', decodeCourseId(current[1]))
-                    this.publishProperty('remaining_time', current[3] * 3600 + current[4] * 60 + current[5])
-                }
-            }
+        // `40 eb`: a single 28-byte record, same layout as `40 ec`'s current half - a periodic
+        // heartbeat/query response (confirmed live 2026-09-10: fires every ~30-70 minutes while
+        // idle, and was also caught mid-cook carrying the real course/status/remaining-time, e.g.
+        // status=2 cooking_in_progress, record[1]=1 레인지, 27s remaining). Unlike
+        // 2REF21EBNSX_3.ts this handler never sends a query frame of its own to request one - this
+        // is purely something the appliance already sends on its own that was going unread.
+        if (buf.length === 2 + STATE_RECORD_LEN && buf[0] === STATE_OPCODE_HI && buf[1] === QUERY_OPCODE_LO) {
+            this.applyStateRecord(buf.subarray(2, 2 + STATE_RECORD_LEN))
             return
         }
 

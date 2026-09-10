@@ -52,6 +52,16 @@ const FRIDGE_DOOR_CLOSED = buf('aa0810a801003ebb')
 const FREEZER_DOOR_OPEN = buf('aa0810a8020138bb')
 const FREEZER_DOOR_CLOSED = buf('aa0810a8020039bb')
 
+// Real capture (2026-09-10): the periodic ~5-minute full status dump, saved while checking for a
+// food-poisoning-index field - see the file header's NOT YET DECODED note. Recognised by shape
+// only, not parsed.
+const PERIODIC_DUMP = buf(
+    'aa0010cf00aa0121010101422631010405 0000ff510023dead0180ff820070deaddeaddeaddeadff25deaddeaddead013401905000003680ff1600000000a85e00a800020e000007d00000003a0000000000008010c38037000000000000000000000000000000000000000000000181000000037500291102e200d00462032c0043130e164600000000001586ff00000060200000000000000000000005001c000000000000000000000000000000b54b040101760101010144c0300a0b1901552d58fd8dfd27fd3e67fd8efd30fd5553518bfd20fd04c4fffdfffd1afd260504fdbefffdfd0700fd2b000000de445402001052160000740b0004203fbb'.replace(
+        /\s/g,
+        '',
+    ),
+)
+
 function makeDevice() {
     const ha = new MockHAConnection()
     const thinq = new MockThinq2Device(DEVICE_ID, META)
@@ -178,6 +188,15 @@ describe(MODEL_ID, () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', ACK)
         assert.equal(ha.devices[DEVICE_ID].properties.fridge_temp, undefined)
+    })
+
+    test('the periodic full status dump is recognised by shape and silently dropped - no unmodelled-frame noise', () => {
+        const { ha, thinq, dev } = makeDevice()
+        thinq.emit('data', PERIODIC_DUMP)
+        assert.equal(ha.devices[DEVICE_ID].properties.fridge_temp, undefined, 'not parsed, just recognised and ignored')
+        // @ts-expect-error seenUnknown is private - only reached by the generic unmodelled-frame
+        // fallthrough, so its absence here proves the dedicated `10 cf` branch caught it first.
+        assert.equal(dev.seenUnknown.has('250:10:cf'), false)
     })
 
     test('record[7] (anyDoorOpen) backfills both compartments to OFF once closed, but leaves an already-open one alone since it cannot say which door', () => {
