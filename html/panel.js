@@ -153,48 +153,6 @@ class DeviceEntry {
             }
         }
 
-        // A separate switch from Bridge: bridge mode decides whether this device's traffic is also
-        // mirrored to LG's real cloud, while this one decides whether a command coming back from
-        // Home Assistant is actually allowed to reach the appliance. State still flows to HA either
-        // way - this only blocks control, e.g. to watch a fridge/kimchi-fridge settle in before
-        // trusting it with real commands. Independent of bridge login, so it's never disabled here.
-        td = document.createElement('td')
-        td.className = 'dev-control'
-        td.innerHTML = `
-            <div class="switch">
-                <label>Off <input type="checkbox"> <span class="lever"></span>On</label>
-            </div>
-            <div class="hide preloader-wrapper verysmall active">
-                <div class="spinner-layer spinner-green-only">
-                <div class="circle-clipper left">
-                    <div class="circle"></div>
-                </div><div class="gap-patch">
-                    <div class="circle"></div>
-                </div><div class="circle-clipper right">
-                    <div class="circle"></div>
-                </div>
-                </div>
-            </div>`
-        children.push(td)
-
-        this.controlSwitch = td.getElementsByTagName('input')[0]
-        this.controlDiv = td.getElementsByClassName('switch')[0]
-        this.controlSpinner = td.getElementsByClassName('preloader-wrapper')[0]
-
-        this.controlSwitch.onchange = async () => {
-            const enabled = this.controlSwitch.checked
-            this.controlBusy = true
-            this.refreshUI()
-
-            try {
-                await fetchWrapper(`control/${this.id}/${enabled ? 'enable' : 'disable'}`, {}, { method: 'POST' })
-                this.remoteState.controlEnabled = enabled
-            } finally {
-                this.controlBusy = false
-                this.refreshUI()
-            }
-        }
-
         td = document.createElement('td')
         // Materialize disables a button with pointer-events: none, which would swallow the hover
         // that opens its tooltip - so the tooltip lives on a wrapper instead of on the button.
@@ -239,17 +197,6 @@ class DeviceEntry {
 
         // the modelJSON only comes from the ThinQ cloud, and only for a device registered there
         this.modelJsonButton.classList.toggle('disabled', !(bridge_status && this.remoteState.bridged))
-
-        if (this.controlBusy) {
-            this.controlDiv.classList.add('hide')
-            this.controlSpinner.classList.remove('hide')
-        } else {
-            this.controlSpinner.classList.add('hide')
-            this.controlDiv.classList.remove('hide')
-            // Missing from an older broadcast (not yet carrying controlEnabled) reads as enabled -
-            // this feature defaults on, so an unset field should not show as off.
-            this.controlSwitch.checked = this.remoteState.controlEnabled !== false
-        }
     }
 
     // The modelJSON is fetched by rethink and handed over as a blob, so that a failure shows up as a

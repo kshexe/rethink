@@ -19,7 +19,6 @@ import log, { setFilter as setLogFilter } from './util/logging'
 import { DeviceManager } from './cloud/devmgr'
 import { Bridge } from './bridge'
 import { JSONStorage } from './bridge/state'
-import { JSONControlState } from './cloud/control_state'
 import { configure as configureFrameRecorder } from './cloud/frame-recorder'
 
 const configPath = resolve(process.argv[2] ?? './config.json')
@@ -131,10 +130,7 @@ if (config.bridge) {
     void bridge.refreshNames()
 }
 
-mkdirSync(dirname(config.control_state_file), { recursive: true })
-const controlState = new JSONControlState(config.control_state_file)
-
-const ha = new HA_bridge(new HA_connection(config.homeassistant), bridge, controlState)
+const ha = new HA_bridge(new HA_connection(config.homeassistant), bridge)
 manager.on('newDevice', (dev) => ha.newDevice(dev))
 
 t2setup(manager)

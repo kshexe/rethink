@@ -16,10 +16,6 @@ export type RawConfig = {
     /** Raw-frame recorder: keep this many days of per-day JSONL under frame_log_dir. 0 = off. */
     frame_log_days?: number
     frame_log_dir?: string
-    /** Where the management panel's per-device control on/off switch is persisted - see
-     *  cloud/control_state.ts. Independent of `bridge` (LG cloud relay), so it always has a
-     *  default rather than being skipped when that block is absent. */
-    control_state_file?: string
 }
 
 export type Config = {
@@ -39,7 +35,6 @@ export type Config = {
     log: string[]
     frame_log_days: number
     frame_log_dir: string
-    control_state_file: string
 }
 
 export type HAConfig = {
@@ -84,7 +79,6 @@ export function normalize(config: RawConfig): Config {
         ...config,
         frame_log_days: config.frame_log_days ?? 0,
         frame_log_dir: config.frame_log_dir ?? '/share/rethink/frames',
-        control_state_file: config.control_state_file ?? '/share/rethink/control_state.json',
         advertise_requested_host: config.advertise_requested_host ?? false,
         https_port: parsePort(config.https_port),
         mqtts_port: parsePort(config.mqtts_port),
