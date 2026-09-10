@@ -52,6 +52,12 @@ const FRIDGE_DOOR_CLOSED = buf('aa0810a801003ebb')
 const FREEZER_DOOR_OPEN = buf('aa0810a8020138bb')
 const FREEZER_DOOR_CLOSED = buf('aa0810a8020039bb')
 
+// Real captures of the energy-counter frame (see 2REF21EBNSX_3.ts's file header's ENERGY COUNTER
+// section) - the first ever seen (2026-09-09T18:17:36Z, counter=7) and one from roughly a day later
+// (2026-09-10T22:47:36Z, counter=87) - same shape, byte 2 differs (0x0f vs 0xfa) and is not read.
+const ENERGY_COUNTER_7 = buf('aa0b10af0f00070404c7bb')
+const ENERGY_COUNTER_87 = buf('aa0b10affa0057040498bb')
+
 // Real capture (2026-09-10): the periodic ~5-minute full status dump, saved while checking for a
 // food-poisoning-index field - see the file header's NOT YET DECODED note. Recognised by shape
 // only, not parsed.
@@ -74,6 +80,7 @@ describe(MODEL_ID, () => {
         const { ha } = makeDevice()
         const components = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
         assert.deepEqual(Object.keys(components).sort(), [
+            'energy_raw_counter',
             'express_mode',
             'freezer_door_open',
             'freezer_temp',
@@ -81,6 +88,14 @@ describe(MODEL_ID, () => {
             'fridge_temp',
             'smart_care_v2',
         ])
+        assert.equal(components.energy_raw_counter.platform, 'sensor')
+        assert.equal(components.energy_raw_counter.state_class, 'total_increasing')
+        assert.equal(components.energy_raw_counter.device_class, undefined, 'scale unconfirmed - see file header')
+        assert.equal(
+            components.energy_raw_counter.unit_of_measurement,
+            undefined,
+            'scale unconfirmed - see file header',
+        )
         assert.equal(components.fridge_temp.min, 1)
         assert.equal(components.fridge_temp.max, 7)
         assert.equal(components.freezer_temp.min, -23)
@@ -197,6 +212,23 @@ describe(MODEL_ID, () => {
         // @ts-expect-error seenUnknown is private - only reached by the generic unmodelled-frame
         // fallthrough, so its absence here proves the dedicated `10 cf` branch caught it first.
         assert.equal(dev.seenUnknown.has('250:10:cf'), false)
+    })
+
+    test('the energy counter frame is recognised by shape (not gated on byte 2) and publishes the raw big-endian value', () => {
+        const { ha, thinq, dev } = makeDevice()
+
+        thinq.emit('data', ENERGY_COUNTER_7)
+        assert.equal(ha.devices[DEVICE_ID].properties.energy_raw_counter, 7)
+        // @ts-expect-error seenUnknown is private - only reached by the generic unmodelled-frame
+        // fallthrough, so its absence here proves the dedicated `10 af` branch caught it first.
+        assert.equal(dev.seenUnknown.has('7:10:af'), false)
+
+        thinq.emit('data', ENERGY_COUNTER_87)
+        assert.equal(
+            ha.devices[DEVICE_ID].properties.energy_raw_counter,
+            87,
+            'byte 2 differs (0x0f vs 0xfa) between these two real captures but is not read',
+        )
     })
 
     test('record[7] (anyDoorOpen) backfills both compartments to OFF once closed, but leaves an already-open one alone since it cannot say which door', () => {

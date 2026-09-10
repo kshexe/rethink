@@ -136,6 +136,42 @@ import { note as recordNote } from '../frame-recorder'
  * snappy UI, but this real reading is what corrects it if anything else (the appliance's own
  * panel, the LG app, ...) changes a setting instead.
  *
+ * ENERGY COUNTER - found 2026-09-11, not by capturing anything new but by reading another rethink
+ * fork's (github.com/plplaaa2/rethink) independently-reverse-engineered `2RES2VE300UA2.ts`, which
+ * documents a `10 af` frame carrying a live interval energy reading on that (different) fridge
+ * model, and then re-checking this unit's own already-recorded capture log for the same frame -
+ * it was there the whole time, just never recognised (logged 11 times as an unmodelled-aabb-frame
+ * note over one day, back when this file's own "NOT YET DECODED" list still said the app's energy
+ * figure had no candidate byte at all - that note below is now stale, kept only as a marker of how
+ * this was found):
+ *
+ *   from-device aa 0b 10 af <byte, wide-ranging - not established> 00 <hi> 04 04 <ck> bb
+ *
+ * i.e. a 7-byte AABB body `10 af <?> 00 <hi> 04 04`, where big-endian bytes 3-4 (`00 <hi>`, i.e.
+ * `record[3]*256 + record[4]`) read as a plain counter that only ever goes up - confirmed over a
+ * real 29-hour span of this unit's own capture log (2026-09-09T18:17Z through 2026-09-10T23:03Z):
+ * it climbs from 7 to 87 and never once drops or resets in that whole window, including across the
+ * unit's own local (Asia/Seoul) midnight boundary (UTC 15:00) - so unlike plplaaa2's model, this
+ * is NOT a per-interval delta that resets each report; whatever it counts, it counts cumulatively.
+ * Byte 2 (the `<?>` above) climbs independently of the counter itself early in the capture (0x0f,
+ * 0x10, 0x1e, 0x1f, ... up to 0xfa) then gets stuck at 0xfa for the rest of the window while the
+ * counter keeps climbing regardless - not established what byte 2 is separately tracking, and not
+ * needed to read the counter itself, so processAABB below doesn't gate on it the way plplaaa2's
+ * own handler does (`buf[2] === 0x0f || buf[2] === 0x10` - too narrow against this unit's own data,
+ * which reaches values neither of those cover almost immediately).
+ *
+ * UNIT NOT CONFIRMED - published as a bare monotonically-increasing counter (`energy_raw_counter`,
+ * `state_class: total_increasing`, no `device_class`/`unit_of_measurement` yet), deliberately not
+ * labelled Wh or wired into HA's Energy dashboard yet: comparing this counter's rise across
+ * 2026-09-10's own local calendar day (~59-66 units, by the two capture windows nearest to that
+ * day's KST midnight boundaries) against the app's own confirmed total for that exact day (141 Wh -
+ * see RETHINK memory `rethink_migration_status`) doesn't cleanly match 1:1 as Wh - roughly a factor
+ * of ~2 off, unexplained so far (a ×2 scale factor, a different 2-byte window, or byte 2 mattering
+ * after all are all still open possibilities). The hourly app-value logger set up in that same
+ * memory entry keeps collecting real daily totals going forward specifically so this can be solved
+ * empirically once more paired (raw counter delta, real day total) samples exist, rather than
+ * guessed from one day's data.
+ *
  * NOT YET DECODED, left deliberately unmodelled:
  *   - smartCareV2's three sub-features individually (스마트 안심 보관/AI 신선 케어/에너지 절약
  *     모드) - only the master switch above is exposed; record[4] is a plausible but unconfirmed
@@ -184,6 +220,13 @@ const DOOR_EVENT_SUB = 0x10
 const DOOR_EVENT_OPCODE = 0xa8
 const DOOR_EVENT_COMPARTMENT_FRIDGE = 0x01
 const DOOR_EVENT_COMPARTMENT_FREEZER = 0x02
+
+/** `aa 0b 10 af <?> 00 <hi> 04 04 <ck> bb` - see the file header's ENERGY COUNTER section. */
+const ENERGY_SUB = 0x10
+const ENERGY_OPCODE = 0xaf
+const ENERGY_FRAME_LEN = 7
+const ENERGY_COUNTER_HI = 3
+const ENERGY_COUNTER_LO = 4
 
 const FRIDGE_TEMP_MIN = 1
 const FRIDGE_TEMP_MAX = 7
@@ -239,6 +282,7 @@ export default class Device extends AABBDevice {
     fridgeDoorOpen: boolean | undefined
     freezerDoorOpen: boolean | undefined
     smartCareV2: boolean | undefined
+    energyRawCounter: number | undefined
 
     /** (dir:tag) pairs already flagged as unrecognised, so a repeating one is noted once. */
     private seenUnknown = new Set<string>()
@@ -309,6 +353,18 @@ export default class Device extends AABBDevice {
                     icon: 'mdi:fridge-industrial-outline',
                     device_class: 'door',
                     state_topic: '$this/freezer_door_open',
+                },
+                // Deliberately no device_class/unit_of_measurement yet - the scale is unconfirmed,
+                // see the file header's ENERGY COUNTER section. state_class alone still lets this
+                // be graphed/tracked in HA; wiring it into the Energy dashboard can wait until the
+                // scale is actually known, rather than guessing and showing a wrong number there.
+                energy_raw_counter: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-energy_raw_counter',
+                    name: 'Energy raw counter (unit unconfirmed)',
+                    icon: 'mdi:lightning-bolt-outline',
+                    state_class: 'total_increasing',
+                    state_topic: '$this/energy_raw_counter',
                 },
             },
         })
@@ -451,6 +507,19 @@ export default class Device extends AABBDevice {
             } else if (buf[2] === DOOR_EVENT_COMPARTMENT_FREEZER && open !== this.freezerDoorOpen) {
                 this.freezerDoorOpen = open
                 this.publishProperty('freezer_door_open', open ? 'ON' : 'OFF')
+            }
+            return
+        }
+
+        // energy counter: <sub=0x10> af <?> 00 <hi> 04 04 - see the file header's ENERGY COUNTER
+        // section. Unlike plplaaa2/rethink's own handler for a different fridge model, this does
+        // not gate on byte 2's value - this unit's own captures show it ranging far more widely
+        // than that other handler's `0x0f`/`0x10` check accounts for.
+        if (buf.length === ENERGY_FRAME_LEN && buf[0] === ENERGY_SUB && buf[1] === ENERGY_OPCODE) {
+            const counter = buf[ENERGY_COUNTER_HI] * 256 + buf[ENERGY_COUNTER_LO]
+            if (counter !== this.energyRawCounter) {
+                this.energyRawCounter = counter
+                this.publishProperty('energy_raw_counter', counter)
             }
             return
         }
