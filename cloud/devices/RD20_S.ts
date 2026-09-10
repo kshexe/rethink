@@ -61,12 +61,48 @@ import { note as recordNote } from '../frame-recorder'
  * scheme above, so none of their byte offsets apply here. The only thing that carried over is
  * two frame-type byte VALUES matching by coincidence, not layout: buf[1]==0x72 (heartbeat) and
  * 0xE2 (idle/keepalive snapshot) appear in both, per upstream's header comment for that model.
+ *
+ * REMAINING_MINUTES (decoded 2026-09-10, and corrected the same day - see below): rather than
+ * running a fresh test cycle, this was decoded from a real dry cycle already sitting in rethink's
+ * own frame log from the day before (retained 14 days per the add-on's `frame_log_days` option) -
+ * by cross-referencing the official `lg_thinq` integration's own sensors against rethink's raw
+ * frames for the same window. The from-device frame that carries it is a different, longer shape
+ * than the `f0e5`-ack one above: `aa ff 30 0a 00 76 00 <2-byte session counter> 00 01 00 ec 00 64
+ * <98-byte body>` (118 bytes total). `buf` here (as AABBDevice.processData hands it, i.e. with
+ * the leading `aa ff` and trailing checksum/bb already stripped) is 114 bytes; the marker `00 01
+ * 00 ec` sits at `buf[7..10]`, and `buf[23]` is a plain integer, minutes remaining in the cycle.
+ *
+ * First pass (wrong): 3 samples read against `sensor.geonjogi_current_status` (running/cooling/
+ * end) alone made `buf[23]` look like a 3-value status enum (0x64=running, 0x02=cooling,
+ * 0x01=end), because those samples happened to land right at the start of the run (~100 min left)
+ * and near the very end (~1-2 min left). Cross-checking against `sensor.geonjogi_remaining_time`
+ * (a predicted finish timestamp) instead, across the same cycle, showed `buf[23]` tracking
+ * `finish_time - now` in whole minutes exactly - 99, 74, 58, 11 minutes at four more points across
+ * the same run, matching every time. It is not a status code at all, just the countdown - the
+ * earlier reading only *looked* like one because a countdown naturally passes through small
+ * integers right when a real status enum would too. There likely is a real discrete status/phase
+ * byte somewhere in the other ~90 bytes of this frame (the official integration clearly has one),
+ * but the running cycle mined for this pass only contained 2 cooling samples and 1 end sample -
+ * not enough to isolate it with any confidence, so it is left undecoded rather than guessed at
+ * twice. This frame shape stopped appearing entirely once the official sensor read "power_off" -
+ * the appliance does not send it while idle, so `remaining_minutes` is simply never published for
+ * that state.
  */
 
 const FROM_DEVICE_ACK_OPCODE = 0xe5
 
 /** Shared with FX___S.ts's vocabulary for the same F0E5 protocol family. */
 const KEY_POWER = 0x02
+
+/** The `00 01 00 ec` marker (see file header's REMAINING_MINUTES section) that opens the 114-byte
+ *  status body AABBDevice.processData hands to processAABB, and where the remaining-minutes byte
+ *  lives within it. */
+const STATUS_FRAME_LEN = 114
+const STATUS_MARKER = Buffer.from([0x00, 0x01, 0x00, 0xec])
+const STATUS_MARKER_OFFSET = 7
+// The frame carries two records, old then new (the same convention 2REF21EBNSX_3.ts's `10 ec`
+// state frame uses) - this is the new/current one, 50 bytes after the old record's own offset.
+const REMAINING_MINUTES_OFFSET = 73
 
 /** Builds the `f0 e5 00 02 01 ff <n> [<key> <value>]*n` payload AABBDevice.send() wraps and
  *  checksums. Only single-byte values are needed for power; see the file header for the
@@ -97,6 +133,15 @@ export default class Device extends AABBDevice {
                     name: '',
                     icon: 'mdi:tumble-dryer',
                 },
+                remaining_minutes: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-remaining_minutes',
+                    state_topic: '$this/remaining_minutes',
+                    name: 'Remaining time',
+                    icon: 'mdi:timer-outline',
+                    device_class: 'duration',
+                    unit_of_measurement: 'min',
+                },
             },
         })
 
@@ -122,6 +167,16 @@ export default class Device extends AABBDevice {
     processAABB(buf: Buffer) {
         // ack: <sub> 00 e5 00  (4 bytes) - nothing to publish, just confirms the write landed
         if (buf.length === 4 && buf[1] === 0x00 && buf[2] === FROM_DEVICE_ACK_OPCODE && buf[3] === 0x00) return
+
+        // 114-byte status frame carrying the `00 01 00 ec` marker - see file header's
+        // REMAINING_MINUTES section. Only this one field is decoded; the rest of the body is not.
+        if (
+            buf.length === STATUS_FRAME_LEN &&
+            buf.subarray(STATUS_MARKER_OFFSET, STATUS_MARKER_OFFSET + STATUS_MARKER.length).equals(STATUS_MARKER)
+        ) {
+            this.publishProperty('remaining_minutes', buf[REMAINING_MINUTES_OFFSET])
+            return
+        }
 
         // Anything else is a frame this handler does not parse yet (the 63-byte periodic status
         // report, course table, options). Note it once per shape so a future session has
