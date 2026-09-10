@@ -20,6 +20,21 @@ import { note as recordNote } from '../frame-recorder'
  *   from-device aa 08 10 00 17 00 <ck> bb                                (ack)
  *   from-device aa 2a 10 ec <36 bytes, see READ_* offsets> <ck> bb       (state, follows the ack)
  *
+ * Query: unlike the TLV family (TLVDevice queries its own caps/values on a timer, independent of
+ * bridge mode), AABBDevice has no active-query mechanism at all - every AABB handler in this fork
+ * so far has been purely reactive. That works by accident for a bridged device (the real cloud's
+ * own polling, relayed through, happens to produce state frames we can read), but leaves the
+ * entities stuck on "unknown" forever for anything that never changes and is never bridged. The
+ * query below closes that gap for this model specifically:
+ *
+ *   to-device   aa 0e f0 ed 12 11 01 00 00 01 04 00 <ck> bb               (fixed, no parameters)
+ *   from-device aa 18 10 eb <18-byte record, same layout as the ec state's current record> <ck> bb
+ *
+ * Confirmed fixed byte-for-byte across every occurrence in a full day's capture (this handler
+ * never sent it - it was relayed through by bridge mode - so it was already known to be safe to
+ * replay verbatim), and its response's record decodes with the exact same offsets as the `ec`
+ * state frame's current record.
+ *
  * Write-side offsets confirmed by sweeping each control through its real range and diffing the
  * frames (offsets counted from the start of the 43-byte body, i.e. byte 0 is the 0xf0 of the
  * opcode):
@@ -68,10 +83,17 @@ const OFFSET_APPLY_FLAG = 10
 const STATE_SUB = 0x10
 const STATE_OPCODE = 0xec
 const STATE_RECORD_LEN = 18
-/** Offsets within the current-value record (the second of the two 18-byte records). */
+/** Offsets within a state record (18 bytes - the current half of an `ec` pair, or the sole
+ *  record an `eb` query response carries). */
 const RECORD_FRIDGE_TEMP = 1
 const RECORD_FREEZER_TEMP = 2
 const RECORD_EXPRESS_FREEZE = 3
+
+const QUERY_SUB = 0x10
+const QUERY_OPCODE = 0xeb
+/** Fixed, parameterless - see the file header. */
+const QUERY_FRAME = Buffer.from('f0ed1211010000010400', 'hex')
+const QUERY_INTERVAL_MS = 5 * 60 * 1000
 
 const FRIDGE_TEMP_MIN = 1
 const FRIDGE_TEMP_MAX = 7
@@ -115,6 +137,7 @@ export default class Device extends AABBDevice {
 
     /** (dir:tag) pairs already flagged as unrecognised, so a repeating one is noted once. */
     private seenUnknown = new Set<string>()
+    private queryTimer: ReturnType<typeof setInterval> | undefined
 
     constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
         super(HA, thinq)
@@ -169,6 +192,44 @@ export default class Device extends AABBDevice {
         )
     }
 
+    start() {
+        super.start()
+        this.query()
+        this.queryTimer = setInterval(() => this.query(), QUERY_INTERVAL_MS)
+    }
+
+    cancelPendingWork() {
+        clearInterval(this.queryTimer)
+        this.queryTimer = undefined
+        super.cancelPendingWork()
+    }
+
+    query() {
+        this.send(QUERY_FRAME)
+    }
+
+    /** Applies a state record (18 bytes) - shared between the `ec` state frame's current half
+     *  and the `eb` query response, which are the same layout. */
+    private applyStateRecord(record: Buffer) {
+        const fridgeTemp = record[RECORD_FRIDGE_TEMP]
+        if (fridgeTemp !== this.fridgeTemp) {
+            this.fridgeTemp = fridgeTemp
+            this.publishProperty('fridge_temp', fridgeTemp)
+        }
+
+        const freezerTemp = -14 - record[RECORD_FREEZER_TEMP]
+        if (freezerTemp !== this.freezerTemp) {
+            this.freezerTemp = freezerTemp
+            this.publishProperty('freezer_temp', freezerTemp)
+        }
+
+        const expressFreeze = record[RECORD_EXPRESS_FREEZE] === 0x02
+        if (expressFreeze !== this.expressFreeze) {
+            this.expressFreeze = expressFreeze
+            this.publishProperty('express_freeze', expressFreeze ? 'ON' : 'OFF')
+        }
+    }
+
     setProperty(prop: string, mqttValue: string) {
         switch (prop) {
             case 'fridge_temp': {
@@ -210,25 +271,13 @@ export default class Device extends AABBDevice {
 
         // state: <sub=0x10> ec <old 18-byte record><new 18-byte record> - see the file header.
         if (buf.length === 2 + 2 * STATE_RECORD_LEN && buf[0] === STATE_SUB && buf[1] === STATE_OPCODE) {
-            const current = buf.subarray(2 + STATE_RECORD_LEN, 2 + 2 * STATE_RECORD_LEN)
+            this.applyStateRecord(buf.subarray(2 + STATE_RECORD_LEN, 2 + 2 * STATE_RECORD_LEN))
+            return
+        }
 
-            const fridgeTemp = current[RECORD_FRIDGE_TEMP]
-            if (fridgeTemp !== this.fridgeTemp) {
-                this.fridgeTemp = fridgeTemp
-                this.publishProperty('fridge_temp', fridgeTemp)
-            }
-
-            const freezerTemp = -14 - current[RECORD_FREEZER_TEMP]
-            if (freezerTemp !== this.freezerTemp) {
-                this.freezerTemp = freezerTemp
-                this.publishProperty('freezer_temp', freezerTemp)
-            }
-
-            const expressFreeze = current[RECORD_EXPRESS_FREEZE] === 0x02
-            if (expressFreeze !== this.expressFreeze) {
-                this.expressFreeze = expressFreeze
-                this.publishProperty('express_freeze', expressFreeze ? 'ON' : 'OFF')
-            }
+        // query response: <sub=0x10> eb <18-byte record> - see the file header.
+        if (buf.length === 2 + STATE_RECORD_LEN && buf[0] === QUERY_SUB && buf[1] === QUERY_OPCODE) {
+            this.applyStateRecord(buf.subarray(2, 2 + STATE_RECORD_LEN))
             return
         }
 

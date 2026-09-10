@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import DUT from '@/cloud/devices/2REF21EBNSX_3'
 import type { Metadata } from '@/cloud/thinq'
 import { MockHAConnection, MockThinq2Device, buf } from '@/tests/helpers/mocks'
+import { enableMockTimers, tickMockTimers } from '@/tests/helpers/timers'
 
 const DEVICE_ID = 'test-id'
 const MODEL_ID = '2REF21EBNSX_3'
@@ -20,6 +21,10 @@ const ACK = buf('aa08100017008cbb')
 const STATE_FRIDGE_7 = buf('aa2a10ec020404010700ff00010001ffffffffffff01020704010700ff00010001ffffffffffff01babb')
 // Followed express_freeze=ON: old record (fridge=4, freezer raw=4, express=1) then new (express=2).
 const STATE_EXPRESS_ON = buf('aa2a10ec020404010700ff00010001ffffffffffff01020404020700ff00010001ffffffffffff01b8bb')
+// The query frame this handler sends, and a real "eb" query response (fridge=4, freezer raw=4,
+// express=1) captured mid-day, unrelated to any write of ours - see the file header.
+const QUERY_FRAME_HEX = 'aa0ef0ed1211010000010400ebbb'
+const QUERY_RESPONSE = buf('aa1810eb020404010700ff00010001ffffffffffff019ebb')
 
 function makeDevice() {
     const ha = new MockHAConnection()
@@ -131,5 +136,40 @@ describe(MODEL_ID, () => {
         assert.equal(ha.devices[DEVICE_ID].properties.fridge_temp, 4)
         assert.equal(ha.devices[DEVICE_ID].properties.freezer_temp, -18)
         assert.equal(ha.devices[DEVICE_ID].properties.express_freeze, 'ON')
+    })
+
+    test('start() sends the query frame immediately, byte for byte, and again on a timer', (t) => {
+        enableMockTimers(t)
+        const { thinq, dev } = makeDevice()
+        thinq.resetRecorder()
+
+        dev.start()
+        assert.equal(thinq.outbox.length, 1, 'queried once on start')
+        assert.equal(thinq.outbox[0].toString('hex'), QUERY_FRAME_HEX)
+
+        tickMockTimers(t, 5 * 60 * 1000)
+        assert.equal(thinq.outbox.length, 2, 'queried again after the interval')
+        assert.equal(thinq.outbox[1].toString('hex'), QUERY_FRAME_HEX)
+
+        dev.drop()
+    })
+
+    test('drop() stops the query timer - no further queries after that', (t) => {
+        enableMockTimers(t)
+        const { thinq, dev } = makeDevice()
+        dev.start()
+        thinq.resetRecorder()
+
+        dev.drop()
+        tickMockTimers(t, 60 * 60 * 1000)
+        assert.equal(thinq.outbox.length, 0, 'no query fired after drop()')
+    })
+
+    test('the query response (a single record, not a before/after pair) publishes the real reading', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', QUERY_RESPONSE)
+        assert.equal(ha.devices[DEVICE_ID].properties.fridge_temp, 4)
+        assert.equal(ha.devices[DEVICE_ID].properties.freezer_temp, -18)
+        assert.equal(ha.devices[DEVICE_ID].properties.express_freeze, 'OFF')
     })
 })
