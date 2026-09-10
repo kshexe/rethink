@@ -187,6 +187,41 @@ describe('HA_bridge control enable/disable', () => {
         }
     })
 
+    test('disabling control actually sends the two-step removal HA requires - an empty {platform} marker, then an update that omits the component - not just a single publish that omits it', async () => {
+        const ha = new MockHAConnection()
+        const bridge = new HA_bridge(ha.asConnection())
+        await makeMappedDevice(bridge)
+        try {
+            const publishes: Record<string, unknown>[] = []
+            const originalPublishConfig = ha.publishConfig.bind(ha)
+            ha.publishConfig = (id, config) => {
+                publishes.push(structuredClone(config.components) as Record<string, unknown>)
+                originalPublishConfig(id, config)
+            }
+
+            bridge.setControlEnabled(DEVICE_ID, false)
+
+            assert.equal(
+                publishes.length,
+                2,
+                'a plain single omitting publish is not enough for HA to remove the entity',
+            )
+
+            const marker = publishes[0].power as Record<string, unknown>
+            assert.deepEqual(
+                Object.keys(marker).sort(),
+                ['platform', 'unique_id'],
+                'step 1: power reduced to an empty marker (still naming the component, per HA docs)',
+            )
+            assert.equal(marker.platform, 'switch')
+
+            assert.equal(publishes[1].power, undefined, 'step 2: power omitted entirely')
+            assert.ok(publishes[1].remaining_minutes, 'the sensor was never touched by either step')
+        } finally {
+            bridge.haDevices.get(DEVICE_ID)?.drop()
+        }
+    })
+
     test('a command still cannot reach the appliance while disabled, and works again once re-enabled', async () => {
         const ha = new MockHAConnection()
         const bridge = new HA_bridge(ha.asConnection())

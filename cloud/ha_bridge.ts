@@ -7,7 +7,7 @@ import H01 from './devices/H01'
 import Fridge_2REF21EBNSX_3 from './devices/2REF21EBNSX_3'
 import ML32PWFOTA from './devices/ML32PWFOTA'
 import { Device as T2Device } from './thinq2/device'
-import { type Connection } from './homeassistant'
+import { type Connection, type DeviceDiscovery } from './homeassistant'
 import HADevice from './devices/base'
 import { type Metadata } from './thinq'
 import { AnyDevice } from './devmgr'
@@ -85,10 +85,18 @@ class Bridge {
 
     /*
      * Wraps publishConfig() so a read-only device's discovery payload never lists a control
-     * component (switch/select/number/button/... - anything with a command_topic) in the first
-     * place, rather than publishing one HA would create and then silently ignore every command
-     * sent to it. HA's device-based MQTT discovery removes an entity whose component drops out of
-     * a later publish, so toggling this back on brings the controls back the same way.
+     * component (switch/select/number/button/... - anything with a command_topic), rather than
+     * publishing one HA would create and then silently ignore every command sent to it.
+     *
+     * Simply omitting a component from a later publish is NOT enough on its own - confirmed
+     * against a real HA instance 2026-09-10 (the filtered payload rethink sent was byte-for-byte
+     * correct, captured straight off the MQTT broker, and HA kept the entity anyway) and against
+     * HA's own docs: omitting a component reads as "unchanged", not "removed". Removing one for
+     * real needs two publishes in a row - first an update where that component is reduced to just
+     * `{platform: ...}` (an explicit "this is now empty" marker, still naming the component so HA
+     * knows which unique_id it refers to), then a normal publish that omits it entirely. Adding a
+     * component back (re-enabling) doesn't need any of this - a plain publish that includes it
+     * again is a normal discovery update either way.
      *
      * Applied before applyDeviceName so that wrapper (device name) ends up outermost: it mutates
      * hadevice.config.device.name first, then calls down into this one, which reads that already-
@@ -97,24 +105,42 @@ class Bridge {
      */
     private applyControlFilter(id: string, hadevice: HADevice) {
         const originalPublishConfig = hadevice.publishConfig.bind(hadevice)
+        const publishWith = (components: DeviceDiscovery['components']) => {
+            const fullConfig = hadevice.config!
+            hadevice.config = { ...fullConfig, components }
+            try {
+                originalPublishConfig()
+            } finally {
+                hadevice.config = fullConfig
+            }
+        }
+
         hadevice.publishConfig = () => {
             if (!this.controlDisabled.has(id) || !hadevice.config) {
                 originalPublishConfig()
                 return
             }
 
-            const fullConfig = hadevice.config
-            hadevice.config = {
-                ...fullConfig,
-                components: Object.fromEntries(
-                    Object.entries(fullConfig.components).filter(([, comp]) => !('command_topic' in comp)),
+            const controlEntries = Object.entries(hadevice.config.components).filter(
+                ([, comp]) => 'command_topic' in comp,
+            )
+            if (controlEntries.length > 0) {
+                publishWith({
+                    ...hadevice.config.components,
+                    ...Object.fromEntries(
+                        controlEntries.map(([key, comp]) => [
+                            key,
+                            { platform: comp.platform, unique_id: comp.unique_id },
+                        ]),
+                    ),
+                })
+            }
+
+            publishWith(
+                Object.fromEntries(
+                    Object.entries(hadevice.config.components).filter(([, comp]) => !('command_topic' in comp)),
                 ),
-            }
-            try {
-                originalPublishConfig()
-            } finally {
-                hadevice.config = fullConfig
-            }
+            )
         }
 
         if (hadevice.config) hadevice.publishConfig()
