@@ -153,6 +153,7 @@ describe(MODEL_ID, () => {
             'oven_temperature',
             'remaining_time',
             'send',
+            'target_temperature',
         ])
         assert.deepEqual(components.course.options, ['구이', '레인지', '오븐', '스팀', '식품건조', '발효'])
     })
@@ -262,6 +263,68 @@ describe(MODEL_ID, () => {
         assert.equal(ha.devices[DEVICE_ID].properties.cook_time_seconds, 55, '53 snaps up to 55')
     })
 
+    test("switching course resets target_temperature to that course's own default - 0 for a course with no adjustable range, its real default otherwise", () => {
+        const { ha, dev } = makeDevice()
+        assert.equal(ha.devices[DEVICE_ID].properties.target_temperature, 0, '구이 has no adjustable range')
+
+        dev.setProperty('course', '오븐')
+        assert.equal(ha.devices[DEVICE_ID].properties.target_temperature, 180)
+
+        dev.setProperty('course', '식품건조')
+        assert.equal(ha.devices[DEVICE_ID].properties.target_temperature, 40)
+
+        dev.setProperty('course', '레인지')
+        assert.equal(ha.devices[DEVICE_ID].properties.target_temperature, 0)
+    })
+
+    test("target_temperature is clamped to the selected course's own real range (오븐: 100-230°C, 식품건조: 40-90°C)", () => {
+        const { ha, dev } = makeDevice()
+
+        dev.setProperty('course', '오븐')
+        dev.setProperty('target_temperature', '999')
+        assert.equal(ha.devices[DEVICE_ID].properties.target_temperature, 230, 'clamped to max 230')
+        dev.setProperty('target_temperature', '0')
+        assert.equal(ha.devices[DEVICE_ID].properties.target_temperature, 100, 'clamped to min 100')
+
+        dev.setProperty('course', '식품건조')
+        dev.setProperty('target_temperature', '150')
+        assert.equal(ha.devices[DEVICE_ID].properties.target_temperature, 90, 'clamped to max 90')
+    })
+
+    test('a course with no adjustable temperature ignores target_temperature entirely - it always reads back 0', () => {
+        const { ha, dev } = makeDevice()
+        for (const course of ['구이', '레인지', '스팀', '발효']) {
+            dev.setProperty('course', course)
+            dev.setProperty('target_temperature', '150')
+            assert.equal(ha.devices[DEVICE_ID].properties.target_temperature, 0, `${course} has no adjustable range`)
+        }
+    })
+
+    // UNVERIFIED against a real send - see buildCourseFrame's comment: only the time offsets
+    // (inner[7]/[8]) have been confirmed against real captures so far, inner[10] has not.
+    test("send writes the clamped target_temperature into inner[10] for a course with an adjustable range, leaving other courses' captured default untouched", () => {
+        const { thinq, dev } = makeDevice()
+
+        dev.setProperty('course', '오븐')
+        dev.setProperty('target_temperature', '200')
+        thinq.resetRecorder()
+        dev.setProperty('send', '')
+        assert.equal(
+            thinq.outbox[0].subarray(12, 13).toString('hex'),
+            'c8',
+            '200 decimal = 0xc8, at inner[10] = frame byte 12',
+        )
+
+        dev.setProperty('course', '구이')
+        thinq.resetRecorder()
+        dev.setProperty('send', '')
+        assert.equal(
+            thinq.outbox[0].toString('hex'),
+            GRILL_DEFAULT_2000.toString('hex'),
+            '구이 has no adjustable range - byte-for-byte identical to the real captured frame, inner[10] included',
+        )
+    })
+
     test('the send and cancel acks are recognised and publish nothing', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', ACK_SEND)
@@ -352,6 +415,25 @@ describe(MODEL_ID, () => {
         thinq.emit('data', STATE_STEAM_FERMENT_COOKING_9H)
         assert.equal(ha.devices[DEVICE_ID].properties.active_course, '스팀발효')
         assert.equal(ha.devices[DEVICE_ID].properties.remaining_time, 9 * 3600)
+    })
+
+    test('oven_temperature is suppressed (not published as a misleading 0.0) for a course confirmed to never carry one - 레인지/구이 here, real captures both', () => {
+        const { ha, thinq } = makeDevice()
+
+        thinq.emit('data', STATE_RANGE_COOKING_30S)
+        assert.equal(
+            ha.devices[DEVICE_ID].properties.oven_temperature,
+            'None',
+            '레인지 has no temperature concept at all',
+        )
+
+        thinq.emit('data', STATE_GRILL_COOKING_20MIN)
+        assert.equal(ha.devices[DEVICE_ID].properties.oven_temperature, 'None', '구이 likewise')
+
+        // 발효 DOES carry a real temperature (40°C, confirmed live) unlike 레인지/구이/스팀/스팀레인지 -
+        // switching to it should publish the real value again, not stay suppressed.
+        thinq.emit('data', STATE_FERMENT_COOKING_1H15M)
+        assert.equal(ha.devices[DEVICE_ID].properties.oven_temperature, 40)
     })
 
     test('active_course and remaining_time are not published while merely queued (preference)', () => {

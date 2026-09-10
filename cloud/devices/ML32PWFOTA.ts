@@ -84,7 +84,10 @@ import { note as recordNote } from '../frame-recorder'
  *                significant (e.g. once an actual cook start becomes reachable to capture).
  *   record[6]  = target temperature in Celsius - confirmed byte-for-byte equal to the official
  *                sensor's live value for both 180 (오븐) and 40 (식품건조) sends, and 0 for the
- *                temp-less 레인지 send.
+ *                temp-less 레인지 send. See NO_TEMPERATURE_COURSE_IDS for the full per-course
+ *                breakdown of which ones are genuinely temp-less (always 0) vs. which carry a
+ *                real value - oven_temperature is suppressed rather than published as a misleading
+ *                0.0°C for the former.
  *   record[7]  = `0x04` whenever status is "preference" (even for 레인지's temp=0 case, so this
  *                is not a "has a temperature" flag), `0x00` whenever "initial".
  *   record[8]  = `0x01` only in the idle/"initial" record, `0x00` otherwise - the mirror image of
@@ -237,6 +240,14 @@ const COURSE_ID_NAMES: Record<number, string> = {
     21: '발효',
     22: '스팀발효',
 }
+
+/** record[1] ids of courses confirmed live (2026-09-10, a full day's captures across every real
+ *  run of each) to never carry a target temperature - record[6] read a constant 0 in all of them,
+ *  every time, regardless of what was cooking. The rest of COURSE_ID_NAMES's ids (오븐 100-230,
+ *  스팀오븐 180-230, 식품건조 40/70, 발효/스팀발효 40) do carry a real one. Used to suppress
+ *  oven_temperature for these rather than publishing a misleading "0.0°C" for a course that has no
+ *  temperature concept at all. */
+const NO_TEMPERATURE_COURSE_IDS = new Set([1, 2, 3, 6]) // 레인지, 스팀레인지, 구이, 스팀
 /** Any record[1] outside the manual-course table above belongs to one of the appliance's ~30
  *  built-in "자동요리"(auto cook) recipes - id 8, 20, ... each holding its own recipe number in
  *  record[2] (confirmed live for 감자삶기=8/1 and 냉동밥데우기 1인분=8/3, 2인분=20/193). There are
@@ -295,64 +306,102 @@ const MAX_POSSIBLE_MINUTES = 9 * 60
  *  0 seconds just preheats - is why its minimum is 0 while every other course's is 10s+). The
  *  steam-combo variants (스팀레인지/스팀오븐/스팀발효) share their base course's range but are
  *  not separately listed here - see NOT-YET-DECODED, this handler cannot send them yet. */
-const COURSES: Record<string, { inner: Buffer; defaultTotalSeconds: number; minSeconds: number; maxSeconds: number }> =
+const COURSES: Record<
+    string,
     {
-        구이: {
-            inner: Buffer.from(
-                'f04301010100000c0000e600000000006600000000000000000000000000000000000000000000000000000000000000000000000000000000010000040704020a01000004000000',
-                'hex',
-            ),
-            defaultTotalSeconds: 20 * 60,
-            minSeconds: 10,
-            maxSeconds: 50 * 60,
-        },
-        레인지: {
-            inner: Buffer.from(
-                'f0430101010000003c000000000000006500000000000000000000000000000000000000000000000000000000000000000000000000000000010000000704020003000004000000',
-                'hex',
-            ),
-            defaultTotalSeconds: 60,
-            minSeconds: 10,
-            maxSeconds: 90 * 60,
-        },
-        오븐: {
-            inner: Buffer.from(
-                'f04301010100000c0000b400000000006900000000000000000000000000000000000000000000000000000000000000000000000000000000010000010704020a04000004000000',
-                'hex',
-            ),
-            defaultTotalSeconds: 0,
-            minSeconds: 0,
-            maxSeconds: 90 * 60,
-        },
-        스팀: {
-            inner: Buffer.from(
-                'f04301010100000600006900000000006d00000000000000000000000000000000000000000000000000000000000000000000000000000000010000010704010804000004000000',
-                'hex',
-            ),
-            defaultTotalSeconds: 10 * 60,
-            minSeconds: 10,
-            maxSeconds: 30 * 60,
-        },
-        식품건조: {
-            inner: Buffer.from(
-                'f04301010100000100002800000000006e00000000000000000000000000000000000000000000000000000000000000000000000000000000010000010705020a04000004000000',
-                'hex',
-            ),
-            defaultTotalSeconds: 6 * 3600,
-            minSeconds: 5 * 60,
-            maxSeconds: 9 * 3600,
-        },
-        발효: {
-            inner: Buffer.from(
-                'f04301010100000028002800000000006f00000000000000000000000000000000000000000000000000000000000000000000000000000000010000010705020a04000004000000',
-                'hex',
-            ),
-            defaultTotalSeconds: 30 * 60,
-            minSeconds: 5 * 60,
-            maxSeconds: 9 * 3600,
-        },
+        inner: Buffer
+        defaultTotalSeconds: number
+        minSeconds: number
+        maxSeconds: number
+        // Only present for a course that actually has an adjustable target temperature - see
+        // NO_TEMPERATURE_COURSE_IDS and TEMP_MIN_POSSIBLE/TEMP_MAX_POSSIBLE below. Confirmed by
+        // the user directly from the appliance's own UI, 2026-09-10: 오븐 100-230°C, 식품건조
+        // 40-90°C. Absent for every other course here (구이/레인지/스팀/발효) - none of these had a
+        // temperature range given, so inner[10]'s captured default is sent as-is, never overridden.
+        minTemp?: number
+        maxTemp?: number
+        defaultTemp?: number
     }
+> = {
+    구이: {
+        inner: Buffer.from(
+            'f04301010100000c0000e600000000006600000000000000000000000000000000000000000000000000000000000000000000000000000000010000040704020a01000004000000',
+            'hex',
+        ),
+        defaultTotalSeconds: 20 * 60,
+        minSeconds: 10,
+        maxSeconds: 50 * 60,
+    },
+    레인지: {
+        inner: Buffer.from(
+            'f0430101010000003c000000000000006500000000000000000000000000000000000000000000000000000000000000000000000000000000010000000704020003000004000000',
+            'hex',
+        ),
+        defaultTotalSeconds: 60,
+        minSeconds: 10,
+        maxSeconds: 90 * 60,
+    },
+    오븐: {
+        inner: Buffer.from(
+            'f04301010100000c0000b400000000006900000000000000000000000000000000000000000000000000000000000000000000000000000000010000010704020a04000004000000',
+            'hex',
+        ),
+        defaultTotalSeconds: 0,
+        minSeconds: 0,
+        maxSeconds: 90 * 60,
+        minTemp: 100,
+        maxTemp: 230,
+        defaultTemp: 180, // matches inner[10]'s own captured default (0xb4)
+    },
+    스팀: {
+        inner: Buffer.from(
+            'f04301010100000600006900000000006d00000000000000000000000000000000000000000000000000000000000000000000000000000000010000010704010804000004000000',
+            'hex',
+        ),
+        defaultTotalSeconds: 10 * 60,
+        minSeconds: 10,
+        maxSeconds: 30 * 60,
+    },
+    식품건조: {
+        inner: Buffer.from(
+            'f04301010100000100002800000000006e00000000000000000000000000000000000000000000000000000000000000000000000000000000010000010705020a04000004000000',
+            'hex',
+        ),
+        defaultTotalSeconds: 6 * 3600,
+        minSeconds: 5 * 60,
+        maxSeconds: 9 * 3600,
+        minTemp: 40,
+        maxTemp: 90,
+        defaultTemp: 40, // matches inner[10]'s own captured default (0x28)
+    },
+    발효: {
+        inner: Buffer.from(
+            'f04301010100000028002800000000006f00000000000000000000000000000000000000000000000000000000000000000000000000000000010000010705020a04000004000000',
+            'hex',
+        ),
+        defaultTotalSeconds: 30 * 60,
+        minSeconds: 5 * 60,
+        maxSeconds: 9 * 3600,
+    },
+}
 const DEFAULT_COURSE = '구이'
+
+/** The widest range any temperature-adjustable course allows (오븐/식품건조's 100-230/40-90) - the
+ *  static HA slider bound for target_temperature, the same pattern MAX_POSSIBLE_MINUTES uses for
+ *  cook_time_minutes. The real, tighter per-course bound (or "not applicable at all" for a course
+ *  with no minTemp/maxTemp) is enforced in code - see setCookTemp/buildCourseFrame. */
+const TEMP_MIN_POSSIBLE = 0
+const TEMP_MAX_POSSIBLE = 230
+
+/** Clamps a requested target temperature to the selected course's own real range. Courses with no
+ *  minTemp/maxTemp (구이/레인지/스팀/발효) don't have an adjustable temperature at all - clamping
+ *  always returns 0 for these, and buildCourseFrame never writes it into the outgoing frame. */
+function clampTemp(courseName: string, requestedTemp: number): number {
+    const course = COURSES[courseName]
+    if (course.minTemp === undefined || course.maxTemp === undefined) return 0
+    if (!Number.isFinite(requestedTemp)) return course.minTemp
+    return Math.min(course.maxTemp, Math.max(course.minTemp, Math.round(requestedTemp)))
+}
 
 /** Clamps a requested total-seconds value to the selected course's own real range, then snaps to
  *  the confirmed 5-second step. */
@@ -369,12 +418,20 @@ function clampTotalSeconds(courseName: string, totalSeconds: number): number {
  *  the file header's MIN/MAX SECONDS note. */
 const MAX_ENCODABLE_SECONDS = 255 * 100 + 99
 
-function buildCourseFrame(courseName: string, totalSeconds: number): Buffer {
+function buildCourseFrame(courseName: string, totalSeconds: number, targetTemp: number): Buffer {
     const course = COURSES[courseName]
     const inner = Buffer.from(course.inner)
     const encodable = Math.min(totalSeconds, MAX_ENCODABLE_SECONDS)
     inner[7] = Math.floor(encodable / 100) & 0xff
     inner[8] = encodable % 100
+    // Only overridden for a course with a real adjustable range (see COURSES/clampTemp) - every
+    // other course keeps its captured template's own inner[10], unmodified. UNVERIFIED: this write
+    // offset was identified from the file header's inner[10] note, but sending a non-default
+    // temperature has not yet been confirmed live against a real 오븐/식품건조 run the way the
+    // time offsets were - check the appliance's own display after a send before trusting it.
+    if (course.minTemp !== undefined && course.maxTemp !== undefined) {
+        inner[10] = clampTemp(courseName, targetTemp)
+    }
     return inner
 }
 
@@ -386,6 +443,7 @@ export default class Device extends AABBDevice {
     selectedCourse: string = DEFAULT_COURSE
     cookMinutes: number = Math.floor(COURSES[DEFAULT_COURSE].defaultTotalSeconds / 60)
     cookSeconds: number = COURSES[DEFAULT_COURSE].defaultTotalSeconds % 60
+    cookTemp: number = COURSES[DEFAULT_COURSE].defaultTemp ?? 0
 
     private seenUnknown = new Set<string>()
 
@@ -427,6 +485,20 @@ export default class Device extends AABBDevice {
                     mode: 'box',
                     state_topic: '$this/cook_time_seconds',
                     command_topic: '$this/cook_time_seconds/set',
+                },
+                target_temperature: {
+                    platform: 'number',
+                    unique_id: '$deviceid-target_temperature',
+                    name: 'Target temperature',
+                    icon: 'mdi:thermometer',
+                    device_class: 'temperature',
+                    unit_of_measurement: '°C',
+                    min: TEMP_MIN_POSSIBLE,
+                    max: TEMP_MAX_POSSIBLE,
+                    step: 1,
+                    mode: 'box',
+                    state_topic: '$this/target_temperature',
+                    command_topic: '$this/target_temperature/set',
                 },
                 send: {
                     platform: 'button',
@@ -488,6 +560,7 @@ export default class Device extends AABBDevice {
         this.publishProperty('course', this.selectedCourse)
         this.publishProperty('cook_time_minutes', this.cookMinutes)
         this.publishProperty('cook_time_seconds', this.cookSeconds)
+        this.publishProperty('target_temperature', this.cookTemp)
         log(
             'status',
             this.id,
@@ -507,6 +580,13 @@ export default class Device extends AABBDevice {
         this.publishProperty('cook_time_seconds', this.cookSeconds)
     }
 
+    /** Clamps to the selected course's own real range (see COURSES/clampTemp) - always 0 for a
+     *  course with no adjustable temperature, same as buildCourseFrame's own handling. */
+    private setCookTemp(requestedTemp: number) {
+        this.cookTemp = clampTemp(this.selectedCourse, requestedTemp)
+        this.publishProperty('target_temperature', this.cookTemp)
+    }
+
     setProperty(prop: string, mqttValue: string) {
         switch (prop) {
             case 'course': {
@@ -515,14 +595,17 @@ export default class Device extends AABBDevice {
                     return
                 }
                 this.selectedCourse = mqttValue
-                // Switching course resets the time controls to that course's own UI default,
-                // matching the real web UI's behaviour observed while capturing the course table.
+                // Switching course resets the time and temperature controls to that course's own
+                // UI default, matching the real web UI's behaviour observed while capturing the
+                // course table.
                 const def = COURSES[mqttValue].defaultTotalSeconds
                 this.cookMinutes = Math.floor(def / 60)
                 this.cookSeconds = def % 60
+                this.cookTemp = COURSES[mqttValue].defaultTemp ?? 0
                 this.publishProperty('course', mqttValue)
                 this.publishProperty('cook_time_minutes', this.cookMinutes)
                 this.publishProperty('cook_time_seconds', this.cookSeconds)
+                this.publishProperty('target_temperature', this.cookTemp)
                 return
             }
             case 'cook_time_minutes':
@@ -531,9 +614,12 @@ export default class Device extends AABBDevice {
             case 'cook_time_seconds':
                 this.setCookTime(this.cookMinutes * 60 + Number(mqttValue))
                 return
+            case 'target_temperature':
+                this.setCookTemp(Number(mqttValue))
+                return
             case 'send': {
                 const totalSeconds = this.cookMinutes * 60 + this.cookSeconds
-                this.send(buildCourseFrame(this.selectedCourse, totalSeconds))
+                this.send(buildCourseFrame(this.selectedCourse, totalSeconds, this.cookTemp))
                 return
             }
             case 'cancel':
@@ -561,7 +647,7 @@ export default class Device extends AABBDevice {
             const current = buf.subarray(2 + STATE_RECORD_LEN, 2 + 2 * STATE_RECORD_LEN)
             const status = current[0]
             this.publishProperty('current_status', decodeStatus(status))
-            this.publishProperty('oven_temperature', current[6])
+            this.publishProperty('oven_temperature', NO_TEMPERATURE_COURSE_IDS.has(current[1]) ? undefined : current[6])
 
             // Only meaningful while actually preheating/cooking/cleaning/paused - see file
             // header's ACTIVE COURSE, ACTIVE CLEANING FUNCTION, and REMAINING TIME sections for
