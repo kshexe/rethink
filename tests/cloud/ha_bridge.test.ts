@@ -39,18 +39,18 @@ function mockControlState(initial: string[] = []): ControlState {
 }
 
 /** Constructs a device and feeds it one status frame so it publishes its config right away. */
-function makeMappedDevice(bridge: HA_bridge) {
+async function makeMappedDevice(bridge: HA_bridge) {
     const thinq = new MockThinq2Device(DEVICE_ID, META)
-    bridge.newDevice(thinq)
+    await bridge.newDevice(thinq)
     thinq.emit('data', SAMPLE_STATUS)
     return thinq
 }
 
 describe('HA_bridge device naming from the linked LG account', () => {
-    test('without an LG bridge, the device keeps its static default name', () => {
+    test('without an LG bridge, the device keeps its static default name', async () => {
         const ha = new MockHAConnection()
         const bridge = new HA_bridge(ha.asConnection())
-        makeMappedDevice(bridge)
+        await makeMappedDevice(bridge)
         try {
             assert.equal(ha.devices[DEVICE_ID].config!.device.name, 'LG Dryer')
         } finally {
@@ -58,11 +58,11 @@ describe('HA_bridge device naming from the linked LG account', () => {
         }
     })
 
-    test('the device keeps its static name when the LG account has none for it', () => {
+    test('the device keeps its static name when the LG account has none for it', async () => {
         const ha = new MockHAConnection()
         const lgBridge = new LgCloudBridge(state(), new DeviceManager())
-        const bridge = new HA_bridge(ha.asConnection(), lgBridge)
-        makeMappedDevice(bridge)
+        const bridge = new HA_bridge(ha.asConnection(), lgBridge, undefined, 10)
+        await makeMappedDevice(bridge)
         try {
             assert.equal(ha.devices[DEVICE_ID].config!.device.name, 'LG Dryer')
         } finally {
@@ -70,12 +70,12 @@ describe('HA_bridge device naming from the linked LG account', () => {
         }
     })
 
-    test('the device is renamed from the LG account once its alias is known', () => {
+    test('the device is renamed from the LG account once its alias is known', async () => {
         const ha = new MockHAConnection()
         const lgBridge = new LgCloudBridge(state(), new DeviceManager())
         lgBridge.deviceNames = new Map([[DEVICE_ID, '거실에어컨']])
         const bridge = new HA_bridge(ha.asConnection(), lgBridge)
-        makeMappedDevice(bridge)
+        await makeMappedDevice(bridge)
         try {
             assert.equal(ha.devices[DEVICE_ID].config!.device.name, '거실에어컨')
         } finally {
@@ -83,11 +83,11 @@ describe('HA_bridge device naming from the linked LG account', () => {
         }
     })
 
-    test('a namesChanged event renames an already-mapped device', () => {
+    test('a namesChanged event renames an already-mapped device', async () => {
         const ha = new MockHAConnection()
         const lgBridge = new LgCloudBridge(state(), new DeviceManager())
-        const bridge = new HA_bridge(ha.asConnection(), lgBridge)
-        makeMappedDevice(bridge)
+        const bridge = new HA_bridge(ha.asConnection(), lgBridge, undefined, 10)
+        await makeMappedDevice(bridge)
         try {
             assert.equal(ha.devices[DEVICE_ID].config!.device.name, 'LG Dryer')
 
@@ -99,13 +99,61 @@ describe('HA_bridge device naming from the linked LG account', () => {
             bridge.haDevices.get(DEVICE_ID)?.drop()
         }
     })
+
+    test('a brand-new device waits for a slow-but-successful name lookup, so its very first publish already carries the real name - not just a fast-follow correction', async () => {
+        const ha = new MockHAConnection()
+        const lgBridge = new LgCloudBridge(state(), new DeviceManager())
+        // No cached name yet (fresh device) - simulate the account answering slowly but within
+        // the timeout, the same way the real refreshNames() would populate deviceNames.
+        lgBridge.refreshNames = () => {
+            lgBridge.deviceNames = new Map([[DEVICE_ID, '냉장고']])
+            return new Promise((resolve) => setTimeout(resolve, 10))
+        }
+        const bridge = new HA_bridge(ha.asConnection(), lgBridge, undefined, 5000)
+        try {
+            await makeMappedDevice(bridge)
+            assert.equal(ha.devices[DEVICE_ID].config!.device.name, '냉장고')
+        } finally {
+            bridge.haDevices.get(DEVICE_ID)?.drop()
+        }
+    })
+
+    test('a name lookup that never answers does not block the device forever - it falls back to the static name after the bounded wait', async () => {
+        const ha = new MockHAConnection()
+        const lgBridge = new LgCloudBridge(state(), new DeviceManager())
+        lgBridge.refreshNames = () => new Promise(() => {}) // never resolves
+        const bridge = new HA_bridge(ha.asConnection(), lgBridge, undefined, 10)
+        try {
+            await makeMappedDevice(bridge)
+            assert.equal(ha.devices[DEVICE_ID].config!.device.name, 'LG Dryer')
+        } finally {
+            bridge.haDevices.get(DEVICE_ID)?.drop()
+        }
+    })
+
+    test('an already-known device (the common case - cached from disk) is not delayed at all', async () => {
+        const ha = new MockHAConnection()
+        const lgBridge = new LgCloudBridge(state(), new DeviceManager())
+        lgBridge.deviceNames = new Map([[DEVICE_ID, '거실에어컨']])
+        // A refreshNames() call here would mean the wait wasn't actually skipped - fail loudly.
+        lgBridge.refreshNames = () => {
+            throw new Error('refreshNames() should not be called when the name is already known')
+        }
+        const bridge = new HA_bridge(ha.asConnection(), lgBridge)
+        try {
+            await makeMappedDevice(bridge)
+            assert.equal(ha.devices[DEVICE_ID].config!.device.name, '거실에어컨')
+        } finally {
+            bridge.haDevices.get(DEVICE_ID)?.drop()
+        }
+    })
 })
 
 describe('HA_bridge control enable/disable', () => {
-    test('is enabled by default: a command from HA reaches the appliance', () => {
+    test('is enabled by default: a command from HA reaches the appliance', async () => {
         const ha = new MockHAConnection()
         const bridge = new HA_bridge(ha.asConnection())
-        const thinq = makeMappedDevice(bridge)
+        const thinq = await makeMappedDevice(bridge)
         try {
             assert.equal(bridge.isControlEnabled(DEVICE_ID), true)
             ha.setProperty(DEVICE_ID, 'power', 'command', 'ON')
@@ -115,10 +163,10 @@ describe('HA_bridge control enable/disable', () => {
         }
     })
 
-    test('disabling control removes the switch component from the published config, leaving the sensor', () => {
+    test('disabling control removes the switch component from the published config, leaving the sensor', async () => {
         const ha = new MockHAConnection()
         const bridge = new HA_bridge(ha.asConnection())
-        makeMappedDevice(bridge)
+        await makeMappedDevice(bridge)
         try {
             assert.ok(ha.devices[DEVICE_ID].config!.components.power, 'switch present while enabled')
 
@@ -139,10 +187,10 @@ describe('HA_bridge control enable/disable', () => {
         }
     })
 
-    test('a command still cannot reach the appliance while disabled, and works again once re-enabled', () => {
+    test('a command still cannot reach the appliance while disabled, and works again once re-enabled', async () => {
         const ha = new MockHAConnection()
         const bridge = new HA_bridge(ha.asConnection())
-        const thinq = makeMappedDevice(bridge)
+        const thinq = await makeMappedDevice(bridge)
         try {
             bridge.setControlEnabled(DEVICE_ID, false)
 
@@ -161,13 +209,13 @@ describe('HA_bridge control enable/disable', () => {
         }
     })
 
-    test('a disabled device with a linked LG account still gets its real name on the filtered config (name and control-filter wrapping compose correctly)', () => {
+    test('a disabled device with a linked LG account still gets its real name on the filtered config (name and control-filter wrapping compose correctly)', async () => {
         const ha = new MockHAConnection()
         const lgBridge = new LgCloudBridge(state(), new DeviceManager())
         lgBridge.deviceNames = new Map([[DEVICE_ID, '거실건조기']])
         const bridge = new HA_bridge(ha.asConnection(), lgBridge)
         try {
-            makeMappedDevice(bridge)
+            await makeMappedDevice(bridge)
             bridge.setControlEnabled(DEVICE_ID, false)
 
             assert.equal(ha.devices[DEVICE_ID].config!.device.name, '거실건조기')
@@ -177,10 +225,10 @@ describe('HA_bridge control enable/disable', () => {
         }
     })
 
-    test('a disabled device keeps publishing its own state to HA - only the HA-to-device direction is blocked', () => {
+    test('a disabled device keeps publishing its own state to HA - only the HA-to-device direction is blocked', async () => {
         const ha = new MockHAConnection()
         const bridge = new HA_bridge(ha.asConnection())
-        makeMappedDevice(bridge)
+        await makeMappedDevice(bridge)
         try {
             bridge.setControlEnabled(DEVICE_ID, false)
 
@@ -193,26 +241,26 @@ describe('HA_bridge control enable/disable', () => {
         }
     })
 
-    test('a device already disabled in a persisted ControlState starts filtered, before it even connects', () => {
+    test('a device already disabled in a persisted ControlState starts filtered, before it even connects', async () => {
         const ha = new MockHAConnection()
         const controlState = mockControlState([DEVICE_ID])
         const bridge = new HA_bridge(ha.asConnection(), undefined, controlState)
         try {
             assert.equal(bridge.isControlEnabled(DEVICE_ID), false)
 
-            makeMappedDevice(bridge)
+            await makeMappedDevice(bridge)
             assert.equal(ha.devices[DEVICE_ID].config!.components.power, undefined)
         } finally {
             bridge.haDevices.get(DEVICE_ID)?.drop()
         }
     })
 
-    test('toggling control writes the change through to ControlState, so it survives a restart', () => {
+    test('toggling control writes the change through to ControlState, so it survives a restart', async () => {
         const ha = new MockHAConnection()
         const controlState = mockControlState()
         const bridge = new HA_bridge(ha.asConnection(), undefined, controlState)
         try {
-            makeMappedDevice(bridge)
+            await makeMappedDevice(bridge)
 
             bridge.setControlEnabled(DEVICE_ID, false)
             assert.deepEqual(controlState.getDisabledDevices(), [DEVICE_ID])
@@ -224,11 +272,11 @@ describe('HA_bridge control enable/disable', () => {
         }
     })
 
-    test('without a ControlState (e.g. most tests above), the toggle still works but nothing is persisted', () => {
+    test('without a ControlState (e.g. most tests above), the toggle still works but nothing is persisted', async () => {
         const ha = new MockHAConnection()
         const bridge = new HA_bridge(ha.asConnection())
         try {
-            makeMappedDevice(bridge)
+            await makeMappedDevice(bridge)
             bridge.setControlEnabled(DEVICE_ID, false)
             assert.equal(bridge.isControlEnabled(DEVICE_ID), false)
             assert.equal(ha.devices[DEVICE_ID].config!.components.power, undefined)

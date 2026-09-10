@@ -47,6 +47,9 @@ class Bridge {
         readonly HA: Connection,
         readonly lgBridge?: LgCloudBridge,
         readonly controlState?: ControlState,
+        // Overridable only so a test can use a short wait instead of actually waiting out the
+        // real default - see newDevice() for what this bounds.
+        private readonly nameLookupTimeoutMs = 5000,
     ) {
         this.controlDisabled = new Set(controlState?.getDisabledDevices() ?? [])
 
@@ -131,10 +134,29 @@ class Bridge {
         if (hadevice.config) hadevice.publishConfig()
     }
 
-    newDevice(thinqdev: AnyDevice) {
+    /*
+     * Home Assistant hands out an entity's entity_id (the "lg_fridge_door_open" in
+     * binary_sensor.lg_fridge_door_open) the moment it first sees that entity, from whatever
+     * device name the config carried at that instant - and never revisits it on a later config
+     * update, even once the real name arrives and the *friendly* name updates correctly. A device
+     * this bridge has already seen before (deviceNames is seeded from disk - see bridge/index.ts)
+     * resolves lgBridge.name() synchronously and skips this entirely; this only matters for a
+     * device connecting for the very first time ever, whose name has to be asked for over the
+     * network. A bounded wait here, before that device's very first publishConfig() ever happens,
+     * is the only way to give it a shot at "냉장고" instead of the static "LG Fridge" fallback -
+     * once that fallback has been published even once, it's stuck in every entity_id forever.
+     */
+    async newDevice(thinqdev: AnyDevice) {
         const meta = thinqdev.meta
         const oldDevice = this.haDevices.get(thinqdev.id)
         if (oldDevice) oldDevice.drop()
+
+        if (this.lgBridge && !this.lgBridge.name(thinqdev.id)) {
+            await Promise.race([
+                this.lgBridge.refreshNames(),
+                new Promise((resolve) => setTimeout(resolve, this.nameLookupTimeoutMs)),
+            ])
+        }
 
         const devclass = t2deviceTypes[meta.modelId]
         const hadevice = devclass ? new devclass(this.HA, thinqdev, meta) : undefined
