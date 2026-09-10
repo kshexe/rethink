@@ -413,6 +413,13 @@ export default class Device extends TLVDevice {
             0x2fa,
             0x2fb, // fan-RPM diagnostics
             0x20d, // energy-save partner tag (addField'd alongside 0x20f)
+            0x20f, // air purify itself (addModeDependentConfigSwitchField, capability-gated) - was
+            // missing here, so the very first values-response (before addFeatureEntities has run)
+            // flagged it as unmodelled once and the "log an unknown tag only once" dedup then kept
+            // it flagged for good, even after the field existed - confirmed 2026-09-10 against a
+            // real 거실 unit, the only one of the three with air-purify hardware
+            0x21a, // sleeptimer (addTimerField) - same startup-ordering gap, seen on all three units
+            0x221, // error code (addOptionalSensorField) - same gap
         ]) {
             s.add(t)
         }

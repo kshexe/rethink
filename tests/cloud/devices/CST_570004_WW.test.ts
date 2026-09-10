@@ -230,4 +230,21 @@ describe(MODEL_ID, () => {
         assert.equal(thinq.outbox.length, 1, 'queryCaps sent from constructor')
         dev.drop()
     })
+
+    /*
+     * Regression test for a real bug found 2026-09-10: knownTagIds() listed 0x20d (the
+     * energy-save partner tag) but not 0x20f (air purify itself), nor 0x21a (sleeptimer) or
+     * 0x221 (error code) - all three are addField'd normally, but the very first values-response
+     * (received before addFeatureEntities() has run) flagged them as unmodelled once, and the
+     * frame recorder's "log an unknown tag only once" dedup then kept them flagged for good even
+     * after the field existed. Confirmed live against all three of the household's own units.
+     */
+    test('knownTagIds() recognises airclean/sleeptimer/error, not just their partner tags', (t) => {
+        const { dev } = buildReadyDevice(t)
+        const known = dev.knownTagIds()
+        assert.ok(known.has(0x20f), 'airclean (0x20f)')
+        assert.ok(known.has(0x21a), 'sleeptimer (0x21a)')
+        assert.ok(known.has(0x221), 'error code (0x221)')
+        dev.drop()
+    })
 })
