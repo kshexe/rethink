@@ -109,9 +109,9 @@ describe(MODEL_ID, () => {
         assert.equal(c.climate.min_temp, 16)
         assert.equal(c.climate.max_temp, 30)
 
-        // Energy saving comes from the 0x2CB feature bitmap (CST's relocated 0x2CC); the binary
+        // Power saving comes from the 0x2CB feature bitmap (CST's relocated 0x2CC); the binary
         // auto-dry sensor (0x2CB bit2) is masked because auto-dry is exposed as a select instead.
-        assert.ok(c.energysave, 'energysave present (from 0x2CB bit1)')
+        assert.ok(c.power_save, 'power_save present (from 0x2CB bit1)')
 
         // CST fan scale and on/off swing.
         assert.deepEqual(c.climate.fan_modes, ['auto', 'very low', 'low', 'medium', 'high', 'power'])
@@ -128,9 +128,9 @@ describe(MODEL_ID, () => {
         assert.equal(c.humidity?.device_class, 'humidity')
         assert.equal(c.energy_current?.device_class, 'power', 'power sensor always present, even idle')
 
-        // Energy saving rendered as a plain toggle (no assumed_state buttons).
-        assert.ok(c.energysave, 'energysave present')
-        assert.ok(!('optimistic' in c.energysave), 'energysave optimistic flag removed')
+        // Power saving rendered as a plain toggle (no assumed_state buttons).
+        assert.ok(c.power_save, 'power_save present')
+        assert.ok(!('optimistic' in c.power_save), 'power_save optimistic flag removed')
 
         // Filter usage comes from value tags 0x355/0x356, not RAC's priv-command (unpopulated on
         // CST). No RAC priv-command filter entities; a remaining % and used-time sensor instead.

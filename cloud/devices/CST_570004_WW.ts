@@ -315,7 +315,7 @@ export default class Device extends TLVDevice {
     /*
      * The mode-dependent switches (air purify, energy saving) are reported only while the unit
      * runs in the matching mode. Marking them optimistic would make HA show two assumed-state
-     * buttons rather than a normal toggle - not worth it, see energysave/airclean below.
+     * buttons rather than a normal toggle - not worth it, see power_save/air_clean below.
      */
     readonly modeDependentSwitchOptimistic: boolean = false
 
@@ -413,12 +413,12 @@ export default class Device extends TLVDevice {
             0x2fa,
             0x2fb, // fan-RPM diagnostics
             0x20d, // energy-save partner tag (addField'd alongside 0x20f)
-            0x20f, // air purify itself (addModeDependentConfigSwitchField, capability-gated) - was
+            0x20f, // air_clean itself (addModeDependentConfigSwitchField, capability-gated) - was
             // missing here, so the very first values-response (before addFeatureEntities has run)
             // flagged it as unmodelled once and the "log an unknown tag only once" dedup then kept
             // it flagged for good, even after the field existed - confirmed 2026-09-10 against a
             // real 거실 unit, the only one of the three with air-purify hardware
-            0x21a, // sleeptimer (addTimerField) - same startup-ordering gap, seen on all three units
+            0x21a, // sleep_time (addTimerField) - same startup-ordering gap, seen on all three units
             0x221, // error code (addOptionalSensorField) - same gap
         ]) {
             s.add(t)
@@ -713,8 +713,9 @@ export default class Device extends TLVDevice {
             ['100%', 200],
         ])
 
-        // 0x23f ("comfort energy saving", distinct from the plain energy saving of 0x20d that
-        // is exposed below as "energysave") is deliberately NOT exposed as an entity: confirmed
+        // 0x23f ("comfort energy saving", distinct from the plain power saving of 0x20d that
+        // is exposed below as "power_save" - modelJSON's own name for it, airState.powerSave.basic,
+        // not "energySave") is deliberately NOT exposed as an entity: confirmed
         // 2026-09-09 on a real unit that toggling it has no observable effect, and the LG app
         // itself has no control for it at all - there is nothing here to verify or act on.
 
@@ -1005,15 +1006,19 @@ export default class Device extends TLVDevice {
     }
 
     /*
-     * The entities behind the capability bitmaps: air purify, jet, the timers and energy
-     * saving. Auto dry is the other bit in that bitmap but has two forms, so it is separate.
+     * The entities behind the capability bitmaps: air purify, jet, the timers and power saving.
+     * Auto dry is the other bit in that bitmap but has two forms, so it is separate.
+     *
+     * Entity names follow this model's own modelJSON (fetched via rethink's bridge mode - LG's
+     * own field-name schema): air_clean matches airState.wMode.airClean, and power_save matches
+     * airState.powerSave.basic - not "energySave", which does not appear anywhere in the schema.
      */
     addFeatureEntities(config: ClimateConfig) {
         if (this.hasAirPurify()) {
             this.addModeDependentConfigSwitchField(
                 config,
                 0x20f,
-                'airclean',
+                'air_clean',
                 /* Same desc as in lg_thinq */
                 'Air purify',
                 'mdi:air-purifier',
@@ -1029,7 +1034,7 @@ export default class Device extends TLVDevice {
 
         if (this.hasSleepTimer()) {
             // 15h by default - displayed in hex as "FH"
-            this.addTimerField(config, 0x21a, 'sleeptimer', 'Sleep timer', 'mdi:bed-clock', this.sleepTimerMaxMinutes)
+            this.addTimerField(config, 0x21a, 'sleep_time', 'Sleep timer', 'mdi:bed-clock', this.sleepTimerMaxMinutes)
         }
 
         if (this.hasEnergySave()) {
@@ -1037,8 +1042,8 @@ export default class Device extends TLVDevice {
             this.addModeDependentConfigSwitchField(
                 config,
                 0x20d,
-                'energysave',
-                'Energy saving',
+                'power_save',
+                'Power saving',
                 'mdi:flower',
                 'energySave',
                 (mode) => mode === this.modeMaps.toWire.get('cool'),
