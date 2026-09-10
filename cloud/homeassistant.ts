@@ -135,7 +135,28 @@ export class Connection extends TypedEmitter<ConnectionEvents> {
             $rethink: this.config.rethink_prefix,
             $deviceid: id,
         }
-        const configPayload = JSON.stringify(recursiveReplace(config, replacements))
+
+        // Left unset, HA derives the entity-half of entity_id by slugifying `name` itself - which
+        // depends on exact spacing/case/punctuation and isn't something this codebase controls or
+        // has verified across every locale. A component's own key (express_mode, door_open, ...)
+        // is already the exact stable ASCII slug this handler is built around - it's what
+        // unique_id is made from too - so handing it to HA directly as object_id removes that
+        // guesswork entirely, for every device this bridge publishes, not just one handler.
+        //
+        // This only ever affects an entity_id the very first time HA creates it - like the device
+        // name itself (see ha_bridge.ts's newDevice()), it does nothing for one that already
+        // exists under an old slug.
+        const withObjectIds: DeviceDiscovery = {
+            ...config,
+            components: Object.fromEntries(
+                Object.entries(config.components).map(([key, comp]) => [
+                    key,
+                    'object_id' in comp ? comp : { ...comp, object_id: key },
+                ]),
+            ),
+        }
+
+        const configPayload = JSON.stringify(recursiveReplace(withObjectIds, replacements))
         log('publish', configPayload)
         this.client.publish(discoveryTopic + '/config', configPayload)
     }
