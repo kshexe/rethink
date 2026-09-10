@@ -60,11 +60,10 @@ function makeDevice() {
 }
 
 describe(MODEL_ID, () => {
-    test('declares the four writable components plus the read-only door sensors', () => {
+    test('declares the four writable components plus the read-only per-compartment door sensors', () => {
         const { ha } = makeDevice()
         const components = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
         assert.deepEqual(Object.keys(components).sort(), [
-            'door_open',
             'express_mode',
             'freezer_door_open',
             'freezer_temp',
@@ -76,8 +75,8 @@ describe(MODEL_ID, () => {
         assert.equal(components.fridge_temp.max, 7)
         assert.equal(components.freezer_temp.min, -23)
         assert.equal(components.freezer_temp.max, -15)
-        assert.equal(components.door_open.platform, 'binary_sensor')
-        assert.equal(components.door_open.command_topic, undefined, 'read-only, no command topic')
+        assert.equal(components.fridge_door_open.platform, 'binary_sensor')
+        assert.equal(components.fridge_door_open.command_topic, undefined, 'read-only, no command topic')
     })
 
     test('fridge_temp write reproduces the captured frame byte for byte', () => {
@@ -181,18 +180,43 @@ describe(MODEL_ID, () => {
         assert.equal(ha.devices[DEVICE_ID].properties.fridge_temp, undefined)
     })
 
-    test('door_open follows the documented 0=closed/1=open/2=closed(!) convention, not a plain boolean', () => {
+    test('record[7] (anyDoorOpen) backfills both compartments to OFF once closed, but leaves an already-open one alone since it cannot say which door', () => {
         const { ha, thinq } = makeDevice()
+
+        // Fresh device, no per-compartment event seen yet - a closed reading still corrects both,
+        // matching the "why is it unknown after a restart" gap this backfill exists for.
+        assert.equal(ha.devices[DEVICE_ID].properties.fridge_door_open, undefined)
+        thinq.emit('data', STATE_FRIDGE_7) // record[7] raw 0 -> closed
+        assert.equal(ha.devices[DEVICE_ID].properties.fridge_door_open, 'OFF', 'record[7] raw 0 -> closed')
+        assert.equal(ha.devices[DEVICE_ID].properties.freezer_door_open, 'OFF')
+
+        // Both compartments now genuinely open, via the real per-compartment events.
+        thinq.emit('data', FRIDGE_DOOR_OPEN)
+        thinq.emit('data', FREEZER_DOOR_OPEN)
+        assert.equal(ha.devices[DEVICE_ID].properties.fridge_door_open, 'ON')
+        assert.equal(ha.devices[DEVICE_ID].properties.freezer_door_open, 'ON')
+
+        // record[7] raw 1 (open) can't say which compartment, so neither gets touched.
         thinq.emit('data', STATE_DOOR_OPEN_CONSTRUCTED)
-        assert.equal(ha.devices[DEVICE_ID].properties.door_open, 'ON', 'record[7] raw 1 -> open')
+        assert.equal(
+            ha.devices[DEVICE_ID].properties.fridge_door_open,
+            'ON',
+            'unaffected - record[7] alone cannot say which door',
+        )
+        assert.equal(
+            ha.devices[DEVICE_ID].properties.freezer_door_open,
+            'ON',
+            'unaffected - record[7] alone cannot say which door',
+        )
+
+        // record[7] raw 2 - still the documented "closed" quirk - corrects both back to OFF.
         thinq.emit('data', STATE_DOOR_QUIRK_2_IS_CLOSED_CONSTRUCTED)
         assert.equal(
-            ha.devices[DEVICE_ID].properties.door_open,
+            ha.devices[DEVICE_ID].properties.fridge_door_open,
             'OFF',
             'record[7] raw 2 -> still closed, per the documented quirk',
         )
-        thinq.emit('data', STATE_FRIDGE_7)
-        assert.equal(ha.devices[DEVICE_ID].properties.door_open, 'OFF', 'record[7] raw 0 -> closed')
+        assert.equal(ha.devices[DEVICE_ID].properties.freezer_door_open, 'OFF')
     })
 
     test('per-compartment door events publish fridge_door_open and freezer_door_open independently', () => {

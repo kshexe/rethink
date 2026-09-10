@@ -100,7 +100,10 @@ import { note as recordNote } from '../frame-recorder'
  * DOOR OPEN - added 2026-09-10, same cross-reference: fridge_common.ts documents record[7] as
  * `anyDoorOpen // 0=closed 1=open 2=closed!` - a deliberate 3-value quirk, not a plain boolean -
  * and every sibling model's own handler checks `=== 1` specifically for "open" rather than
- * treating anything nonzero as open, which this handler copies.
+ * treating anything nonzero as open, which this handler copies. Not exposed as its own entity
+ * (removed 2026-09-10, once DOOR OPEN BY COMPARTMENT below gave strictly more detail and made a
+ * generic "some door is open" redundant) - kept only as applyStateRecord()'s fallback to correct
+ * fridge_door_open/freezer_door_open to closed, see there.
  *
  * DOOR OPEN BY COMPARTMENT - confirmed live the same day, in a separate frame family entirely: a
  * from-device `aa 08 10 a8 <compartment> <state> <ck> bb` fires on every individual door open/
@@ -113,8 +116,15 @@ import { note as recordNote } from '../frame-recorder'
  * 11 times with no change in the reported compartment), 냉동 왼쪽 -> `0x02`. An earlier attempt to
  * read this as "door index 1/2" (one sensor per physical door) produced contradictory results
  * across repeated tests - dropped once the compartment-based reading explained every sample
- * cleanly instead. record[7] (`anyDoorOpen`) above still exists and moves in lockstep with
- * whichever compartment's flag is set, matching its "at least one door" semantics.
+ * cleanly instead.
+ *
+ * This event frame is the ONLY source for fridge_door_open/freezer_door_open - unlike every other
+ * entity here, they are not part of the regular `10 ec`/`10 eb` state record, so a fresh restart
+ * (or a poll with no door event since) leaves them "unknown" in HA until an actual door open/close
+ * happens. applyStateRecord() partially covers this: whenever record[7] (anyDoorOpen, above) reads
+ * closed, both compartments are certainly closed too, so both get corrected to OFF from there -
+ * but when it reads open, which compartment is responsible still isn't knowable without an actual
+ * `a8` event, so neither is touched.
  *
  * The remaining bytes of both records (0,5,6,8-16) never changed across a full day's captures, so
  * they are read but not asserted on - see the note above 0x39 (57, the food-poisoning-index shown
@@ -224,7 +234,6 @@ export default class Device extends AABBDevice {
     fridgeTemp: number | undefined
     freezerTemp: number | undefined
     expressMode: boolean | undefined
-    doorOpen: boolean | undefined
     fridgeDoorOpen: boolean | undefined
     freezerDoorOpen: boolean | undefined
     smartCareV2: boolean | undefined
@@ -282,14 +291,6 @@ export default class Device extends AABBDevice {
                     icon: 'mdi:shield-check-outline',
                     state_topic: '$this/smart_care_v2',
                     command_topic: '$this/smart_care_v2/set',
-                },
-                door_open: {
-                    platform: 'binary_sensor',
-                    unique_id: '$deviceid-door_open',
-                    name: 'Door open',
-                    icon: 'mdi:fridge-alert-outline',
-                    device_class: 'door',
-                    state_topic: '$this/door_open',
                 },
                 fridge_door_open: {
                     platform: 'binary_sensor',
@@ -355,12 +356,22 @@ export default class Device extends AABBDevice {
             this.publishProperty('express_mode', expressMode ? 'ON' : 'OFF')
         }
 
-        // Matches every sibling 2RE*-model handler's own convention: only 1 means open, not
-        // "nonzero" - see the file header's DOOR OPEN section for the documented 0/1/2 quirk.
-        const doorOpen = record[RECORD_DOOR_OPEN] === 1
-        if (doorOpen !== this.doorOpen) {
-            this.doorOpen = doorOpen
-            this.publishProperty('door_open', doorOpen ? 'ON' : 'OFF')
+        // record[RECORD_DOOR_OPEN] ("anyDoorOpen") has no per-compartment detail of its own, so it
+        // isn't exposed as its own entity (see the file header) - but it's still useful here as a
+        // fallback for fridge_door_open/freezer_door_open, which otherwise only ever change from
+        // the dedicated per-compartment `a8` door event and so start out (and stay, until a real
+        // door event happens) as "unknown" after every restart. When this says nothing is open,
+        // both compartments certainly are not either - matches every sibling handler's convention
+        // of treating only 1 as open, not "nonzero" (0/2 both mean closed, a documented quirk).
+        if (record[RECORD_DOOR_OPEN] !== 1) {
+            if (this.fridgeDoorOpen !== false) {
+                this.fridgeDoorOpen = false
+                this.publishProperty('fridge_door_open', 'OFF')
+            }
+            if (this.freezerDoorOpen !== false) {
+                this.freezerDoorOpen = false
+                this.publishProperty('freezer_door_open', 'OFF')
+            }
         }
 
         const smartCareV2 = record[RECORD_SMART_CARE_V2] === 1
