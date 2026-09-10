@@ -55,10 +55,10 @@ import { note as recordNote } from '../frame-recorder'
  *
  *   record[0]  = 0x02, constant in every capture - not established what this is.
  *   record[1]  = 상칸(top) storage mode - see RECORD_TOP_MODE_NAMES.
- *   record[2]  = 0xff, constant in every capture - modelJSON documents a 4th room
- *                (room2Temp/room4Temp alongside room1/room3) this physical 3-door unit doesn't
- *                have; most likely this offset (and record[5], see below) is that room's slot,
- *                permanently "not present" on this unit.
+ *   record[2]  = 0xff, constant in every capture - modelJSON documents a 4th room, room2Temp
+ *                ("right" side, per its own `_comment` field) alongside room1/room3/room4, that
+ *                this physical 3-door unit doesn't have; this offset (and record[5], see below) is
+ *                most likely that room's slot, permanently "not present" on this unit.
  *   record[3]  = 중칸(middle) storage mode - see RECORD_MIDDLE_MODE_NAMES. Its own menu is
  *                different from 상칸's (no 냉동/냉장 options, has 구입 김치 instead) and the two
  *                compartments don't share a value scheme even where option names overlap - e.g.
@@ -80,13 +80,40 @@ import { note as recordNote } from '../frame-recorder'
  *
  * Per-compartment storage modes confirmed live (2026-09-10, every option in each compartment's
  * own menu, one at a time, via the appliance's own confirm dialog - "식품이 상하지 않도록
- * 주의하세요. 온도(모드)를 바꿀까요?"):
+ * 주의하세요. 온도(모드)를 바꿀까요?"), PLUS the ones below marked (json) - added after the fact by
+ * cross-checking against this exact model's own official modelJSON schema (fetched via rethink's
+ * `/bridge/<id>/modeljson`, see RETHINK memory), which turned up two real gaps live testing missed
+ * and one live-transcription mistake:
  *
- *   상칸(top):    맛지킴 김치 (중)=0x00, (강)=0x01, (약)=0x02, 냉장 (상)=0x03, 냉장 (중)=0x04,
+ *   - 상칸's own live-tested "냉장" submenu was mislabelled 상/중/약; modelJSON's `room1Temp_C`
+ *     enum (index 3/4/5, label keys FRIDGE#MIDDLE/STRONG/WEAK) says 중/강/약 instead - the same
+ *     중/강/약 pattern already used correctly everywhere else in this file. Corrected below.
+ *   - 중칸/하칸 both have an entire submenu (modelJSON `room3Temp_C`/`room4Temp_C` index 3/4/5,
+ *     label key VEGI_FRUIT#MIDDLE/STRONG/WEAK, "야채·과일") that the live sweep never triggered -
+ *     added as index 0x03/0x04/0x05 on both, matching the byte values modelJSON documents.
+ *   - 하칸 also has a `room4Temp_C` index 6 (label key RICE_GRAIN, "쌀·잡곡") never seen live -
+ *     added as 0x06.
+ *
+ *   modelJSON gives the enum *indices* and English label keys authoritatively (it's LG's own
+ *   schema for this exact model, not a guess) but not literal Korean display text (those are
+ *   `@KM_*_W` localization keys, resolved client-side) - the three (json) entries' Korean labels
+ *   below are this codebase's own best rendering of those keys, not confirmed against the app's
+ *   real on-screen wording the way every other entry here is. Byte values are trustworthy either
+ *   way; only the exact label text on these three is unverified.
+ *
+ *   상칸(top):    맛지킴 김치 (중)=0x00, (강)=0x01, (약)=0x02, 냉장 (중)=0x03, 냉장 (강)=0x04,
  *                 냉장 (약)=0x05, 냉동=0x06, 익힘=0x07, 유산균 김치+=0x0a
- *   중칸(middle): 맛지킴 김치 (중)=0x00, (강)=0x01, (약)=0x02, 구입 김치=0x06,
- *                 유산균 김치+=0x07, 익힘=0x0b
- *   하칸(bottom): 맛지킴 김치 (중)=0x00, (강)=0x01, (약)=0x02, 육류/생선=0x07, 오래 보관=0x08
+ *   중칸(middle): 맛지킴 김치 (중)=0x00, (강)=0x01, (약)=0x02, 야채·과일 (중)=0x03 (json),
+ *                 (강)=0x04 (json), (약)=0x05 (json), 구입 김치=0x06, 유산균 김치+=0x07, 익힘=0x0b
+ *   하칸(bottom): 맛지킴 김치 (중)=0x00, (강)=0x01, (약)=0x02, 야채·과일 (중)=0x03 (json),
+ *                 (강)=0x04 (json), (약)=0x05 (json), 쌀·잡곡=0x06 (json), 육류/생선=0x07,
+ *                 오래 보관=0x08
+ *
+ *   modelJSON also confirms the room<->compartment mapping this file already assumed:
+ *   `roomConfig` maps room1Temp="@KM_TOP_ROOM_W", room3Temp="@KM_MIDDLE_ROOM_W",
+ *   room4Temp="@KM_BOTTOM_ROOM_W" - i.e. record[1]/record[3]/record[4] (this unit skips room2,
+ *   the right-side room a 3-door unit doesn't have - see record[2] below, not room4 as an earlier
+ *   draft of this comment guessed before the modelJSON was cross-checked).
  *
  * Baseline confirmed against the real unit's own device page: 상칸=냉동, 중칸=맛지킴 김치 (중),
  * 하칸=맛지킴 김치 (중), 원터치 탈취=off - all three compartments restored to this after testing.
@@ -107,8 +134,8 @@ import { note as recordNote } from '../frame-recorder'
  *     been spotted yet - unlike 2REF21EBNSX_3, this model hasn't even produced a large periodic
  *     full-status dump to go looking in. Needs a capture right as the app's displayed figure
  *     visibly changes - see RETHINK memory `rethink_migration_status` for the baseline value/time.
- *   - room2Temp/room4Temp (modelJSON fields with no corresponding physical compartment on this
- *     unit - see record[2]/record[5] above).
+ *   - room2Temp (the one modelJSON field with no corresponding physical compartment on this unit -
+ *     see record[2]/record[5] above).
  *
  * See RETHINK memory `rethink_migration_status` for the raw capture log this was built from.
  */
@@ -144,8 +171,8 @@ const RECORD_TOP_MODE_NAMES: Record<number, string> = {
     0x00: '맛지킴 김치 (중)',
     0x01: '맛지킴 김치 (강)',
     0x02: '맛지킴 김치 (약)',
-    0x03: '냉장 (상)',
-    0x04: '냉장 (중)',
+    0x03: '냉장 (중)',
+    0x04: '냉장 (강)',
     0x05: '냉장 (약)',
     0x06: '냉동',
     0x07: '익힘',
@@ -156,6 +183,9 @@ const RECORD_MIDDLE_MODE_NAMES: Record<number, string> = {
     0x00: '맛지킴 김치 (중)',
     0x01: '맛지킴 김치 (강)',
     0x02: '맛지킴 김치 (약)',
+    0x03: '야채·과일 (중)',
+    0x04: '야채·과일 (강)',
+    0x05: '야채·과일 (약)',
     0x06: '구입 김치',
     0x07: '유산균 김치+',
     0x0b: '익힘',
@@ -165,6 +195,10 @@ const RECORD_BOTTOM_MODE_NAMES: Record<number, string> = {
     0x00: '맛지킴 김치 (중)',
     0x01: '맛지킴 김치 (강)',
     0x02: '맛지킴 김치 (약)',
+    0x03: '야채·과일 (중)',
+    0x04: '야채·과일 (강)',
+    0x05: '야채·과일 (약)',
+    0x06: '쌀·잡곡',
     0x07: '육류/생선',
     0x08: '오래 보관',
 }
@@ -207,7 +241,7 @@ export default class Device extends AABBDevice {
                 top_compartment: {
                     platform: 'select',
                     unique_id: '$deviceid-top_compartment',
-                    name: 'Top compartment (상칸)',
+                    name: 'Top compartment',
                     icon: 'mdi:fridge-top',
                     options: Object.values(RECORD_TOP_MODE_NAMES),
                     state_topic: '$this/top_compartment',
@@ -216,7 +250,7 @@ export default class Device extends AABBDevice {
                 middle_compartment: {
                     platform: 'select',
                     unique_id: '$deviceid-middle_compartment',
-                    name: 'Middle compartment (중칸)',
+                    name: 'Middle compartment',
                     icon: 'mdi:fridge-industrial',
                     options: Object.values(RECORD_MIDDLE_MODE_NAMES),
                     state_topic: '$this/middle_compartment',
@@ -225,7 +259,7 @@ export default class Device extends AABBDevice {
                 bottom_compartment: {
                     platform: 'select',
                     unique_id: '$deviceid-bottom_compartment',
-                    name: 'Bottom compartment (하칸)',
+                    name: 'Bottom compartment',
                     icon: 'mdi:fridge-bottom',
                     options: Object.values(RECORD_BOTTOM_MODE_NAMES),
                     state_topic: '$this/bottom_compartment',

@@ -25,49 +25,7 @@ function makeConnection() {
     return { conn, published }
 }
 
-test('publishConfig gives every component its own key as object_id, so HA does not have to guess one from `name`', () => {
-    const { conn, published } = makeConnection()
-    const config: DeviceDiscovery = {
-        device: { identifiers: '$deviceid' },
-        origin: { name: 'rethink' },
-        components: {
-            express_mode: { platform: 'switch', unique_id: '$deviceid-express_mode', name: 'Express mode' },
-            fridge_temp: { platform: 'number', unique_id: '$deviceid-fridge_temp', name: 'Fridge temperature' },
-        },
-    }
-
-    conn.publishConfig('dev-1', config)
-
-    assert.equal(published.length, 1)
-    const payload = JSON.parse(published[0].payload)
-    assert.equal(payload.components.express_mode.object_id, 'express_mode')
-    assert.equal(payload.components.fridge_temp.object_id, 'fridge_temp')
-})
-
-test('publishConfig leaves an explicitly-set object_id alone', () => {
-    const { conn, published } = makeConnection()
-    const config: DeviceDiscovery = {
-        device: { identifiers: '$deviceid' },
-        origin: { name: 'rethink' },
-        components: {
-            express_mode: {
-                platform: 'switch',
-                unique_id: '$deviceid-express_mode',
-                name: 'Express mode',
-                // @ts-expect-error object_id isn't in ComponentInfo's static type, same as every
-                // other MQTT-specific field devices pass through allowExtendedType()
-                object_id: 'custom_slug',
-            },
-        },
-    }
-
-    conn.publishConfig('dev-1', config)
-
-    const payload = JSON.parse(published[0].payload)
-    assert.equal(payload.components.express_mode.object_id, 'custom_slug')
-})
-
-test('publishConfig still applies the $this/$rethink/$deviceid topic replacements alongside the new object_id', () => {
+test('publishConfig applies the $this/$rethink/$deviceid topic replacements and publishes to the device-discovery topic', () => {
     const { conn, published } = makeConnection()
     const config: DeviceDiscovery = {
         device: { identifiers: '$deviceid' },
@@ -88,10 +46,33 @@ test('publishConfig still applies the $this/$rethink/$deviceid topic replacement
 
     conn.publishConfig('dev-1', config)
 
+    assert.equal(published.length, 1)
     const payload = JSON.parse(published[0].payload)
     assert.equal(payload.device.identifiers, 'dev-1')
     assert.equal(payload.components.power.state_topic, 'rethink/dev-1/power')
     assert.equal(payload.components.power.command_topic, 'rethink/dev-1/power/set')
-    assert.equal(payload.components.power.object_id, 'power')
     assert.equal(published[0].topic, 'homeassistant/device/rethink/dev-1/config')
+})
+
+test('publishConfig does not inject any entity-naming fields of its own - HA derives entity_id from `name` itself', () => {
+    // See homeassistant.ts's publishConfig() for the history here: this codebase tried both a
+    // per-component `object_id` field and a codebase-computed `default_entity_id`, and reverted
+    // both. The actual fix for the bug that prompted them (a Korean device/compartment name
+    // slugifying into gibberish) is to keep `name` itself plain ASCII at the source - see
+    // 3REK2G03VI200S_2.ts.
+    const { conn, published } = makeConnection()
+    const config: DeviceDiscovery = {
+        device: { identifiers: '$deviceid', model: '2REF21EBNSX_3' },
+        origin: { name: 'rethink' },
+        components: {
+            express_mode: { platform: 'switch', unique_id: '$deviceid-express_mode', name: 'Express mode' },
+        },
+    }
+
+    conn.publishConfig('dev-1', config)
+
+    const payload = JSON.parse(published[0].payload)
+    assert.equal('object_id' in payload.components.express_mode, false)
+    assert.equal('default_entity_id' in payload.components.express_mode, false)
+    assert.equal('entityIdPrefix' in payload, false)
 })

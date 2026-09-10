@@ -136,27 +136,30 @@ export class Connection extends TypedEmitter<ConnectionEvents> {
             $deviceid: id,
         }
 
-        // Left unset, HA derives the entity-half of entity_id by slugifying `name` itself - which
-        // depends on exact spacing/case/punctuation and isn't something this codebase controls or
-        // has verified across every locale. A component's own key (express_mode, door_open, ...)
-        // is already the exact stable ASCII slug this handler is built around - it's what
-        // unique_id is made from too - so handing it to HA directly as object_id removes that
-        // guesswork entirely, for every device this bridge publishes, not just one handler.
+        // HA derives the entity-half of entity_id itself, by slugifying `name` - this codebase does
+        // not try to predict or override that. Two things this fork tried instead, both reverted:
         //
-        // This only ever affects an entity_id the very first time HA creates it - like the device
-        // name itself (see ha_bridge.ts's newDevice()), it does nothing for one that already
-        // exists under an old slug.
-        const withObjectIds: DeviceDiscovery = {
-            ...config,
-            components: Object.fromEntries(
-                Object.entries(config.components).map(([key, comp]) => [
-                    key,
-                    'object_id' in comp ? comp : { ...comp, object_id: key },
-                ]),
-            ),
-        }
-
-        const configPayload = JSON.stringify(recursiveReplace(withObjectIds, replacements))
+        //   - A per-component `object_id` field (2026-09 through version 1.4.22), on the belief it
+        //     would override that slugify step the same way it does in HA's older, single-entity
+        //     discovery topic (`<component>/[<node_id>/]<object_id>/config`). It does not: in this
+        //     device-centric discovery format (one topic, many `components`), `object_id` is not a
+        //     recognised payload field at all - HA's own docs are explicit that the *topic's*
+        //     `<object_id>` segment "does not influence the resulting entity_id" and that
+        //     `default_entity_id` is the actual field for this. HA validated the payload fine and
+        //     just ignored the extra key the whole time, so nothing in the discovery flow ever
+        //     complained that it was dead code.
+        //   - `default_entity_id` itself, computed here from a codebase-side guess at a good prefix
+        //     (the model id, then a hand-rolled Korean romanizer of the account's device name).
+        //     Reverted at the user's direction 2026-09-10: baking in a name-derived prefix has to be
+        //     kept in sync by hand if the account's device name is ever renamed later, for no benefit
+        //     over just not fighting HA's own naming - see git history if either is ever wanted back.
+        //
+        // The actual, narrower bug this was chasing - "하칸" (a compartment name embedded inside a
+        // component's own `name`) coming out phonetically transliterated into entity_id as "hakan" -
+        // is fixed at the source instead: don't put Korean text in a component's `name` in the first
+        // place (see e.g. 3REK2G03VI200S_2.ts). A `name` that's already plain ASCII slugifies exactly
+        // as expected, the same way it always has for every device in this fork that never hit this.
+        const configPayload = JSON.stringify(recursiveReplace(config, replacements))
         log('publish', configPayload)
         this.client.publish(discoveryTopic + '/config', configPayload)
     }

@@ -103,12 +103,33 @@ function t2setup(manager: DeviceManager) {
     // internal MQTT broker
     const broker = new Broker()
 
+    // TCP keepalive on the appliance-facing MQTT socket, on top of the broker's own 5-minute
+    // data-inactivity timeout (see mqtt-broker.ts's accept()). The two catch different failure
+    // modes: that timeout only fires once *this* socket has gone quiet, which never happens for a
+    // "zombie" connection where the appliance's own MQTT pings keep arriving while the return path
+    // is actually dead (a stale NAT/firewall mapping is a common cause) - TCP keepalive probes let
+    // the OS notice and tear down a half-open connection like that far sooner, prompting the
+    // appliance to reconnect instead of sitting on a socket that looks alive but isn't. Doesn't
+    // address a device that never dials in at all (a different, already-understood failure mode for
+    // this project - see RETHINK memory `rethink_migration_status`'s 이서에어컨 notes); this is
+    // purely about connections that did connect and then silently rotted. Community-reported fix
+    // (Naver cafe.naver.com/koreassistant, 2026-09-10) for the same class of symptom on a fork of
+    // this project; adopted here since it is low-risk and addresses a real gap this fork's own
+    // idle-timeout doesn't cover on its own.
+    const withKeepalive = (accept: (socket: net.Socket) => void) => (socket: net.Socket) => {
+        socket.setKeepAlive(true, 60_000)
+        accept(socket)
+    }
+
     if (config.mqtt) {
-        tls.createServer(tlsOptions, broker.accept.bind(broker)).listen(
+        tls.createServer(tlsOptions, withKeepalive(broker.accept.bind(broker))).listen(
             config.mqtts_port.bind,
             config.mqtts_port.address,
         )
-        net.createServer({}, broker.accept.bind(broker)).listen(config.mqtt_port.bind, config.mqtt_port.address)
+        net.createServer({}, withKeepalive(broker.accept.bind(broker))).listen(
+            config.mqtt_port.bind,
+            config.mqtt_port.address,
+        )
     }
 
     const acceptor = new T2Acceptor(broker)

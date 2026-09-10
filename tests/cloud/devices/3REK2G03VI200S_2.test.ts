@@ -53,6 +53,25 @@ function makeDevice() {
 }
 
 describe(MODEL_ID, () => {
+    test('component names are plain ASCII, with no Korean text for HA to mangle when it derives entity_id', () => {
+        // Regression test for the real 2026-09-10 bug: this device's component names used to carry
+        // a Korean compartment hint ("Bottom compartment (하칸)"), and HA's own entity_id slugifier
+        // phonetically transliterated it into "..._hakan" - not something this codebase chose or
+        // can reliably override (see homeassistant.ts's publishConfig() for what was tried and
+        // reverted). The durable fix is simply not putting non-ASCII text in `name` in the first
+        // place; HA's own default slugify handles plain ASCII exactly as expected already, the same
+        // way it always has for every other device in this fork.
+        const { ha } = makeDevice()
+        const components = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
+        for (const [key, comp] of Object.entries(components)) {
+            assert.equal(
+                /^[\x20-\x7e]*$/.test(comp.name as string),
+                true,
+                `${key}'s name ("${comp.name}") is not plain ASCII`,
+            )
+        }
+    })
+
     test('declares the three per-compartment selects, one-touch deodorize switch, and two door sensors', () => {
         const { ha } = makeDevice()
         const components = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
@@ -68,17 +87,22 @@ describe(MODEL_ID, () => {
             '맛지킴 김치 (중)',
             '맛지킴 김치 (강)',
             '맛지킴 김치 (약)',
-            '냉장 (상)',
             '냉장 (중)',
+            '냉장 (강)',
             '냉장 (약)',
             '냉동',
             '익힘',
             '유산균 김치+',
         ])
+        // 야채·과일 (중/강/약) and, on 하칸 only, 쌀·잡곡 come from this exact model's own official
+        // modelJSON schema (room3Temp_C/room4Temp_C), not a live capture - see the file header.
         assert.deepEqual(components.middle_compartment.options, [
             '맛지킴 김치 (중)',
             '맛지킴 김치 (강)',
             '맛지킴 김치 (약)',
+            '야채·과일 (중)',
+            '야채·과일 (강)',
+            '야채·과일 (약)',
             '구입 김치',
             '유산균 김치+',
             '익힘',
@@ -87,6 +111,10 @@ describe(MODEL_ID, () => {
             '맛지킴 김치 (중)',
             '맛지킴 김치 (강)',
             '맛지킴 김치 (약)',
+            '야채·과일 (중)',
+            '야채·과일 (강)',
+            '야채·과일 (약)',
+            '쌀·잡곡',
             '육류/생선',
             '오래 보관',
         ])
