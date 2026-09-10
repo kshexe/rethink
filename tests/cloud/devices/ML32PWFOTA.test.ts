@@ -77,6 +77,60 @@ const STATE_CLEANING = buf(
     'aa3e40ec07000000000000000000000000000000000000000000000000000000031201000b000000000000000000000000000000000000000000000069bb',
 )
 
+// A dedicated, one-course-at-a-time follow-up session: the user started each real course in turn,
+// reporting it live - see ML32PWFOTA.ts's ACTIVE COURSE AND REMAINING TIME section. Each of these
+// is the "cooking_in_progress" frame from one such run.
+const STATE_RANGE_COOKING_30S = buf(
+    'aa3e40ec0000000000000000010000000000000000000000000000000000000002010000001e0000000000000000000000000000000000000000000063bb',
+)
+const STATE_GRILL_COOKING_20MIN = buf(
+    'aa3e40ec07030000010300000000000000000000000000000000000000000000020300001400000000000000000000000000000000000000000000006ebb',
+)
+const STATE_FERMENT_COOKING_1H15M = buf(
+    'aa3e40ec071500053b3428000000000000000000000000000000000000000000021500010f00280000000000000000000000000000000000000000004ebb',
+)
+const STATE_STEAM_FERMENT_COOKING_9H = buf(
+    'aa3e40ec07160000001d2800000000000000000000000000000000000000000002160009000028000000000000000000000000000000000000000000eabb',
+)
+
+// All 5 of the appliance's own maintenance functions, run live one at a time - see ML32PWFOTA.ts's
+// ACTIVE CLEANING FUNCTION section. record[1] reads the same 0x12 "cleaning" marker in every one
+// (not a course id), and record[3] - "hours remaining" while actually cooking - is repurposed as
+// the function id here instead.
+const STATE_DEODORIZE_COOKING_11MIN = buf(
+    'aa3e40ec07000000000000000000000000000000000000000000000000000000031201000b000000000000000000000000000000000000000000000069bb',
+)
+const STATE_STEAM_CLEAN_PAUSED = buf(
+    'aa3e40ec031202000f0000000000000000000000000000000000000000000000041202000e3900000000000000000000000000000000000000000000ccbb',
+)
+const STATE_CAVITY_DRY_COOKING_12MIN = buf(
+    'aa3e40ec07000000000000000000000000000000000000000000000000000000031203000c00000000000000000000000000000000000000000000006abb',
+)
+const STATE_RESIDUAL_WATER_PAUSED = buf(
+    'aa3e40ec0312040004000000000000000000000000000000000000000000000004120400033a00000000000000000000000000000000000000000000ddbb',
+)
+const STATE_STEAM_GENERATOR_CLEAN_PAUSED = buf(
+    'aa3e40ec0312050017000000000000000000000000000000000000000000000004120500163a00000000000000000000000000000000000000000000e5bb',
+)
+// Real capture (2026-09-10): a genuine built-in 자동요리 recipe (레인지 category, id 8/1 =
+// 감자삶기 0.8kg) starting - 13:00 default. See decodeCourseId's header comment.
+const STATE_AUTOCOOK_POTATO = buf(
+    'aa3e40ec07080100000000000000000000000000000000000000000000000000020801000d000000000000000000000000000000000000000000000069bb',
+)
+// Real capture (2026-09-10): remote-sent 레인지/10s via HA, resent after an odd ack. Confirmed
+// live that a remote send doesn't land on a plain manual course - LG's firmware replays it
+// through a saved "나만의 레시피"(my recipe) slot instead, record[1] pinned at 0x13 regardless of
+// which manual course was actually picked before sending. See MY_RECIPE_MARKER's header comment.
+const STATE_AUTOCOOK_REMOTE_SEND_10S = buf(
+    'aa3e40ec0713000000130004000000000000000000000000000000000000000002130000000a000400000000000000000000000000000000000000003dbb',
+)
+// Real capture (2026-09-10): remote-sent 구이/10s via HA - a third remote send (after 오븐, then
+// 레인지), used only to disprove that record[7] tracks the live course selection (it read `4` -
+// 오븐's id - in all three, including this 구이 one).
+const STATE_AUTOCOOK_REMOTE_SEND_GRILL_10S = buf(
+    'aa3e40ec00130000000000040100000000000000000000000000000000000000071300000004000400000000000000000000000000000000000000001bbb',
+)
+
 function makeDevice() {
     const ha = new MockHAConnection()
     const thinq = new MockThinq2Device(DEVICE_ID, META)
@@ -89,12 +143,15 @@ describe(MODEL_ID, () => {
         const { ha } = makeDevice()
         const components = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
         assert.deepEqual(Object.keys(components).sort(), [
+            'active_cleaning_function',
+            'active_course',
             'cancel',
             'cook_time_minutes',
             'cook_time_seconds',
             'course',
             'current_status',
             'oven_temperature',
+            'remaining_time',
             'send',
         ])
         assert.deepEqual(components.course.options, ['구이', '레인지', '오븐', '스팀', '식품건조', '발효'])
@@ -152,14 +209,49 @@ describe(MODEL_ID, () => {
         assert.equal(thinq.outbox[0].toString('hex'), CANCEL_FRAME.toString('hex'))
     })
 
-    test('cook_time_minutes and cook_time_seconds are clamped to the real confirmed ranges', () => {
+    test("cook_time is clamped to the selected course's own real range (구이: 10s-50min)", () => {
         const { ha, dev } = makeDevice()
         dev.setProperty('cook_time_minutes', '999')
-        assert.equal(ha.devices[DEVICE_ID].properties.cook_time_minutes, 50, 'clamped to max 50')
+        assert.equal(ha.devices[DEVICE_ID].properties.cook_time_minutes, 50, 'clamped to max 50 min')
+        assert.equal(ha.devices[DEVICE_ID].properties.cook_time_seconds, 0)
+
         dev.setProperty('cook_time_minutes', '-5')
-        assert.equal(ha.devices[DEVICE_ID].properties.cook_time_minutes, 0, 'clamped to min 0')
+        assert.equal(ha.devices[DEVICE_ID].properties.cook_time_minutes, 0, 'clamped to min 10s, not 0')
+        assert.equal(ha.devices[DEVICE_ID].properties.cook_time_seconds, 10)
+
+        // 58 snaps to 60 (nearest 5s step), which is a valid total for 구이 - no longer clamped
+        // down to 55, since the real limit is the course's own max (50 min), not a fixed per-field
+        // ceiling.
         dev.setProperty('cook_time_seconds', '58')
-        assert.equal(ha.devices[DEVICE_ID].properties.cook_time_seconds, 55, 'snaps to 60 then clamps to max 55')
+        assert.equal(ha.devices[DEVICE_ID].properties.cook_time_minutes, 1)
+        assert.equal(ha.devices[DEVICE_ID].properties.cook_time_seconds, 0)
+    })
+
+    test('cook_time respects a much narrower course range (스팀: 10s-30min) and a course that allows 0 (오븐)', () => {
+        const { ha, dev } = makeDevice()
+        dev.setProperty('course', '스팀')
+        dev.setProperty('cook_time_minutes', '999')
+        assert.equal(ha.devices[DEVICE_ID].properties.cook_time_minutes, 30, "clamped to 스팀's own 30-minute max")
+
+        dev.setProperty('course', '오븐')
+        dev.setProperty('cook_time_minutes', '0')
+        dev.setProperty('cook_time_seconds', '0')
+        assert.equal(ha.devices[DEVICE_ID].properties.cook_time_minutes, 0)
+        assert.equal(
+            ha.devices[DEVICE_ID].properties.cook_time_seconds,
+            0,
+            '0 is real and valid for 오븐 (preheat-only), not clamped up to a minimum',
+        )
+    })
+
+    test('cook_time allows multi-hour totals for 식품건조/발효 (5min-9h)', () => {
+        const { ha, dev } = makeDevice()
+        dev.setProperty('course', '식품건조')
+        dev.setProperty('cook_time_minutes', '999')
+        assert.equal(ha.devices[DEVICE_ID].properties.cook_time_minutes, 540, 'clamped to 9 hours (540 min), not 50')
+
+        dev.setProperty('cook_time_minutes', '1')
+        assert.equal(ha.devices[DEVICE_ID].properties.cook_time_minutes, 5, 'clamped up to the 5-minute minimum')
     })
 
     test('cook_time_seconds snaps to the nearest confirmed 5-second step', () => {
@@ -240,5 +332,83 @@ describe(MODEL_ID, () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', STATE_CLEANING)
         assert.equal(ha.devices[DEVICE_ID].properties.current_status, 'cleaning')
+    })
+
+    test('active_course and remaining_time match real single-course runs, across the full time range', () => {
+        const { ha, thinq } = makeDevice()
+
+        thinq.emit('data', STATE_RANGE_COOKING_30S)
+        assert.equal(ha.devices[DEVICE_ID].properties.active_course, '레인지')
+        assert.equal(ha.devices[DEVICE_ID].properties.remaining_time, 30)
+
+        thinq.emit('data', STATE_GRILL_COOKING_20MIN)
+        assert.equal(ha.devices[DEVICE_ID].properties.active_course, '구이')
+        assert.equal(ha.devices[DEVICE_ID].properties.remaining_time, 20 * 60)
+
+        thinq.emit('data', STATE_FERMENT_COOKING_1H15M)
+        assert.equal(ha.devices[DEVICE_ID].properties.active_course, '발효')
+        assert.equal(ha.devices[DEVICE_ID].properties.remaining_time, 1 * 3600 + 15 * 60)
+
+        thinq.emit('data', STATE_STEAM_FERMENT_COOKING_9H)
+        assert.equal(ha.devices[DEVICE_ID].properties.active_course, '스팀발효')
+        assert.equal(ha.devices[DEVICE_ID].properties.remaining_time, 9 * 3600)
+    })
+
+    test('active_course and remaining_time are not published while merely queued (preference)', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', STATE_OVEN_PREFERENCE_180C)
+        assert.equal(ha.devices[DEVICE_ID].properties.active_course, undefined)
+        assert.equal(ha.devices[DEVICE_ID].properties.remaining_time, undefined)
+    })
+
+    test('active_cleaning_function identifies all 5 real maintenance runs, not active_course', () => {
+        const { ha, thinq } = makeDevice()
+
+        thinq.emit('data', STATE_DEODORIZE_COOKING_11MIN)
+        assert.equal(ha.devices[DEVICE_ID].properties.active_cleaning_function, '스팀청소탈취')
+        assert.equal(ha.devices[DEVICE_ID].properties.remaining_time, 11 * 60)
+        assert.equal(
+            ha.devices[DEVICE_ID].properties.active_course,
+            undefined,
+            'record[1] is the cleaning marker, not a course id',
+        )
+
+        thinq.emit('data', STATE_STEAM_CLEAN_PAUSED)
+        assert.equal(ha.devices[DEVICE_ID].properties.active_cleaning_function, '스팀청소')
+        assert.equal(ha.devices[DEVICE_ID].properties.remaining_time, 14 * 60 + 57)
+
+        thinq.emit('data', STATE_CAVITY_DRY_COOKING_12MIN)
+        assert.equal(ha.devices[DEVICE_ID].properties.active_cleaning_function, '조리실건조')
+        assert.equal(ha.devices[DEVICE_ID].properties.remaining_time, 12 * 60)
+
+        thinq.emit('data', STATE_RESIDUAL_WATER_PAUSED)
+        assert.equal(ha.devices[DEVICE_ID].properties.active_cleaning_function, '잔수제거')
+        assert.equal(ha.devices[DEVICE_ID].properties.remaining_time, 3 * 60 + 58)
+
+        thinq.emit('data', STATE_STEAM_GENERATOR_CLEAN_PAUSED)
+        assert.equal(ha.devices[DEVICE_ID].properties.active_cleaning_function, '스팀발생기세정')
+        assert.equal(ha.devices[DEVICE_ID].properties.remaining_time, 22 * 60 + 58)
+    })
+
+    test('any of the ~30 built-in auto-cook recipes reports active_course as a generic 자동요리, not a specific recipe name', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', STATE_AUTOCOOK_POTATO)
+        assert.equal(ha.devices[DEVICE_ID].properties.active_course, '자동요리')
+    })
+
+    test('a remote send lands on the custom-recipe slot, reported as "내가 만든 레시피" (matches the appliance\'s own display, confirmed live) separately from 자동요리 (its underlying course is not recoverable - record[7] stays 4 no matter what was actually sent)', () => {
+        const { ha, thinq } = makeDevice()
+
+        thinq.emit('data', STATE_AUTOCOOK_REMOTE_SEND_10S)
+        assert.equal(ha.devices[DEVICE_ID].properties.active_course, '내가 만든 레시피')
+        assert.equal(ha.devices[DEVICE_ID].properties.remaining_time, 10)
+
+        thinq.emit('data', STATE_AUTOCOOK_REMOTE_SEND_GRILL_10S)
+        assert.equal(
+            ha.devices[DEVICE_ID].properties.active_course,
+            '내가 만든 레시피',
+            'same bucket regardless of which course was actually sent (구이 this time, not 오븐)',
+        )
+        assert.equal(ha.devices[DEVICE_ID].properties.remaining_time, 10)
     })
 })

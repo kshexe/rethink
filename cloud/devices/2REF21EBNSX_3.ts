@@ -100,11 +100,21 @@ import { note as recordNote } from '../frame-recorder'
  * DOOR OPEN - added 2026-09-10, same cross-reference: fridge_common.ts documents record[7] as
  * `anyDoorOpen // 0=closed 1=open 2=closed!` - a deliberate 3-value quirk, not a plain boolean -
  * and every sibling model's own handler checks `=== 1` specifically for "open" rather than
- * treating anything nonzero as open, which this handler copies. This unit's own captures never
- * had a door opened during a full day of traffic, so record[7] was always 0 here and this field
- * is unconfirmed against a real open/close transition on this specific unit - only the position
- * and value convention are borrowed from siblings, not a live capture. Flagged in case a real
- * door event ever contradicts it.
+ * treating anything nonzero as open, which this handler copies.
+ *
+ * DOOR OPEN BY COMPARTMENT - confirmed live the same day, in a separate frame family entirely: a
+ * from-device `aa 08 10 a8 <compartment> <state> <ck> bb` fires on every individual door open/
+ * close, where `<compartment>` is `0x01` for the fridge section or `0x02` for the freezer section
+ * and `<state>` is `0x01`/`0x00`. This is NOT one sensor per physical door - the unit has 4 doors
+ * (fridge left/right, freezer left/right) but only 2 electrically distinct signals, one per
+ * compartment, shared by both doors on that side. Confirmed with 4 separate isolated real open/
+ * close tests, live, one door at a time: 냉동 오른쪽 -> `0x02`, 냉장 왼쪽 -> `0x01` (twice,
+ * including one ~6-minute-long open that triggered the appliance's own "door open too long" chime
+ * 11 times with no change in the reported compartment), 냉동 왼쪽 -> `0x02`. An earlier attempt to
+ * read this as "door index 1/2" (one sensor per physical door) produced contradictory results
+ * across repeated tests - dropped once the compartment-based reading explained every sample
+ * cleanly instead. record[7] (`anyDoorOpen`) above still exists and moves in lockstep with
+ * whichever compartment's flag is set, matching its "at least one door" semantics.
  *
  * The remaining bytes of both records (0,5,6,8-16) never changed across a full day's captures, so
  * they are read but not asserted on - see the note above 0x39 (57, the food-poisoning-index shown
@@ -155,6 +165,13 @@ const QUERY_OPCODE = 0xeb
 /** Fixed, parameterless - see the file header. */
 const QUERY_FRAME = Buffer.from('f0ed1211010000010400', 'hex')
 const QUERY_INTERVAL_MS = 5 * 60 * 1000
+
+/** Per-door-open event: `aa 08 10 a8 <compartment> <state> <ck> bb` - see the file header's DOOR
+ *  OPEN BY COMPARTMENT section. `buf` here is the 4-byte body AABBDevice hands to processAABB. */
+const DOOR_EVENT_SUB = 0x10
+const DOOR_EVENT_OPCODE = 0xa8
+const DOOR_EVENT_COMPARTMENT_FRIDGE = 0x01
+const DOOR_EVENT_COMPARTMENT_FREEZER = 0x02
 
 const FRIDGE_TEMP_MIN = 1
 const FRIDGE_TEMP_MAX = 7
@@ -208,6 +225,8 @@ export default class Device extends AABBDevice {
     freezerTemp: number | undefined
     expressMode: boolean | undefined
     doorOpen: boolean | undefined
+    fridgeDoorOpen: boolean | undefined
+    freezerDoorOpen: boolean | undefined
     smartCareV2: boolean | undefined
 
     /** (dir:tag) pairs already flagged as unrecognised, so a repeating one is noted once. */
@@ -271,6 +290,22 @@ export default class Device extends AABBDevice {
                     icon: 'mdi:fridge-alert-outline',
                     device_class: 'door',
                     state_topic: '$this/door_open',
+                },
+                fridge_door_open: {
+                    platform: 'binary_sensor',
+                    unique_id: '$deviceid-fridge_door_open',
+                    name: 'Fridge door open',
+                    icon: 'mdi:fridge-outline',
+                    device_class: 'door',
+                    state_topic: '$this/fridge_door_open',
+                },
+                freezer_door_open: {
+                    platform: 'binary_sensor',
+                    unique_id: '$deviceid-freezer_door_open',
+                    name: 'Freezer door open',
+                    icon: 'mdi:fridge-industrial-outline',
+                    device_class: 'door',
+                    state_topic: '$this/freezer_door_open',
                 },
             },
         })
@@ -390,6 +425,20 @@ export default class Device extends AABBDevice {
         // query response: <sub=0x10> eb <18-byte record> - see the file header.
         if (buf.length === 2 + STATE_RECORD_LEN && buf[0] === QUERY_SUB && buf[1] === QUERY_OPCODE) {
             this.applyStateRecord(buf.subarray(2, 2 + STATE_RECORD_LEN))
+            return
+        }
+
+        // per-compartment door event: <sub=0x10> a8 <compartment> <state> - see the file header's
+        // DOOR OPEN BY COMPARTMENT section.
+        if (buf.length === 4 && buf[0] === DOOR_EVENT_SUB && buf[1] === DOOR_EVENT_OPCODE) {
+            const open = buf[3] === 1
+            if (buf[2] === DOOR_EVENT_COMPARTMENT_FRIDGE && open !== this.fridgeDoorOpen) {
+                this.fridgeDoorOpen = open
+                this.publishProperty('fridge_door_open', open ? 'ON' : 'OFF')
+            } else if (buf[2] === DOOR_EVENT_COMPARTMENT_FREEZER && open !== this.freezerDoorOpen) {
+                this.freezerDoorOpen = open
+                this.publishProperty('freezer_door_open', open ? 'ON' : 'OFF')
+            }
             return
         }
 

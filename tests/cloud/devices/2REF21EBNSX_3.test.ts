@@ -33,18 +33,24 @@ const QUERY_RESPONSE = buf('aa1810eb020404010700ff00010001ffffffffffff019ebb')
 const STATE_SMART_CARE_OFF = buf('aa2a10ec020404010700ff00010001ffffffffffff01020404010200ff00010001ffffffffffff00b3bb')
 // ...and back ON: old record (record[17]=0, off) then new record (record[17]=1, on).
 const STATE_SMART_CARE_ON = buf('aa2a10ec020404010200ff00010001ffffffffffff00020404010700ff00010001ffffffffffff01b3bb')
-// Hand-constructed, NOT a real capture - this unit's door was never opened during a full day of
-// real traffic, so there is no genuine door-open frame to test against (see the file header's
-// DOOR OPEN section). Built from STATE_FRIDGE_7's real shape with only record[7] changed, to check
-// the decode logic itself honours the documented 0=closed/1=open/2=closed(!) convention rather
-// than treating any nonzero byte as open. The checksum is irrelevant - this handler does not
-// verify it.
+// Hand-constructed, NOT a real capture (record[7]'s real captures - see below - happen to only
+// ever show 0/1, not the documented quirk value 2) - built from STATE_FRIDGE_7's real shape with
+// only record[7] changed, to check the decode logic itself honours the documented
+// 0=closed/1=open/2=closed(!) convention rather than treating any nonzero byte as open. The
+// checksum is irrelevant - this handler does not verify it.
 const STATE_DOOR_OPEN_CONSTRUCTED = buf(
     'aa2a10ec020404010700ff00010001ffffffffffff01020704010700ff01010001ffffffffffff01a5bb',
 )
 const STATE_DOOR_QUIRK_2_IS_CLOSED_CONSTRUCTED = buf(
     'aa2a10ec020404010700ff00010001ffffffffffff01020704010700ff02010001ffffffffffff01a4bb',
 )
+
+// Real per-compartment door events, captured 2026-09-10 via 4 separate live, isolated open/close
+// tests (one physical door at a time) - see the file header's DOOR OPEN BY COMPARTMENT section.
+const FRIDGE_DOOR_OPEN = buf('aa0810a8010139bb')
+const FRIDGE_DOOR_CLOSED = buf('aa0810a801003ebb')
+const FREEZER_DOOR_OPEN = buf('aa0810a8020138bb')
+const FREEZER_DOOR_CLOSED = buf('aa0810a8020039bb')
 
 function makeDevice() {
     const ha = new MockHAConnection()
@@ -54,13 +60,15 @@ function makeDevice() {
 }
 
 describe(MODEL_ID, () => {
-    test('declares the four writable components plus the read-only door sensor', () => {
+    test('declares the four writable components plus the read-only door sensors', () => {
         const { ha } = makeDevice()
         const components = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
         assert.deepEqual(Object.keys(components).sort(), [
             'door_open',
             'express_mode',
+            'freezer_door_open',
             'freezer_temp',
+            'fridge_door_open',
             'fridge_temp',
             'smart_care_v2',
         ])
@@ -185,6 +193,28 @@ describe(MODEL_ID, () => {
         )
         thinq.emit('data', STATE_FRIDGE_7)
         assert.equal(ha.devices[DEVICE_ID].properties.door_open, 'OFF', 'record[7] raw 0 -> closed')
+    })
+
+    test('per-compartment door events publish fridge_door_open and freezer_door_open independently', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', FRIDGE_DOOR_OPEN)
+        assert.equal(ha.devices[DEVICE_ID].properties.fridge_door_open, 'ON')
+        assert.equal(
+            ha.devices[DEVICE_ID].properties.freezer_door_open,
+            undefined,
+            'freezer compartment untouched so far',
+        )
+
+        thinq.emit('data', FREEZER_DOOR_OPEN)
+        assert.equal(ha.devices[DEVICE_ID].properties.fridge_door_open, 'ON', 'unaffected by the freezer event')
+        assert.equal(ha.devices[DEVICE_ID].properties.freezer_door_open, 'ON')
+
+        thinq.emit('data', FRIDGE_DOOR_CLOSED)
+        assert.equal(ha.devices[DEVICE_ID].properties.fridge_door_open, 'OFF')
+        assert.equal(ha.devices[DEVICE_ID].properties.freezer_door_open, 'ON', 'unaffected by the fridge event')
+
+        thinq.emit('data', FREEZER_DOOR_CLOSED)
+        assert.equal(ha.devices[DEVICE_ID].properties.freezer_door_open, 'OFF')
     })
 
     test('the state frame publishes the real reading, from the second (current) record', () => {
