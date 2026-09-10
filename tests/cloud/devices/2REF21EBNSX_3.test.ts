@@ -25,11 +25,26 @@ const STATE_EXPRESS_ON = buf('aa2a10ec020404010700ff00010001ffffffffffff01020404
 // express=1) captured mid-day, unrelated to any write of ours - see the file header.
 const QUERY_FRAME_HEX = 'aa0ef0ed1211010000010400ebbb'
 const QUERY_RESPONSE = buf('aa1810eb020404010700ff00010001ffffffffffff019ebb')
-// The state frame that followed the Smart Care+ OFF write pair: old record (smart_care_v2 raw=7,
-// on) then new record (smart_care_v2 raw=2, off).
+// The state frame that followed the Smart Care+ OFF write pair: old record (record[17]=1, on)
+// then new record (record[17]=0, off) - record[4] also happens to move (7->2) in these same real
+// captures, which is what first looked like the smart_care_v2 byte; see 2REF21EBNSX_3.ts's file
+// header for why record[17] (matching upstream fridge_common.ts's documented 0/1 smartCare value)
+// is the one this handler actually reads.
 const STATE_SMART_CARE_OFF = buf('aa2a10ec020404010700ff00010001ffffffffffff01020404010200ff00010001ffffffffffff00b3bb')
-// ...and back ON: old record (raw=2, off) then new record (raw=7, on).
+// ...and back ON: old record (record[17]=0, off) then new record (record[17]=1, on).
 const STATE_SMART_CARE_ON = buf('aa2a10ec020404010200ff00010001ffffffffffff00020404010700ff00010001ffffffffffff01b3bb')
+// Hand-constructed, NOT a real capture - this unit's door was never opened during a full day of
+// real traffic, so there is no genuine door-open frame to test against (see the file header's
+// DOOR OPEN section). Built from STATE_FRIDGE_7's real shape with only record[7] changed, to check
+// the decode logic itself honours the documented 0=closed/1=open/2=closed(!) convention rather
+// than treating any nonzero byte as open. The checksum is irrelevant - this handler does not
+// verify it.
+const STATE_DOOR_OPEN_CONSTRUCTED = buf(
+    'aa2a10ec020404010700ff00010001ffffffffffff01020704010700ff01010001ffffffffffff01a5bb',
+)
+const STATE_DOOR_QUIRK_2_IS_CLOSED_CONSTRUCTED = buf(
+    'aa2a10ec020404010700ff00010001ffffffffffff01020704010700ff02010001ffffffffffff01a4bb',
+)
 
 function makeDevice() {
     const ha = new MockHAConnection()
@@ -39,10 +54,11 @@ function makeDevice() {
 }
 
 describe(MODEL_ID, () => {
-    test('declares the four writable components', () => {
+    test('declares the four writable components plus the read-only door sensor', () => {
         const { ha } = makeDevice()
         const components = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
         assert.deepEqual(Object.keys(components).sort(), [
+            'door_open',
             'express_mode',
             'freezer_temp',
             'fridge_temp',
@@ -52,6 +68,8 @@ describe(MODEL_ID, () => {
         assert.equal(components.fridge_temp.max, 7)
         assert.equal(components.freezer_temp.min, -23)
         assert.equal(components.freezer_temp.max, -15)
+        assert.equal(components.door_open.platform, 'binary_sensor')
+        assert.equal(components.door_open.command_topic, undefined, 'read-only, no command topic')
     })
 
     test('fridge_temp write reproduces the captured frame byte for byte', () => {
@@ -144,15 +162,29 @@ describe(MODEL_ID, () => {
     test('the state frame publishes the real smart_care_v2 reading, both directions', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', STATE_SMART_CARE_OFF)
-        assert.equal(ha.devices[DEVICE_ID].properties.smart_care_v2, 'OFF', 'raw 2 -> off')
+        assert.equal(ha.devices[DEVICE_ID].properties.smart_care_v2, 'OFF', 'record[17] raw 0 -> off')
         thinq.emit('data', STATE_SMART_CARE_ON)
-        assert.equal(ha.devices[DEVICE_ID].properties.smart_care_v2, 'ON', 'raw 7 -> on')
+        assert.equal(ha.devices[DEVICE_ID].properties.smart_care_v2, 'ON', 'record[17] raw 1 -> on')
     })
 
     test('the ack frame is accepted and publishes nothing', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', ACK)
         assert.equal(ha.devices[DEVICE_ID].properties.fridge_temp, undefined)
+    })
+
+    test('door_open follows the documented 0=closed/1=open/2=closed(!) convention, not a plain boolean', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', STATE_DOOR_OPEN_CONSTRUCTED)
+        assert.equal(ha.devices[DEVICE_ID].properties.door_open, 'ON', 'record[7] raw 1 -> open')
+        thinq.emit('data', STATE_DOOR_QUIRK_2_IS_CLOSED_CONSTRUCTED)
+        assert.equal(
+            ha.devices[DEVICE_ID].properties.door_open,
+            'OFF',
+            'record[7] raw 2 -> still closed, per the documented quirk',
+        )
+        thinq.emit('data', STATE_FRIDGE_7)
+        assert.equal(ha.devices[DEVICE_ID].properties.door_open, 'OFF', 'record[7] raw 0 -> closed')
     })
 
     test('the state frame publishes the real reading, from the second (current) record', () => {

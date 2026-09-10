@@ -77,30 +77,51 @@ import { note as recordNote } from '../frame-recorder'
  * the "after" record of the write that preceded it). Only the second (current) record is read
  * here:
  *
- *   record[1]  fridgeTemp setpoint, raw = degC directly
- *   record[2]  freezerTemp setpoint, raw = -14 - degC
- *   record[3]  expressMode, 0x01 = off, 0x02 = on
- *   record[4]  smartCareV2, 0x02 = off, 0x07 = on (confirmed both directions: this flipped
- *              0x07->0x02 in the state frame right after the offset-19/offset-6 OFF write pair,
- *              and 0x02->0x07 right after the offset-19-only ON write)
+ *   record[1]   fridgeTemp setpoint, raw = degC directly
+ *   record[2]   freezerTemp setpoint, raw = -14 - degC
+ *   record[3]   expressMode, 0x01 = off, 0x02 = on
+ *   record[7]   door open, 0x01 = at least one door open (see DOOR OPEN below)
+ *   record[17]  smartCareV2 master switch, 0x00 = off, 0x01 = on (see SMART CARE V2 below)
  *
- * The remaining bytes of both records (0,5-17) never changed across a full day's captures, so
+ * SMART CARE V2 - corrected 2026-09-10: this was first read off record[4] (0x02 off / 0x07 on -
+ * flipped in both directions right alongside every real Smart Care+ toggle, so the *position* was
+ * right about correlating with the feature). The upstream `anszom/rethink` project (this fork's
+ * origin) ships other 2RE*-prefixed fridge models built on a shared `fridge_common.ts` whose
+ * `STATUS_FIELDS` names this same 18-slot record positionally - record[17] there is documented
+ * `smartCare // 0=off 1=on`, a plain boolean unlike record[4]'s 2/7 pair. Re-checking this unit's
+ * own real captures against record[17] specifically (not just eyeballing which byte moved) found
+ * it flips exactly 0->1 on and 1->0 off, in the same two capture pairs used to find record[4] -
+ * a cleaner match to a documented value scheme than a coincidentally-correlated byte. record[4]
+ * most likely tracks one of Smart Care+'s three bundled sub-features (fridge_common.ts's own
+ * adjacent field name there is `freshAirFilter`, matching "AI 신선 케어" from the feature bundle
+ * the user originally described) rather than the master switch - plausible, but no sibling model's
+ * source actually reads that field either, so it is left unexposed rather than guessed twice.
+ *
+ * DOOR OPEN - added 2026-09-10, same cross-reference: fridge_common.ts documents record[7] as
+ * `anyDoorOpen // 0=closed 1=open 2=closed!` - a deliberate 3-value quirk, not a plain boolean -
+ * and every sibling model's own handler checks `=== 1` specifically for "open" rather than
+ * treating anything nonzero as open, which this handler copies. This unit's own captures never
+ * had a door opened during a full day of traffic, so record[7] was always 0 here and this field
+ * is unconfirmed against a real open/close transition on this specific unit - only the position
+ * and value convention are borrowed from siblings, not a live capture. Flagged in case a real
+ * door event ever contradicts it.
+ *
+ * The remaining bytes of both records (0,5,6,8-16) never changed across a full day's captures, so
  * they are read but not asserted on - see the note above 0x39 (57, the food-poisoning-index shown
  * on the Smart Care+ / 스마트 안심 보관 page) not appearing anywhere in this record, nor as any
  * field in modelJSON's MonitoringValue table at all: that value is described in the app as
  * computed from temperature *and* humidity, so it is derived cloud-side rather than transmitted
  * as a single number by the appliance, and was not pursued further. This frame is what actually
- * keeps the four entities below in sync - `setProperty` also publishes optimistically first, for
- * a snappy UI, but this real reading is what corrects it if anything else (the appliance's own
+ * keeps the entities below in sync - `setProperty` also publishes optimistically first, for a
+ * snappy UI, but this real reading is what corrects it if anything else (the appliance's own
  * panel, the LG app, ...) changes a setting instead.
  *
  * NOT YET DECODED, left deliberately unmodelled:
  *   - smartCareV2's three sub-features individually (스마트 안심 보관/AI 신선 케어/에너지 절약
- *     모드) - only the master switch above is exposed.
- *   - modelJSON also documents `atLeastOneDoorOpen` (door sensor) and a `convertibleTemp`
- *     compartment this unit's Info doesn't advertise - not captured yet, since (unlike the fields
- *     above) nothing in a full day's traffic ever changed to correlate against; would need a real
- *     door-open event watched live against the frame log the way every field above was found.
+ *     모드) - only the master switch above is exposed; record[4] is a plausible but unconfirmed
+ *     candidate for one of them (see above).
+ *   - modelJSON also documents a `convertibleTemp` compartment this unit's Info doesn't advertise
+ *     - likely does not apply to this physical unit at all.
  *   - the periodic ~5-minute full status dump (`10 cf`, 250 bytes) - looked at for the
  *     food-poisoning-index (see above) and otherwise not investigated further.
  *
@@ -126,7 +147,8 @@ const STATE_RECORD_LEN = 18
 const RECORD_FRIDGE_TEMP = 1
 const RECORD_FREEZER_TEMP = 2
 const RECORD_EXPRESS_MODE = 3
-const RECORD_SMART_CARE_V2 = 4
+const RECORD_DOOR_OPEN = 7
+const RECORD_SMART_CARE_V2 = 17
 
 const QUERY_SUB = 0x10
 const QUERY_OPCODE = 0xeb
@@ -185,6 +207,7 @@ export default class Device extends AABBDevice {
     fridgeTemp: number | undefined
     freezerTemp: number | undefined
     expressMode: boolean | undefined
+    doorOpen: boolean | undefined
     smartCareV2: boolean | undefined
 
     /** (dir:tag) pairs already flagged as unrecognised, so a repeating one is noted once. */
@@ -241,6 +264,14 @@ export default class Device extends AABBDevice {
                     state_topic: '$this/smart_care_v2',
                     command_topic: '$this/smart_care_v2/set',
                 },
+                door_open: {
+                    platform: 'binary_sensor',
+                    unique_id: '$deviceid-door_open',
+                    name: 'Door open',
+                    icon: 'mdi:fridge-alert-outline',
+                    device_class: 'door',
+                    state_topic: '$this/door_open',
+                },
             },
         })
 
@@ -289,7 +320,15 @@ export default class Device extends AABBDevice {
             this.publishProperty('express_mode', expressMode ? 'ON' : 'OFF')
         }
 
-        const smartCareV2 = record[RECORD_SMART_CARE_V2] === 0x07
+        // Matches every sibling 2RE*-model handler's own convention: only 1 means open, not
+        // "nonzero" - see the file header's DOOR OPEN section for the documented 0/1/2 quirk.
+        const doorOpen = record[RECORD_DOOR_OPEN] === 1
+        if (doorOpen !== this.doorOpen) {
+            this.doorOpen = doorOpen
+            this.publishProperty('door_open', doorOpen ? 'ON' : 'OFF')
+        }
+
+        const smartCareV2 = record[RECORD_SMART_CARE_V2] === 1
         if (smartCareV2 !== this.smartCareV2) {
             this.smartCareV2 = smartCareV2
             this.publishProperty('smart_care_v2', smartCareV2 ? 'ON' : 'OFF')
@@ -355,8 +394,8 @@ export default class Device extends AABBDevice {
         }
 
         // Anything else is a frame this handler does not parse yet (the periodic full status
-        // dump, the door sensor, convertibleTemp). Note it once per shape so a future session has
-        // something to grep for, the same way TLVDevice.noteUnknownTags does for the AC family.
+        // dump, convertibleTemp). Note it once per shape so a future session has something to
+        // grep for, the same way TLVDevice.noteUnknownTags does for the AC family.
         const key = buf.length > 0 ? `${buf.length}:${buf[0].toString(16)}:${(buf[1] ?? 0).toString(16)}` : 'empty'
         if (!this.seenUnknown.has(key)) {
             this.seenUnknown.add(key)
