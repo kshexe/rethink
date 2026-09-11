@@ -28,46 +28,6 @@ const t2deviceTypes: Record<string, T2Factory> = {
     ['3REK2G03VI200S_2']: KimchiFridge_3REK2G03VI200S_2, // LG kimchi fridge (김치냉장고) - per-compartment storage mode + one-touch deodorize + door, see 3REK2G03VI200S_2.ts
 }
 
-/*
- * The account's own device name follows a consistent "<room><appliance type>" pattern in this
- * household (거실에어컨, 안방에어컨, 냉장고, 김치냉장고, 세탁기, 건조기, ...) - one word for
- * appliances that never move room to room (fridge, washer, ...), two for the ones that come in
- * more than one unit (the 4 identical air conditioners). Stripping the appliance-type suffix, when
- * the name ends with one, recovers just the room ("거실", "안방") to use as HA's `suggested_area` -
- * this groups the device's entities into that Area (creating it on first discovery if it doesn't
- * already exist) without needing a Korean-vs-romanized decision for entity_id (see the file
- * header's entity-naming saga): the device's own `name` is untouched, still the account's real
- * name, still HA's own doing when it slugifies that into entity_id.
- *
- * A name that does not end with any of these (a device type not in this list, or one the account
- * happens to name differently) is left alone - no suggested_area is set for it, exactly as if this
- * feature did not exist for that device.
- */
-const APPLIANCE_TYPE_SUFFIXES = [
-    '에어컨', // air conditioner (CST_570004_WW) - the one type in this household with >1 unit/room
-    '김치냉장고', // kimchi fridge - checked before 냉장고 since it ends with the same word
-    '냉장고', // fridge
-    '세탁기', // washer
-    '건조기', // dryer
-    '미니워시', // mini wash
-    '스타일러', // styler
-    '식기세척기', // dishwasher
-    '광파오븐', // combi oven
-]
-
-function roomFromDeviceName(name: string): string | undefined {
-    for (const suffix of APPLIANCE_TYPE_SUFFIXES) {
-        // >= , not >: an exact match (name === suffix, e.g. "김치냉장고" against its own listed
-        // suffix) must stop here with no room, not fall through to also match a shorter listed
-        // suffix that happens to be a tail of this one (plain "냉장고", checked right after it).
-        if (name.length >= suffix.length && name.endsWith(suffix)) {
-            const room = name.slice(0, name.length - suffix.length)
-            return room === '' ? undefined : room
-        }
-    }
-    return undefined
-}
-
 class Bridge {
     haDevices = new Map<string, HADevice>()
 
@@ -99,7 +59,6 @@ class Bridge {
             const name = this.lgBridge.name(id)
             if (name && hadevice.config && hadevice.config.device.name !== name) {
                 hadevice.config.device.name = name
-                hadevice.config.device.suggested_area = roomFromDeviceName(name)
                 hadevice.publishConfig()
             }
         }
@@ -112,10 +71,7 @@ class Bridge {
         const originalPublishConfig = hadevice.publishConfig.bind(hadevice)
         hadevice.publishConfig = () => {
             const name = hadevice.config && lgBridge.name(id)
-            if (name) {
-                hadevice.config!.device.name = name
-                hadevice.config!.device.suggested_area = roomFromDeviceName(name)
-            }
+            if (name) hadevice.config!.device.name = name
             originalPublishConfig()
         }
 

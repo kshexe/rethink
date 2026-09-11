@@ -189,10 +189,6 @@ export type DeviceInfo = {
     model?: string
     sw_version?: string
     name?: string
-    /** HA groups this device's entities into this Area on first discovery if the Area already
-     *  exists (matching one the user set up for other integrations/rooms) or creates it - see
-     *  ha_bridge.ts's roomFromDeviceName() for how this is derived from the account's own name. */
-    suggested_area?: string
 }
 
 export type OriginInfo = {

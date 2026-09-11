@@ -65,10 +65,6 @@ describe('HA_bridge device naming from the linked LG account', () => {
         await makeMappedDevice(bridge)
         try {
             assert.equal(ha.devices[DEVICE_ID].config!.device.name, '거실에어컨')
-            // suggested_area groups the device's entities into an Area named after the room -
-            // "거실" here, the account name minus its "에어컨" suffix - see ha_bridge.ts's
-            // roomFromDeviceName(). The device's own name is untouched.
-            assert.equal(ha.devices[DEVICE_ID].config!.device.suggested_area, '거실')
         } finally {
             bridge.haDevices.get(DEVICE_ID)?.drop()
         }
@@ -81,56 +77,11 @@ describe('HA_bridge device naming from the linked LG account', () => {
         await makeMappedDevice(bridge)
         try {
             assert.equal(ha.devices[DEVICE_ID].config!.device.name, 'LG Dryer')
-            assert.equal(ha.devices[DEVICE_ID].config!.device.suggested_area, undefined)
 
             lgBridge.deviceNames = new Map([[DEVICE_ID, '거실에어컨']])
             lgBridge.emit('namesChanged')
 
             assert.equal(ha.devices[DEVICE_ID].config!.device.name, '거실에어컨')
-            assert.equal(ha.devices[DEVICE_ID].config!.device.suggested_area, '거실')
-        } finally {
-            bridge.haDevices.get(DEVICE_ID)?.drop()
-        }
-    })
-
-    test('roomFromDeviceName: an appliance with no room prefix (one per household, not per-room) gets no suggested_area', async () => {
-        const ha = new MockHAConnection()
-        const lgBridge = new LgCloudBridge(state(), new DeviceManager())
-        lgBridge.deviceNames = new Map([[DEVICE_ID, '냉장고']])
-        const bridge = new HA_bridge(ha.asConnection(), lgBridge)
-        await makeMappedDevice(bridge)
-        try {
-            assert.equal(ha.devices[DEVICE_ID].config!.device.name, '냉장고')
-            // "냉장고" *is* the appliance-type suffix, with nothing in front of it to be a room -
-            // matches this household's actual naming (there's only one fridge, never "거실냉장고").
-            assert.equal(ha.devices[DEVICE_ID].config!.device.suggested_area, undefined)
-        } finally {
-            bridge.haDevices.get(DEVICE_ID)?.drop()
-        }
-    })
-
-    test('roomFromDeviceName: 김치냉장고 is checked before 냉장고, so its room prefix (empty here) is not swallowed into "김치"', async () => {
-        const ha = new MockHAConnection()
-        const lgBridge = new LgCloudBridge(state(), new DeviceManager())
-        lgBridge.deviceNames = new Map([[DEVICE_ID, '김치냉장고']])
-        const bridge = new HA_bridge(ha.asConnection(), lgBridge)
-        await makeMappedDevice(bridge)
-        try {
-            assert.equal(ha.devices[DEVICE_ID].config!.device.suggested_area, undefined)
-        } finally {
-            bridge.haDevices.get(DEVICE_ID)?.drop()
-        }
-    })
-
-    test('roomFromDeviceName: a name matching no known appliance-type suffix gets no suggested_area', async () => {
-        const ha = new MockHAConnection()
-        const lgBridge = new LgCloudBridge(state(), new DeviceManager())
-        lgBridge.deviceNames = new Map([[DEVICE_ID, '내방청소기']])
-        const bridge = new HA_bridge(ha.asConnection(), lgBridge)
-        await makeMappedDevice(bridge)
-        try {
-            assert.equal(ha.devices[DEVICE_ID].config!.device.name, '내방청소기')
-            assert.equal(ha.devices[DEVICE_ID].config!.device.suggested_area, undefined)
         } finally {
             bridge.haDevices.get(DEVICE_ID)?.drop()
         }
