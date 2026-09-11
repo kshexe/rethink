@@ -43,6 +43,26 @@ const STATE_58_TO_11_MIN_LEFT = buf(
     'aaff300a007600de41000100ec006400000200002c000000003a0064070e000301ff041c000000000041800700000000000000000000000000000000000000000000000200002c000000000b0064070e00040214041c00000000004180070000000000000000000000000000000000000000005dc7bb',
 )
 
+/*
+ * Real 114-byte status frames mined from two separate complete dry cycles (2026-09-09 and
+ * 2026-09-11), showing the STATUS byte's three confirmed values in order - see RD20_S.ts's STATUS
+ * section. STATUS_RUNNING_18_MIN_LEFT and STATUS_COOLING_5_MIN_LEFT are consecutive frames from
+ * the 2026-09-11 cycle (18 -> 5 min is the same discontinuous re-estimate jump documented for
+ * remaining_minutes, landing on the exact frame the status flips running -> cooling).
+ * STATUS_COMPLETE_1_MIN_LEFT is a different frame (same cycle) where the "new" record's copy of
+ * the field reads complete - most captures of this transient value only carry it in the "old"
+ * copy by the time rethink polls, this is one of the two found with it in the "new" one instead.
+ */
+const STATUS_RUNNING_18_MIN_LEFT = buf(
+    'aaff300a00760072e4000100ec006400000200002c000000001300820710000404f9041c000000000041800700000000000000000000000000000000000000000000000200002c00000000120082071000040501041c00000000004180070000000000000000000000000000000000000000000675bb',
+)
+const STATUS_COOLING_5_MIN_LEFT = buf(
+    'aaff300a00760073fa000100ec006400000200002c0000000006008211070005056d041c000000000061800700000000000000000000000000000000000000000000000200002c0000000005008211070005056f041c0000000000618007000000000000000000000000000000000000000000889fbb',
+)
+const STATUS_COMPLETE_1_MIN_LEFT = buf(
+    'aaff300a007600744b000100ec006400000200002c00000000010082081100050577041c000000000041800700000000000000000000000000000000000000000000000200002c00000000010082040800070578041c00000020000180070000000000000000000000000000000000000000005b57bb',
+)
+
 function makeDevice() {
     const ha = new MockHAConnection()
     const thinq = new MockThinq2Device(DEVICE_ID, META)
@@ -54,7 +74,7 @@ describe(MODEL_ID, () => {
     test('declares power and remaining_minutes', () => {
         const { ha } = makeDevice()
         const components = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
-        assert.deepEqual(Object.keys(components), ['power', 'remaining_minutes'])
+        assert.deepEqual(Object.keys(components), ['power', 'remaining_minutes', 'status'])
         assert.equal(components.power.command_topic, '$this/power/set')
         assert.equal(components.remaining_minutes.platform, 'sensor')
         assert.equal(components.remaining_minutes.unit_of_measurement, 'min')
@@ -110,5 +130,25 @@ describe(MODEL_ID, () => {
             11,
             'reads the second (current) record, not the first',
         )
+    })
+
+    test('the status byte publishes running/cooling/complete, matching two independent real cycles', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', STATUS_RUNNING_18_MIN_LEFT)
+        assert.equal(ha.devices[DEVICE_ID].properties.status, 'running')
+        thinq.emit('data', STATUS_COOLING_5_MIN_LEFT)
+        assert.equal(ha.devices[DEVICE_ID].properties.status, 'cooling')
+        thinq.emit('data', STATUS_COMPLETE_1_MIN_LEFT)
+        assert.equal(ha.devices[DEVICE_ID].properties.status, 'complete')
+    })
+
+    test('an unrecognised status value publishes as unknown_<value> rather than being guessed', () => {
+        const { ha, thinq } = makeDevice()
+        // Same shape as STATUS_RUNNING_18_MIN_LEFT with the status byte (buf[89]) forced to a
+        // value never confirmed live.
+        const frame = Buffer.from(STATUS_RUNNING_18_MIN_LEFT)
+        frame[2 + 89] = 0x99
+        thinq.emit('data', frame)
+        assert.equal(ha.devices[DEVICE_ID].properties.status, 'unknown_153')
     })
 })

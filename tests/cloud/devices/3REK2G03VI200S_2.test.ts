@@ -45,6 +45,12 @@ const STATE_BOTTOM_TO_MEAT_FISH = buf('aa1a11ec0206ff0100ff000100010206ff0107ff0
 const WRITE_ONE_TOUCH_ON = buf('aa0ff0e5000201ff0100060001cdbb')
 const STATE_ONE_TOUCH_ON = buf('aa1a11ec0206ff0000ff000100010206ff0000ff0101000187bb')
 
+// Two consecutive real `11 3e` energy reports, mined from the frame log (2026-09-10) - see the
+// file header's ENERGY COUNTER section. total 246 + delta 16 -> total 262, the additive
+// relationship confirmed across all 130 real samples mined, not just these two.
+const ENERGY_REPORT_TOTAL_246 = buf('aa0b113e001000f60e4dbb')
+const ENERGY_REPORT_DELTA_16_TOTAL_262 = buf('aa0b113e001001060f7fbb')
+
 function makeDevice() {
     const ha = new MockHAConnection()
     const thinq = new MockThinq2Device(DEVICE_ID, META)
@@ -78,6 +84,7 @@ describe(MODEL_ID, () => {
         assert.deepEqual(Object.keys(components).sort(), [
             'any_door_open',
             'bottom_compartment',
+            'energy_total_counter',
             'middle_compartment',
             'one_touch_deodorize',
             'top_compartment',
@@ -245,5 +252,17 @@ describe(MODEL_ID, () => {
         thinq.resetRecorder()
         dev.setProperty('top_compartment', '존재하지 않는 모드')
         assert.equal(thinq.outbox.length, 0)
+    })
+
+    test('the energy report publishes the running total, matching the additive relationship confirmed across 130 real samples', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', ENERGY_REPORT_TOTAL_246)
+        assert.equal(ha.devices[DEVICE_ID].properties.energy_total_counter, 246)
+        thinq.emit('data', ENERGY_REPORT_DELTA_16_TOTAL_262)
+        assert.equal(
+            ha.devices[DEVICE_ID].properties.energy_total_counter,
+            262,
+            "previous total (246) + this report's delta (16)",
+        )
     })
 })

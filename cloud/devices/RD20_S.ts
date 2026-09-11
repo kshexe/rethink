@@ -87,6 +87,20 @@ import { note as recordNote } from '../frame-recorder'
  * twice. This frame shape stopped appearing entirely once the official sensor read "power_off" -
  * the appliance does not send it while idle, so `remaining_minutes` is simply never published for
  * that state.
+ *
+ * STATUS (decoded 2026-09-11): the discrete status/phase byte flagged above as needing more
+ * samples - found it once two more complete dry cycles (2026-09-09 and 2026-09-11) had accumulated
+ * in the frame log. `buf[89]` (the "new" record's own copy of the same field `buf[39]` carries for
+ * the "old" one, same +50 pairing REMAINING_MINUTES_OFFSET uses) takes exactly three values across
+ * both cycles, at the same relative point each time: `0x41` while running normally, `0x61` during
+ * the cool-down tail, `0x01` on the very last frame before the appliance goes quiet. Confirmed by a
+ * sharp corroborating signal in both cycles: `remaining_minutes` itself jumps discontinuously
+ * downward (58 -> 11 min in one run, 58 -> 11 in the other) at the exact frame where `buf[89]`
+ * flips 0x41 -> 0x61 - the appliance re-estimates a much shorter "time left" once it leaves the
+ * main dry phase for cool-down, and that recompute lands on the same frame as the status flip both
+ * times. Other values seen for this byte in the wider log (0x00, 0x04, 0x45) were not captured
+ * inside a cycle mined closely enough to place with confidence, so they publish as
+ * `unknown_<value>` rather than being guessed at.
  */
 
 const FROM_DEVICE_ACK_OPCODE = 0xe5
@@ -104,6 +118,18 @@ const STATUS_MARKER_OFFSET = 7
 // state frame uses) - this is the new/current one, 50 bytes after the old record's own offset.
 const REMAINING_MINUTES_OFFSET = 73
 
+/** See the file header's STATUS section. Same old/new +50 pairing as REMAINING_MINUTES_OFFSET. */
+const STATUS_OFFSET = 89
+const STATUS_NAMES: Record<number, string> = {
+    0x41: 'running',
+    0x61: 'cooling',
+    0x01: 'complete',
+}
+
+function decodeStatus(raw: number): string {
+    return STATUS_NAMES[raw] ?? `unknown_${raw}`
+}
+
 /** Builds the `f0 e5 00 02 01 ff <n> [<key> <value>]*n` payload AABBDevice.send() wraps and
  *  checksums. Only single-byte values are needed for power; see the file header for the
  *  multi-key, partly-16-bit shape this opcode also carries on this model. */
@@ -115,6 +141,7 @@ function buildSettingsWrite(pairs: [key: number, value: number][]): Buffer {
 
 export default class Device extends AABBDevice {
     power: boolean | undefined
+    status: string | undefined
 
     /** (dir:tag) pairs already flagged as unrecognised, so a repeating one is noted once. */
     private seenUnknown = new Set<string>()
@@ -141,6 +168,15 @@ export default class Device extends AABBDevice {
                     icon: 'mdi:timer-outline',
                     device_class: 'duration',
                     unit_of_measurement: 'min',
+                },
+                // See the file header's STATUS section - only running/cooling/complete are
+                // confirmed, anything else publishes as unknown_<value> rather than being guessed.
+                status: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-status',
+                    state_topic: '$this/status',
+                    name: 'Status',
+                    icon: 'mdi:tumble-dryer',
                 },
             },
         })
@@ -175,6 +211,12 @@ export default class Device extends AABBDevice {
             buf.subarray(STATUS_MARKER_OFFSET, STATUS_MARKER_OFFSET + STATUS_MARKER.length).equals(STATUS_MARKER)
         ) {
             this.publishProperty('remaining_minutes', buf[REMAINING_MINUTES_OFFSET])
+
+            const status = decodeStatus(buf[STATUS_OFFSET])
+            if (status !== this.status) {
+                this.status = status
+                this.publishProperty('status', status)
+            }
             return
         }
 

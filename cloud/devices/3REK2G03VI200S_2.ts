@@ -118,22 +118,32 @@ import { note as recordNote } from '../frame-recorder'
  * Baseline confirmed against the real unit's own device page: 상칸=냉동, 중칸=맛지킴 김치 (중),
  * 하칸=맛지킴 김치 (중), 원터치 탈취=off - all three compartments restored to this after testing.
  *
+ * ENERGY COUNTER (decoded 2026-09-11): the `11 3e` frame previously logged as "a plain periodic
+ * tick, not energy-related" turned out to be exactly that - it was mistaken for a bare uptime
+ * counter after only 3 occurrences with nothing to compare the growing byte against. Mining a
+ * day and a half of it from the frame log (130 occurrences) instead of live-testing showed:
+ *
+ *   from-device  aa 0b 11 3e 00 <delta> <total_hi> <total_lo> <tick> <ck> bb
+ *
+ * `<delta>` is the Wh added since the previous report and `<total_hi>/<total_lo>` (big-endian
+ * u16) is a running total that `<delta>` always adds onto exactly - e.g. total 246 followed by
+ * delta 16 next report gives total 262, confirmed additive across all 130 samples with zero
+ * exceptions. `<tick>` just increments by 1 every ~15 minutes (the original, correct half of the
+ * old reading) and is not published. The total does not reset at local midnight (values climb
+ * straight through the KST day boundary in the log) but does reset somewhere else in the day
+ * (330 late on 2026-09-10 down to 134 the next afternoon, outside any midnight the log covers) -
+ * almost certainly the same "resets whenever the bridge's cloud session is refreshed, not on a
+ * calendar boundary" behaviour 2REF21EBNSX_3.ts's own `10 af` counter has, not a daily meter.
+ * Published as a bare `total_increasing` counter for exactly that reason - see 2REF21EBNSX_3.ts's
+ * own `energy_raw_counter` for the identical caveat and why the unit (presumably Wh, not
+ * independently calibrated against the app's own kWh figure to the same precision the fridge's
+ * counter was) is left off rather than asserted.
+ *
  * NOT YET DECODED, left deliberately unmodelled:
  *   - `11 31` (51 bytes): fires rarely, contains two readable ASCII part/serial-number-looking
  *     strings (e.g. "SAA42276301") - an identification/inventory block, not live state. Recognised
  *     by shape and silently dropped (see processAABB) rather than re-flagged every time, the same
  *     way 2REF21EBNSX_3.ts drops its own periodic full-status dump.
- *   - `11 3e` (7 bytes): a plain periodic tick, not tied to any command or door/mode/deodorize
- *     change - confirmed live across 3 occurrences, exactly 15 minutes apart each time, with its
- *     last payload byte incrementing by exactly 1 between occurrences (a rolling counter, most
- *     likely uptime-related). Left unrecognised (still generates unmodelled-frame notes) since
- *     nothing about it looks energy-related - not worth silencing like `11 31` until its counter
- *     is understood.
- *   - Energy usage: the ThinQ app shows an hourly/daily kWh figure for this unit (a live baseline
- *     was noted 2026-09-10: 22-23시=63Wh, daily=1.01kWh) but no frame carrying anything like it has
- *     been spotted yet - unlike 2REF21EBNSX_3, this model hasn't even produced a large periodic
- *     full-status dump to go looking in. Needs a capture right as the app's displayed figure
- *     visibly changes - see RETHINK memory `rethink_migration_status` for the baseline value/time.
  *   - room2Temp (the one modelJSON field with no corresponding physical compartment on this unit -
  *     see record[2]/record[5] above).
  *
@@ -155,6 +165,12 @@ const QUERY_INTERVAL_MS = 5 * 60 * 1000
 
 const WRITE_ECHO_SUB = 0x11
 const WRITE_ECHO_OPCODE = 0xe6
+
+/** See the file header's ENERGY COUNTER section. */
+const ENERGY_SUB = 0x11
+const ENERGY_OPCODE = 0x3e
+const ENERGY_FRAME_LEN = 7
+const ENERGY_TOTAL_OFFSET = 4
 /** `f0 e5 00 02 01 ff 01 00` - constant across every write captured; only the selector (= the
  *  target's own record byte index) and the value after it ever change. */
 const WRITE_HEADER = Buffer.from('f0e5000201ff0100', 'hex')
@@ -227,6 +243,7 @@ export default class Device extends AABBDevice {
     oneTouchDeodorize: boolean | undefined
     topDoorOpen: boolean | undefined
     anyDoorOpen: boolean | undefined
+    energyTotal: number | undefined
 
     /** (dir:tag) pairs already flagged as unrecognised, so a repeating one is noted once. */
     private seenUnknown = new Set<string>()
@@ -288,6 +305,16 @@ export default class Device extends AABBDevice {
                     icon: 'mdi:fridge-alert-outline',
                     device_class: 'door',
                     state_topic: '$this/any_door_open',
+                },
+                // Deliberately no device_class/unit_of_measurement - see the file header's ENERGY
+                // COUNTER section for why the scale isn't asserted yet.
+                energy_total_counter: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-energy_total_counter',
+                    name: 'Energy total counter (unit unconfirmed)',
+                    icon: 'mdi:lightning-bolt-outline',
+                    state_class: 'total_increasing',
+                    state_topic: '$this/energy_total_counter',
                 },
             },
         })
@@ -422,6 +449,17 @@ export default class Device extends AABBDevice {
         // are not a live one - see the file header>. Recognised by shape and silently dropped -
         // the real update always arrives moments later as a proper `ec` push anyway.
         if (buf.length === 2 + 8 + STATE_RECORD_LEN && buf[0] === WRITE_ECHO_SUB && buf[1] === WRITE_ECHO_OPCODE) return
+
+        // energy counter: <sub=0x11> 3e 00 <delta> <total_hi> <total_lo> <tick> - see the file
+        // header's ENERGY COUNTER section.
+        if (buf.length === ENERGY_FRAME_LEN && buf[0] === ENERGY_SUB && buf[1] === ENERGY_OPCODE) {
+            const total = buf.readUInt16BE(ENERGY_TOTAL_OFFSET)
+            if (total !== this.energyTotal) {
+                this.energyTotal = total
+                this.publishProperty('energy_total_counter', total)
+            }
+            return
+        }
 
         // identification block: <sub=0x11> 31 <49 bytes, two ASCII serial/part-number strings> -
         // see the file header's NOT YET DECODED note. Recognised by shape and silently dropped, the
