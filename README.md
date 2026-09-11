@@ -11,46 +11,31 @@ HomeAssistant-compatible MQTT.
 An optional "bridge" mode is also supported, in which the messages are forwarded to the actual LG ThinQ cloud. This can be used as a reverse-engineering
 aid, or simply to allow the user to still use the original LG app alongside HomeAssistant.
 
-The following appliances are currently supported in rethink:
+This fork tracks **one household's own ThinQ2 fleet**, not a general multi-model catalog - the
+device list below is `cloud/devices/` as it actually stands in this fork, kept up to date as each
+model is reverse-engineered. For the broader community device list (many more AC/fridge/washer/
+dryer/dehumidifier/hood/styler models) this fork branched from, see upstream
+[anszom/rethink](https://github.com/anszom/rethink).
 
 - Air Conditioners:
-    - 👍 LG DualCool family (Standard 2, Deluxe with and without air purifier, etc.) wall-mounted Air Conditioner IDUs - high level of support. What's missing are mostly some features of higher-end models and more diagnostic coverage,
-    - 👍 LW1822HRSM, Smart Window Air Conditioner - mostly working,
-    - 👍 LP1022FVSM Portable Air Conditioner - mostly working,
-    - 👍 CST_570004_WW, LG ceiling-cassette IDU (multi-split) - mostly working,
+    - 👍 CST_570004_WW, LG ceiling-cassette IDU (multi-split) - full command coverage, no known gaps. Remaining unmodelled telemetry tags are read-only (filter hours, coil temps).
 - Fridges:
-    - 🫤 LF28H8330S, Standard-Depth 4-Door French Door Refrigerator - preliminary support,
-    - 🫤 GSJV70PZTE, LG Side by Side Refrigerator - preliminary support,
-    - 🫤 GSB470BASZ, American Style Side by Side Refrigerator - preliminary support,
-    - 🫤 GA-B509CMUM - preliminary support,
+    - 🫤 2REF21EBNSX_3 - temperature/door/express-mode/smart-care mapped. Energy usage frame decoded structurally but not yet calibrated to Wh. A handful of periodic status frames are still unidentified (read-only telemetry, no command-coverage impact).
+    - 🫤 3REK2G03VI200S_2 (김치냉장고/kimchi fridge) - per-compartment storage mode (3 compartments), door sensors, one-touch deodorize all mapped. Energy byte not found yet for this model.
 - Washing Machines:
-    - 👍 FX\_\_\_S, LG front-load washer sold in Korea - mostly working,
-    - 🫤 (model name unknown) Washing Machine - preliminary support
-    - 👍 F2J7HG1W, Washing Machine - mostly working,
-    - 🫤 F4WV508S2E, Front-Loading Washing Machine - preliminary support
-    - 🫤 F4WV709P1E, Front-Loading Washing Machine - preliminary support
-    - 🫤 TW4V9RW9W - preliminary support
-    - 👍 F4X7511TWS (VCDWL2QEUK), Front-Load Washing Machine - mostly working
-    - 🫤 WT7300CW - preliminary support
-    - 👍 WM3900HBA (F3L2CYU\_\_), Front-Load Washing Machine - mostly working
-    - 👍 FV1413H2B, Washing Machine - mostly working,
-    - 👍 F3L7CYK5W_US_WIFI, Front-Load Washing Machine - mostly working
-    - 👍 F2V5PS0W, Front-Load Washing Machine - mostly working
+    - 👍 FX\_\_\_S, LG front-load washer sold in Korea - full command coverage including per-cycle energy reporting; the most complete handler in this fork, used as the reference implementation for the two below.
 - Dryers:
-    - 🫤 DLE7300WE - preliminary support
-    - 👍 DLEX3900B (RV13B6BSD_D_US_WIFI), Electric Dryer - mostly working
-    - 👍 RV13B6ES_D_US_WIFI, Electric Dryer - mostly working
-- WashTowers (combined washer+dryer):
-    - 👍 WKEX200HBA (WTL_FXU_BDV_NA_01), WashTower - mostly working
-- Dehumidifiers
-    - 👍 MD19GQGE0, Smart Dehumidifier - mostly working
-- Range Hoods:
-    - 👍 HCED3015D (STUDIO_HOOD), Generic identifier and probably works with multiple models. Working.
+    - 🫤 RD20\_S - power + remaining-time mapped. Speaks the same key-value protocol as FX\_\_\_S (not an AABB fixed-offset-record protocol some other dryers use); course/option state decode still pending.
 - Stylers:
-    - 👍 S5BBP (ST_B_E4H01Y_APL), Styler - mostly working
+    - 🫤 ST_R_ETH01Y_ - power, course-select (a subset of the full course list) and course-start confirmed against a real unit. State-reading (running status, remaining time, errors) not yet decoded.
+- Mini washers:
+    - 🫤 MI2D7B (미니워시) - power only. This model has no "send to appliance" button in the LG app at all, so its course/option state can't be captured remotely without physically arming remote-start on the unit first.
+- Dishwashers:
+    - 🫤 H01 - power and course-select mapped; state-reading not yet decoded.
 
-The supported appliances can be used "out of the box" with HomeAssistant or another compatible MQTT consumer.  
-Appliances not listed above can still be used with the bridge mode, but they will not be translated to MQTT. Contributions are welcome!
+Appliances not listed above can still be used with bridge mode, but they will not be translated to
+MQTT. Contributions - including PRs bringing other models' handlers back in from upstream - are
+welcome!
 
 Most of the findings from the reverse engineering process are available on the [project wiki](https://github.com/anszom/rethink/wiki) as well.
 
