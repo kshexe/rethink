@@ -54,7 +54,7 @@ export default class Device extends AABBDevice {
         super(HA, thinq)
 
         const config: DeviceDiscovery = allowExtendedType({
-            ...HADevice.config(meta, { name: 'LG Dishwasher' }),
+            ...HADevice.config(meta),
             components: {
                 power: {
                     platform: 'switch',

@@ -197,9 +197,6 @@ export default class Device extends TLVDevice {
     /* A reset waiting for the query that reads the counter one last time; see the reset button. */
     filterDoReset: boolean = false
 
-    /* HA device name */
-    readonly haDeviceName: string = 'LG Air Conditioner'
-
     /* CST emits its async/query TLV frames with UART header byte 6 = 0xa7 instead of 0x87. */
     isHeaderByte6(byte: number): boolean {
         return byte === 0x87 || byte === 0xa7
@@ -773,7 +770,7 @@ export default class Device extends TLVDevice {
     makeClimateConfig(): ClimateConfig {
         const range = this.temperatureRange()
         const config: ClimateConfig = allowExtendedType({
-            ...HADevice.config(this.meta, { name: this.haDeviceName }),
+            ...HADevice.config(this.meta),
             components: {
                 climate: {
                     platform: 'climate',

@@ -1,6 +1,6 @@
 ---
 name: Rethink (LG ThinQ local bridge)
-version: '1.4.30'
+version: '1.4.31'
 slug: rethink
 description: >-
     Local-only server that replaces LG's ThinQ cloud for supported appliances,

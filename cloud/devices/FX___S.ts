@@ -867,7 +867,7 @@ export default class Device extends AABBDevice {
         // Annotated because allowExtendedType infers its result from the assignment target: with
         // nothing to infer from it would come out `unknown`.
         const config: DeviceDiscovery = allowExtendedType({
-            ...HADevice.config(meta, { name: 'LG Washer' }),
+            ...HADevice.config(meta),
             components: {
                 power: {
                     platform: 'switch',

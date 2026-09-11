@@ -34,24 +34,29 @@ async function makeMappedDevice(bridge: HA_bridge) {
 }
 
 describe('HA_bridge device naming from the linked LG account', () => {
-    test('without an LG bridge, the device keeps its static default name', async () => {
+    // No static per-model fallback (e.g. "LG Dryer") is baked in any more - device handlers no
+    // longer pass a name to HADevice.config() at all. HA falls back to manufacturer+model for
+    // display when device.name is absent, and - since nothing here ever computes entity_id from
+    // it either, see the file header's entity-naming saga - there's no naming downside, just one
+    // less thing that could ever get baked into an entity_id before the real name arrives.
+    test('without an LG bridge, the device has no name (falls back to manufacturer+model in HA)', async () => {
         const ha = new MockHAConnection()
         const bridge = new HA_bridge(ha.asConnection())
         await makeMappedDevice(bridge)
         try {
-            assert.equal(ha.devices[DEVICE_ID].config!.device.name, 'LG Dryer')
+            assert.equal(ha.devices[DEVICE_ID].config!.device.name, undefined)
         } finally {
             bridge.haDevices.get(DEVICE_ID)?.drop()
         }
     })
 
-    test('the device keeps its static name when the LG account has none for it', async () => {
+    test('the device has no name when the LG account has none for it either', async () => {
         const ha = new MockHAConnection()
         const lgBridge = new LgCloudBridge(state(), new DeviceManager())
         const bridge = new HA_bridge(ha.asConnection(), lgBridge, 10)
         await makeMappedDevice(bridge)
         try {
-            assert.equal(ha.devices[DEVICE_ID].config!.device.name, 'LG Dryer')
+            assert.equal(ha.devices[DEVICE_ID].config!.device.name, undefined)
         } finally {
             bridge.haDevices.get(DEVICE_ID)?.drop()
         }
@@ -76,7 +81,7 @@ describe('HA_bridge device naming from the linked LG account', () => {
         const bridge = new HA_bridge(ha.asConnection(), lgBridge, 10)
         await makeMappedDevice(bridge)
         try {
-            assert.equal(ha.devices[DEVICE_ID].config!.device.name, 'LG Dryer')
+            assert.equal(ha.devices[DEVICE_ID].config!.device.name, undefined)
 
             lgBridge.deviceNames = new Map([[DEVICE_ID, '거실에어컨']])
             lgBridge.emit('namesChanged')
@@ -105,14 +110,14 @@ describe('HA_bridge device naming from the linked LG account', () => {
         }
     })
 
-    test('a name lookup that never answers does not block the device forever - it falls back to the static name after the bounded wait', async () => {
+    test('a name lookup that never answers does not block the device forever - it publishes with no name after the bounded wait', async () => {
         const ha = new MockHAConnection()
         const lgBridge = new LgCloudBridge(state(), new DeviceManager())
         lgBridge.refreshNames = () => new Promise(() => {}) // never resolves
         const bridge = new HA_bridge(ha.asConnection(), lgBridge, 10)
         try {
             await makeMappedDevice(bridge)
-            assert.equal(ha.devices[DEVICE_ID].config!.device.name, 'LG Dryer')
+            assert.equal(ha.devices[DEVICE_ID].config!.device.name, undefined)
         } finally {
             bridge.haDevices.get(DEVICE_ID)?.drop()
         }

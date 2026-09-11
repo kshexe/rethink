@@ -292,7 +292,7 @@ export default class Device extends AABBDevice {
         super(HA, thinq)
 
         const config: DeviceDiscovery = allowExtendedType({
-            ...HADevice.config(meta, { name: 'LG Fridge' }),
+            ...HADevice.config(meta),
             components: {
                 fridge_temp: {
                     platform: 'number',

@@ -456,7 +456,7 @@ export default class Device extends AABBDevice {
         super(HA, thinq)
 
         const config: DeviceDiscovery = allowExtendedType({
-            ...HADevice.config(meta, { name: 'LG Oven' }),
+            ...HADevice.config(meta),
             components: {
                 course: {
                     platform: 'select',
