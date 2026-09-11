@@ -266,21 +266,6 @@ describe(MODEL_ID, () => {
         // The published property key carries a trailing "-" (comp + '-' + name, name === '' for
         // this field) - see addModeDependentConfigSwitchField.
         assert.equal(ha.devices[DEVICE_ID].properties['power_save-'], 'OFF')
-        assert.equal(
-            ha.devices[DEVICE_ID].properties['power_save-availability'],
-            'offline',
-            'the switch is also marked unavailable (greyed out), not just showing OFF',
-        )
         dev.drop()
-    })
-
-    test('declares an availability_topic for power_save, distinct from the device-wide one', (t) => {
-        const { ha } = buildReadyDevice(t)
-        const components = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
-        // $this is resolved to rethink/<id> by the real Connection.publishConfig; MockHAConnection
-        // stores the config as handed to it, unresolved - see tests/helpers/mocks.ts.
-        assert.equal(components.power_save.availability_topic, '$this/power_save-availability')
-        assert.equal(components.power_save.payload_available, 'online')
-        assert.equal(components.power_save.payload_not_available, 'offline')
     })
 })

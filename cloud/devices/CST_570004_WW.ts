@@ -1610,17 +1610,6 @@ export default class Device extends TLVDevice {
     ) {
         this.addSwitchComponent(config, name, desc, icon, this.modeDependentSwitchOptimistic)
 
-        // Grey the switch out in HA whenever it isn't actually settable (unit off, or - for
-        // power_save - the wrong mode): setProperty's write_callback already silently refuses the
-        // write in that case, so without this HA would accept the click (as a non-optimistic
-        // switch, it doesn't visibly flip either way) while nothing happens on the appliance. A
-        // real per-entity availability_topic - not just publishing OFF, see below - is what makes
-        // HA actually grey it out / refuse the tap, the same as an entity going offline.
-        const switchComponent = config.components[name] as Record<string, unknown>
-        switchComponent.availability_topic = '$this/' + name + '-availability'
-        switchComponent.payload_available = 'online'
-        switchComponent.payload_not_available = 'offline'
-
         this.addField(config, {
             id: id,
             name: '',
@@ -1653,20 +1642,17 @@ export default class Device extends TLVDevice {
          * callback. A switch that has no check_mode has no mode hook to ride, so it keeps the
          * power one.
          *
-         * Also publishes an explicit OFF, and marks the entity unavailable, to HA whenever the
-         * read_callback above would ignore a real value (unit off, or - for power_save - not in
-         * the required mode): otherwise HA has nothing to show but "unknown" here forever if this
-         * field was never read at least once while active (e.g. right after a rethink restart,
-         * before the unit has been turned on again) - unlike temperature/mode, which always have
-         * a value regardless of power state. A fresh real reading (once active again) publishes
-         * 'online' and overrides the OFF the normal way, through read_callback/publishProperty
-         * above.
+         * Also publishes an explicit OFF to HA whenever the read_callback above would ignore a
+         * real value (unit off, or - for power_save - not in the required mode): otherwise HA has
+         * nothing to show but "unknown" here forever if this field was never read at least once
+         * while active (e.g. right after a rethink restart, before the unit has been turned on
+         * again) - unlike temperature/mode, which always have a value regardless of power state.
+         * A fresh real reading (once active again) overrides this the normal way, through
+         * read_callback/publishProperty above.
          */
         if (check_mode) {
             this.modeChangeHooks.push(() => {
-                const active = this.getPowerTLV() !== 0 && check_mode(this.getModeTLV())
-                this.HA.publishProperty(this.id, name + '-availability', active ? 'online' : 'offline')
-                if (!active) {
+                if (this.getPowerTLV() === 0 || !check_mode(this.getModeTLV())) {
                     this.HA.publishProperty(this.id, name + '-', 'OFF')
                     return
                 }
@@ -1675,9 +1661,7 @@ export default class Device extends TLVDevice {
             })
         } else {
             this.powerChangeHooks.push(() => {
-                const active = this.getPowerTLV() !== 0
-                this.HA.publishProperty(this.id, name + '-availability', active ? 'online' : 'offline')
-                if (!active) {
+                if (this.getPowerTLV() === 0) {
                     this.HA.publishProperty(this.id, name + '-', 'OFF')
                     return
                 }
