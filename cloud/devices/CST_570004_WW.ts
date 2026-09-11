@@ -1644,16 +1644,31 @@ export default class Device extends TLVDevice {
          * every power change, because power changes the mode too - see the power field's read
          * callback. A switch that has no check_mode has no mode hook to ride, so it keeps the
          * power one.
+         *
+         * Also publishes an explicit OFF to HA whenever the read_callback above would ignore a
+         * real value (unit off, or - for power_save - not in the required mode): otherwise HA has
+         * nothing to show but "unknown" here forever if this field was never read at least once
+         * while active (e.g. right after a rethink restart, before the unit has been turned on
+         * again) - unlike temperature/mode, which always have a value regardless of power state.
+         * A fresh real reading (once active again) overrides this the normal way, through
+         * read_callback/publishProperty above.
          */
         if (check_mode) {
             this.modeChangeHooks.push(() => {
+                if (this.getPowerTLV() === 0 || !check_mode(this.getModeTLV())) {
+                    this.HA.publishProperty(this.id, name + '-', 'OFF')
+                    return
+                }
                 if (this[field_name] === undefined) return
                 this.setProperty(name + '-', this[field_name] ? 'ON' : 'OFF')
             })
         } else {
             this.powerChangeHooks.push(() => {
+                if (this.getPowerTLV() === 0) {
+                    this.HA.publishProperty(this.id, name + '-', 'OFF')
+                    return
+                }
                 if (this[field_name] === undefined) return
-                if (this.getPowerTLV() === 0) return
                 this.setProperty(name + '-', this[field_name] ? 'ON' : 'OFF')
             })
         }

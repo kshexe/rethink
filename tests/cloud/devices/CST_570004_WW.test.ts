@@ -247,4 +247,25 @@ describe(MODEL_ID, () => {
         assert.ok(known.has(0x221), 'error code (0x221)')
         dev.drop()
     })
+
+    /*
+     * Regression test for a real 2026-09-11 report: power_save/air_clean sat on "unknown" in HA
+     * forever whenever the unit had been off since rethink last (re)connected to it, because
+     * read_callback deliberately ignores the raw value while off/out-of-mode (see the file
+     * header) and nothing else ever published anything in its place - unlike temperature/mode,
+     * which always have a value regardless of power state. QUERY_RESPONSE_HEX was captured with
+     * the real unit powered off, so buildReadyDevice() exercises exactly that case.
+     */
+    test('power_save publishes an explicit OFF, not silence, when read while the unit is off', (t) => {
+        const { ha, thinq, dev } = buildReadyDevice(t)
+        // buildReadyDevice()'s own QUERY_RESPONSE_HEX arrived before addFeatureEntities() had
+        // registered any fields (config is only built after it, per initMakeSetConfig), so it was
+        // stored in raw_clip_state but never ran through a read_callback - same as real startup,
+        // where initMakeSetConfig() re-queries once the config exists. Re-emit it to reach that.
+        thinq.emit('data', buf(QUERY_RESPONSE_HEX))
+        // The published property key carries a trailing "-" (comp + '-' + name, name === '' for
+        // this field) - see addModeDependentConfigSwitchField.
+        assert.equal(ha.devices[DEVICE_ID].properties['power_save-'], 'OFF')
+        dev.drop()
+    })
 })
