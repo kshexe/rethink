@@ -56,8 +56,15 @@ function buildPowerWrite(on: boolean): Buffer {
     return Buffer.from([0xf0, 0x26, on ? 0x16 : 0x12])
 }
 
+/** TRIAL (2026-09-12): see RD20_S.ts's identical constant for why this fridge-family query frame
+ *  is worth trying here too - a no-op if this appliance ignores it. */
+const QUERY_FRAME = Buffer.from('f0ed1211010000010400', 'hex')
+const QUERY_INTERVAL_MS = 5 * 60 * 1000
+
 export default class Device extends AABBDevice {
     power: boolean | undefined
+
+    private queryTimer: ReturnType<typeof setInterval> | undefined
 
     /** (dir:tag) pairs already flagged as unrecognised, so a repeating one is noted once. */
     private seenUnknown = new Set<string>()
@@ -81,6 +88,18 @@ export default class Device extends AABBDevice {
 
         this.setConfig(config)
         log('status', this.id, 'H01 (식기세척기) handler started - power on/off only, see file header')
+    }
+
+    start() {
+        super.start()
+        this.send(QUERY_FRAME)
+        this.queryTimer = setInterval(() => this.send(QUERY_FRAME), QUERY_INTERVAL_MS)
+    }
+
+    cancelPendingWork() {
+        clearInterval(this.queryTimer)
+        this.queryTimer = undefined
+        super.cancelPendingWork()
     }
 
     setProperty(prop: string, mqttValue: string) {

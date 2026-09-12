@@ -72,8 +72,16 @@ function buildSettingsWrite(pairs: [key: number, value: number][]): Buffer {
     return Buffer.from(body)
 }
 
+/** TRIAL (2026-09-12): see RD20_S.ts's identical constant for why this fridge-family query frame
+ *  is worth trying here too - the appliance never sends or answers a query of its own otherwise,
+ *  so status only ever arrives as a command echo. A no-op if ignored. */
+const QUERY_FRAME = Buffer.from('f0ed1211010000010400', 'hex')
+const QUERY_INTERVAL_MS = 5 * 60 * 1000
+
 export default class Device extends AABBDevice {
     power: boolean | undefined
+
+    private queryTimer: ReturnType<typeof setInterval> | undefined
 
     /** (dir:tag) pairs already flagged as unrecognised, so a repeating one is noted once. */
     private seenUnknown = new Set<string>()
@@ -97,6 +105,18 @@ export default class Device extends AABBDevice {
 
         this.setConfig(config)
         log('status', this.id, 'MI2D7B (미니워시) handler started - power on/off only, see file header')
+    }
+
+    start() {
+        super.start()
+        this.send(QUERY_FRAME)
+        this.queryTimer = setInterval(() => this.send(QUERY_FRAME), QUERY_INTERVAL_MS)
+    }
+
+    cancelPendingWork() {
+        clearInterval(this.queryTimer)
+        this.queryTimer = undefined
+        super.cancelPendingWork()
     }
 
     setProperty(prop: string, mqttValue: string) {

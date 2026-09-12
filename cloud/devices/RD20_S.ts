@@ -157,9 +157,21 @@ function buildSettingsWrite(pairs: [key: number, value: number][]): Buffer {
     return Buffer.from(body)
 }
 
+/** TRIAL (2026-09-12): 2REF21EBNSX_3.ts/3REK2G03VI200S_2.ts (a different opcode family, `0x10`/
+ *  `0x11` sub-byte vs this model's `0x30`) both poll with this exact fixed frame every 5 minutes
+ *  and get a real status record back. This model was never seen sending or answering a query of
+ *  its own - the 114-byte STATUS_FRAME this file already parses only ever showed up unprompted,
+ *  during the self-test burst right after power-on. Sent here on the chance the query itself is
+ *  protocol-level rather than fridge-specific; if the appliance ignores it, this is a no-op and
+ *  the periodic timer costs nothing but one ignored frame every 5 minutes. */
+const QUERY_FRAME = Buffer.from('f0ed1211010000010400', 'hex')
+const QUERY_INTERVAL_MS = 5 * 60 * 1000
+
 export default class Device extends AABBDevice {
     power: boolean | undefined
     status: string | undefined
+
+    private queryTimer: ReturnType<typeof setInterval> | undefined
 
     /** (dir:tag) pairs already flagged as unrecognised, so a repeating one is noted once. */
     private seenUnknown = new Set<string>()
@@ -201,6 +213,18 @@ export default class Device extends AABBDevice {
 
         this.setConfig(config)
         log('status', this.id, 'RD20_S (건조기) handler started - power on/off only, see file header')
+    }
+
+    start() {
+        super.start()
+        this.send(QUERY_FRAME)
+        this.queryTimer = setInterval(() => this.send(QUERY_FRAME), QUERY_INTERVAL_MS)
+    }
+
+    cancelPendingWork() {
+        clearInterval(this.queryTimer)
+        this.queryTimer = undefined
+        super.cancelPendingWork()
     }
 
     setProperty(prop: string, mqttValue: string) {
