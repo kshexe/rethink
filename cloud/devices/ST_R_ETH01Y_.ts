@@ -75,6 +75,19 @@ import { note as recordNote } from '../frame-recorder'
  * tank) fault the appliance raised partway through re-verification, which blocks further course
  * starts until the tank is refilled. The select below only offers the 10 confirmed courses on
  * purpose: guessing an id for an unswept course would risk starting the wrong one.
+ *
+ * POWER READ-BACK (decoded 2026-09-12): the power-command echo above never got past one ambiguous
+ * capture and is still not read from. But this model's real status record - `buf[0..1] == 0x31
+ * 0x0a`, the MSG_TUNNEL envelope FX___S documents (extended-length test, inner type `0xec`/`0xeb`
+ * at `payload[6]`, two 36-byte records back to back for `0xec`, one alone for `0xeb`) - does carry
+ * it, once the record is actually extracted instead of left as a raw unmodelled shape (see the
+ * len 30/50/101/141 note below - this is that record, decoded). Driving power on/off myself on
+ * my.lgthinq.com and cross-checking the LG cloud's own `washerDryer.state` (POWEROFF=0/INITIAL=1/
+ * ...) against the very next status record each time, repeated 4+ times: `record[2]` and
+ * `record[9]` move together, `(0,0)` when the cloud says POWEROFF and `(4,1)` when it says
+ * INITIAL (a sample taken right in the middle of a command's round trip can still show the
+ * previous value - the record only settles a beat after the command lands). `power` is read from
+ * `record[2]` when a status record arrives, in addition to the existing optimistic publish.
  */
 
 const FROM_DEVICE_ACK_OPCODE = 0xe5
@@ -87,6 +100,14 @@ const KEY_COURSE = 0x0a
 const KEY_RESERVE = 0x7f
 /** Always 0x00 in every capture so far; meaning unconfirmed, reproduced literally. */
 const KEY_UNKNOWN_23 = 0x23
+
+/** See the file header's POWER READ-BACK section - the MSG_TUNNEL envelope FX___S.ts documents,
+ *  reused here just for the record split (this handler does not otherwise parse the record). */
+const MSG_TUNNEL = 0x0a
+const INNER_STATE = 0xec
+const INNER_STATE_SINGLE = 0xeb
+const RECORD_LEN = 36
+const POWER_OFFSET = 2
 
 /** The only course ids confirmed against a real unit; see file header. */
 const COURSES: Record<string, number> = {
@@ -205,6 +226,26 @@ export default class Device extends AABBDevice {
     processAABB(buf: Buffer) {
         // ack: <sub> 00 e5 00  (4 bytes) - nothing to publish, just confirms the write landed
         if (buf.length === 4 && buf[1] === 0x00 && buf[2] === FROM_DEVICE_ACK_OPCODE && buf[3] === 0x00) return
+
+        // Status record - see file header's POWER READ-BACK section. Only the power bit is
+        // decoded from it so far; the rest of both 36-byte records is not.
+        if (buf[1] === MSG_TUNNEL) {
+            const extended = buf.readUInt16BE(2) === buf.length + 4
+            const payload = extended ? buf.subarray(4) : buf.subarray(2)
+            if (payload.length > 6) {
+                const data = payload.subarray(10)
+                const offset = payload[6] === INNER_STATE ? RECORD_LEN : payload[6] === INNER_STATE_SINGLE ? 0 : -1
+                if (offset >= 0 && data.length >= offset + RECORD_LEN) {
+                    const record = data.subarray(offset, offset + RECORD_LEN)
+                    const on = record[POWER_OFFSET] !== 0
+                    if (on !== this.power) {
+                        this.power = on
+                        this.publishProperty('power', on ? 'ON' : 'OFF')
+                    }
+                    return
+                }
+            }
+        }
 
         // Anything else (the power/course/start echoes, status dumps, course table) is not
         // parsed yet - see the file header for why the power echo specifically is not readable

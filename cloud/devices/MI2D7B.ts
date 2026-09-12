@@ -35,6 +35,15 @@ import { note as recordNote } from '../frame-recorder'
  * handler does not attempt to read power state back off the wire; `power` is published
  * optimistically from the command this handler itself just sent (see setProperty).
  *
+ * POWER READ-BACK (decoded 2026-09-12): the position checked above (right after the `00 02 01 ff
+ * 01 02` prefix) really is always 0x00, but that is not the only candidate in the 61-byte frame.
+ * Driving the power switch myself on my.lgthinq.com and diffing the immediate command->echo round
+ * trip (no timing ambiguity - the echo lands in the same second as the command) shows `buf[46]`
+ * (buf being this 57-byte frame as processAABB receives it, i.e. with the leading `aa 3d` and
+ * trailing checksum/bb already stripped) is `0x00` right after OFF and `0x02` right after ON,
+ * confirmed both directions. `power` is now read from this byte when the frame arrives, in
+ * addition to the existing optimistic publish from `setProperty`.
+ *
  * NOT YET DECODED: course selection (헹굼/탈수/물온도) and start. Unlike the dryer and styler,
  * this appliance's LG-app page has no "전송" (send-to-appliance) button at all - picking a
  * different course or option in the app only ever produces a client-side preview while 원격제어
@@ -45,6 +54,11 @@ import { note as recordNote } from '../frame-recorder'
  */
 
 const FROM_DEVICE_ACK_OPCODE = 0xe5
+
+/** See the file header's POWER READ-BACK section. */
+const POWER_ECHO_TYPE = 0xe6
+const POWER_ECHO_LEN = 57
+const POWER_OFFSET = 46
 
 /** Shared with FX___S.ts's vocabulary for the same F0E5 protocol family. */
 const KEY_POWER = 0x02
@@ -103,6 +117,16 @@ export default class Device extends AABBDevice {
     processAABB(buf: Buffer) {
         // ack: <sub> 00 e5 00  (4 bytes) - nothing to publish, just confirms the write landed
         if (buf.length === 4 && buf[1] === 0x00 && buf[2] === FROM_DEVICE_ACK_OPCODE && buf[3] === 0x00) return
+
+        // The 57-byte `e6` echo of a power command - see file header's POWER READ-BACK section.
+        if (buf.length === POWER_ECHO_LEN && buf[1] === POWER_ECHO_TYPE) {
+            const on = buf[POWER_OFFSET] !== 0
+            if (on !== this.power) {
+                this.power = on
+                this.publishProperty('power', on ? 'ON' : 'OFF')
+            }
+            return
+        }
 
         // Anything else is a frame this handler does not parse yet (the 61-byte periodic status
         // report, course table, options). Note it once per shape so a future session has

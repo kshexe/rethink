@@ -35,10 +35,22 @@ import { note as recordNote } from '../frame-recorder'
  * (조용히 세척/스팀/집중세척/고온살균/안심헹굼/열풍건조). Left for a future session with more
  * captures - see RETHINK memory `rethink_migration_status` for the raw findings this was built
  * from.
+ *
+ * POWER READ-BACK (decoded 2026-09-12): the 0xEC dual-record status frame mentioned above as
+ * undecoded does carry power state. `buf` (marker `0x32` at [0], type `0xec` at [1]) holds two
+ * 26-byte records back to back starting at `buf[2]` - the old one, then the new/current one at
+ * `buf[28]`. Turning the appliance on/off myself on my.lgthinq.com and reading the very next 0xEC
+ * frame each time: `buf[28]` (the new record's first byte) is `0x00` right after OFF and `0x08`
+ * right after ON, confirmed both directions. `power` is now read from this byte when the frame
+ * arrives, in addition to the existing optimistic publish from `setProperty` (which still matters
+ * for the instant right after HA sends a command, before this echo would arrive).
  */
 
 const ACK_SUB = 0x32
 const ACK_OPCODE = 0x26
+const STATUS_TYPE = 0xec
+const STATUS_MIN_LEN = 28 + 1
+const POWER_OFFSET = 28
 
 function buildPowerWrite(on: boolean): Buffer {
     return Buffer.from([0xf0, 0x26, on ? 0x16 : 0x12])
@@ -90,6 +102,17 @@ export default class Device extends AABBDevice {
         // ack: <sub=0x32> 00 26 00  (4 bytes) - nothing to publish, just confirms the write landed
         if (buf.length === 4 && buf[0] === ACK_SUB && buf[1] === 0x00 && buf[2] === ACK_OPCODE && buf[3] === 0x00)
             return
+
+        // 0xEC dual-record status frame - see file header's POWER READ-BACK section. Only the
+        // power bit is decoded from it so far; the rest of the two 26-byte records is not.
+        if (buf[0] === ACK_SUB && buf[1] === STATUS_TYPE && buf.length >= STATUS_MIN_LEN) {
+            const on = buf[POWER_OFFSET] !== 0
+            if (on !== this.power) {
+                this.power = on
+                this.publishProperty('power', on ? 'ON' : 'OFF')
+            }
+            return
+        }
 
         // Anything else is a frame this handler does not parse yet (status reports, the course
         // table). Note it once per shape so a future session has something to grep for, the same

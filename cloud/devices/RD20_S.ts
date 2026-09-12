@@ -88,6 +88,18 @@ import { note as recordNote } from '../frame-recorder'
  * the appliance does not send it while idle, so `remaining_minutes` is simply never published for
  * that state.
  *
+ * POWER READ-BACK (decoded 2026-09-12): the 63-byte `e6` frame described above as "not carrying
+ * power state" - that conclusion only checked the byte right after the `00 02 01 ff 01 02` prefix
+ * (which is indeed always 0x00). The real power bit sits deeper in the same frame: driving the
+ * power switch myself on my.lgthinq.com and diffing the immediate command->echo round trip (no
+ * timing ambiguity - the echo lands in the same second as the command) shows `buf[33]` (buf being
+ * this 58-byte frame as processAABB receives it, i.e. with the leading `aa 3f` and trailing
+ * checksum/bb already stripped) is `0x00` right after an OFF command and `0x20` right after an ON
+ * command, consistently across repeats. `power` is now read from this byte when the frame arrives,
+ * in addition to being published optimistically from `setProperty` (the frame is not otherwise
+ * emitted while idle - see MI2D7B.ts's identical case - so the optimistic publish still matters for
+ * the moment right after issuing a command from HA before this echo would arrive anyway).
+ *
  * STATUS (decoded 2026-09-11): the discrete status/phase byte flagged above as needing more
  * samples - found it once two more complete dry cycles (2026-09-09 and 2026-09-11) had accumulated
  * in the frame log. `buf[89]` (the "new" record's own copy of the same field `buf[39]` carries for
@@ -120,6 +132,12 @@ const REMAINING_MINUTES_OFFSET = 73
 
 /** See the file header's STATUS section. Same old/new +50 pairing as REMAINING_MINUTES_OFFSET. */
 const STATUS_OFFSET = 89
+
+/** See the file header's POWER READ-BACK section. */
+const POWER_ECHO_TYPE = 0xe6
+const POWER_ECHO_LEN = 58
+const POWER_OFFSET = 33
+
 const STATUS_NAMES: Record<number, string> = {
     0x41: 'running',
     0x61: 'cooling',
@@ -216,6 +234,16 @@ export default class Device extends AABBDevice {
             if (status !== this.status) {
                 this.status = status
                 this.publishProperty('status', status)
+            }
+            return
+        }
+
+        // The 58-byte `e6` echo of a power command - see file header's POWER READ-BACK section.
+        if (buf.length === POWER_ECHO_LEN && buf[1] === POWER_ECHO_TYPE) {
+            const on = buf[POWER_OFFSET] !== 0
+            if (on !== this.power) {
+                this.power = on
+                this.publishProperty('power', on ? 'ON' : 'OFF')
             }
             return
         }
