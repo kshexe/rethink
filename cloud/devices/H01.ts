@@ -133,6 +133,20 @@ export default class Device extends AABBDevice {
             return
         }
 
+        // 0xEB single-record status frame - a query response (see the TRIAL query section above),
+        // same shape as 0xEC's own record but only one copy, at buf[2] instead of buf[28] (matches
+        // 3REK2G03VI200S_2.ts's own eb-vs-ec "single record, no offset" convention). Confirmed
+        // once (2026-09-12): buf[2]===0x00 right after this query trial, consistent with the
+        // 0xEC-derived 0x00=off/0x08=on reading above.
+        if (buf[0] === ACK_SUB && buf[1] === 0xeb && buf.length >= 3) {
+            const on = buf[2] !== 0
+            if (on !== this.power) {
+                this.power = on
+                this.publishProperty('power', on ? 'ON' : 'OFF')
+            }
+            return
+        }
+
         // Anything else is a frame this handler does not parse yet (status reports, the course
         // table). Note it once per shape so a future session has something to grep for, the same
         // way TLVDevice.noteUnknownTags does for the AC family.
