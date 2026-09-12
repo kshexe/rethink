@@ -36,21 +36,24 @@ import { note as recordNote } from '../frame-recorder'
  * captures - see RETHINK memory `rethink_migration_status` for the raw findings this was built
  * from.
  *
- * POWER READ-BACK (decoded 2026-09-12): the 0xEC dual-record status frame mentioned above as
- * undecoded does carry power state. `buf` (marker `0x32` at [0], type `0xec` at [1]) holds two
- * 26-byte records back to back starting at `buf[2]` - the old one, then the new/current one at
- * `buf[28]`. Turning the appliance on/off myself on my.lgthinq.com and reading the very next 0xEC
- * frame each time: `buf[28]` (the new record's first byte) is `0x00` right after OFF and `0x08`
- * right after ON, confirmed both directions. `power` is now read from this byte when the frame
- * arrives, in addition to the existing optimistic publish from `setProperty` (which still matters
- * for the instant right after HA sends a command, before this echo would arrive).
+ * POWER READ-BACK - TRIED AND RETRACTED (2026-09-12): `buf[28]` of the 0xEC dual-record status
+ * frame looked like power at first - reading `0x00` right after OFF and `0x08` right after ON, both
+ * directions, driving the switch myself on my.lgthinq.com. That held up for exactly those two
+ * samples. A real physical on/off at the appliance the same day broke it: `buf[28]` (both the 0xEC
+ * ambient version and the equivalent `buf[2]` of a query-triggered 0xEB, see QUERY_FRAME below)
+ * oscillated 0/8 repeatedly across a single on-then-off (not a clean pair of readings), and then
+ * settled on `0` while the appliance was confirmed still ON - i.e. flatly wrong, not just noisy
+ * during a transition. Whatever this byte tracks, it is not simply power. `power` is back to being
+ * published only optimistically from `setProperty`, the same as before this was tried - see
+ * MI2D7B.ts/RD20_S.ts for the same caution about their own analogous, still-unconfirmed reads of
+ * the same frame family. The two frame shapes are still recognised below (so they do not spam the
+ * unmodelled-frame log) but nothing is read from them.
  */
 
 const ACK_SUB = 0x32
 const ACK_OPCODE = 0x26
 const STATUS_TYPE = 0xec
 const STATUS_MIN_LEN = 28 + 1
-const POWER_OFFSET = 28
 
 function buildPowerWrite(on: boolean): Buffer {
     return Buffer.from([0xf0, 0x26, on ? 0x16 : 0x12])
@@ -122,30 +125,11 @@ export default class Device extends AABBDevice {
         if (buf.length === 4 && buf[0] === ACK_SUB && buf[1] === 0x00 && buf[2] === ACK_OPCODE && buf[3] === 0x00)
             return
 
-        // 0xEC dual-record status frame - see file header's POWER READ-BACK section. Only the
-        // power bit is decoded from it so far; the rest of the two 26-byte records is not.
-        if (buf[0] === ACK_SUB && buf[1] === STATUS_TYPE && buf.length >= STATUS_MIN_LEN) {
-            const on = buf[POWER_OFFSET] !== 0
-            if (on !== this.power) {
-                this.power = on
-                this.publishProperty('power', on ? 'ON' : 'OFF')
-            }
-            return
-        }
-
-        // 0xEB single-record status frame - a query response (see the TRIAL query section above),
-        // same shape as 0xEC's own record but only one copy, at buf[2] instead of buf[28] (matches
-        // 3REK2G03VI200S_2.ts's own eb-vs-ec "single record, no offset" convention). Confirmed
-        // once (2026-09-12): buf[2]===0x00 right after this query trial, consistent with the
-        // 0xEC-derived 0x00=off/0x08=on reading above.
-        if (buf[0] === ACK_SUB && buf[1] === 0xeb && buf.length >= 3) {
-            const on = buf[2] !== 0
-            if (on !== this.power) {
-                this.power = on
-                this.publishProperty('power', on ? 'ON' : 'OFF')
-            }
-            return
-        }
+        // 0xEC dual-record status frame and 0xEB single-record query response - see file header's
+        // POWER READ-BACK section for why nothing is read from either any more. Recognised by
+        // shape and silently dropped so they do not spam the unmodelled-frame log.
+        if (buf[0] === ACK_SUB && buf[1] === STATUS_TYPE && buf.length >= STATUS_MIN_LEN) return
+        if (buf[0] === ACK_SUB && buf[1] === 0xeb && buf.length >= 3) return
 
         // Anything else is a frame this handler does not parse yet (status reports, the course
         // table). Note it once per shape so a future session has something to grep for, the same

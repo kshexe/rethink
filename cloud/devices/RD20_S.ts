@@ -272,22 +272,15 @@ export default class Device extends AABBDevice {
             return
         }
 
-        // Response to the TRIAL query above: MSG_TUNNEL (buf[1]===0x0a) wrapping a single 0xEB
-        // record. UNCONFIRMED, single sample (2026-09-12): record[0] read 0x00 right after the
-        // query, matching this appliance's own known off state at the time - by analogy with
-        // H01.ts, which confirmed the identical position in the identical wrapper for the same
-        // query. Not cross-checked against an ON sample of this specific frame yet.
+        // Response to the TRIAL query above (MSG_TUNNEL, buf[1]===0x0a, wrapping a 0xEB record) -
+        // TRIED AND RETRACTED (2026-09-12), same as H01.ts's identical analogy: the equivalent
+        // byte there turned out not to track power at all (settled on the wrong value against a
+        // confirmed-ON appliance). Recognised here only so it does not spam the unmodelled log;
+        // nothing is read from it.
         if (buf[1] === 0x0a) {
             const extended = buf.readUInt16BE(2) === buf.length + 4
             const payload = extended ? buf.subarray(4) : buf.subarray(2)
-            if (payload.length > 10 && payload[6] === 0xeb) {
-                const on = payload[10] !== 0
-                if (on !== this.power) {
-                    this.power = on
-                    this.publishProperty('power', on ? 'ON' : 'OFF')
-                }
-                return
-            }
+            if (payload.length > 10 && payload[6] === 0xeb) return
         }
 
         // Anything else is a frame this handler does not parse yet (the 63-byte periodic status
