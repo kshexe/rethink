@@ -5,6 +5,7 @@ import { type Metadata } from '../thinq'
 import { allowExtendedType } from '@/util/casting'
 import AABBDevice from './aabb_device'
 import log from '@/util/logging'
+import * as energyAccumulator from '../energy-accumulator'
 
 // LG front-load washer sold in Korea. Retail model FX25VSR.AKOR2; it reports modelId "FX___S" (sw
 // 2.11.246), which is what we match on - the underscores are LG's family wildcard, the same shape as
@@ -948,6 +949,51 @@ export default class Device extends AABBDevice {
                     icon: 'mdi:chart-histogram',
                     entity_category: 'diagnostic',
                 },
+                // Calendar-boundary Wh figures fed by the same 0x3E delta, via energy-accumulator.ts
+                // (see 3REK2G03VI200S_2.ts for the same module used the same way). These survive
+                // both this counter's per-cycle reset (by design - a new wash starts it back at 0)
+                // and a mid-cycle HA/rethink restart, neither of which "Energy this cycle" above
+                // can reflect.
+                energy_hour: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-energy_hour',
+                    name: 'Energy this hour',
+                    icon: 'mdi:lightning-bolt',
+                    device_class: 'energy',
+                    unit_of_measurement: 'Wh',
+                    state_class: 'total',
+                    state_topic: '$this/energy_hour',
+                },
+                energy_day: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-energy_day',
+                    name: 'Energy today',
+                    icon: 'mdi:lightning-bolt',
+                    device_class: 'energy',
+                    unit_of_measurement: 'Wh',
+                    state_class: 'total',
+                    state_topic: '$this/energy_day',
+                },
+                energy_month: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-energy_month',
+                    name: 'Energy this month',
+                    icon: 'mdi:lightning-bolt',
+                    device_class: 'energy',
+                    unit_of_measurement: 'Wh',
+                    state_class: 'total',
+                    state_topic: '$this/energy_month',
+                },
+                energy_total: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-energy_total',
+                    name: 'Energy total',
+                    icon: 'mdi:lightning-bolt',
+                    device_class: 'energy',
+                    unit_of_measurement: 'Wh',
+                    state_class: 'total_increasing',
+                    state_topic: '$this/energy_total',
+                },
                 // LOCAL ONLY - not for upstream, by the owner's decision (2026-08-07). Every other
                 // entity here reports something the appliance sends; this one is a set of phase
                 // numbers this handler decided to call "running", and which phases belong in it is a
@@ -1475,6 +1521,7 @@ export default class Device extends AABBDevice {
         if (report === 1) this.energyReports = []
         this.energyReports[report - 1] = delta
         this.energyTotal = total
+        if (delta > 0) void this.recordEnergyDelta(delta)
 
         // `energy` is NOT published from here any more. The state record carries the same running
         // total once a minute (OFF_ENERGY_HI), so this frame would only ever restate it fifteen
@@ -1504,6 +1551,17 @@ export default class Device extends AABBDevice {
                 interval_minutes: 15,
             }),
         )
+    }
+
+    /** Adds a newly-seen Wh delta to energy-accumulator.ts's calendar-boundary buckets and
+     *  republishes them - see the `energy_hour`/`energy_day`/`energy_month`/`energy_total`
+     *  components above. */
+    private async recordEnergyDelta(deltaWh: number) {
+        const stats = await energyAccumulator.addDelta(this.id, deltaWh)
+        this.publishProperty('energy_hour', stats.hourWh)
+        this.publishProperty('energy_day', stats.dayWh)
+        this.publishProperty('energy_month', stats.monthWh)
+        this.publishProperty('energy_total', stats.totalWh)
     }
 
     /**

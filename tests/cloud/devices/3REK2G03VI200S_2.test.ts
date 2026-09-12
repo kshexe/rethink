@@ -84,6 +84,10 @@ describe(MODEL_ID, () => {
         assert.deepEqual(Object.keys(components).sort(), [
             'any_door_open',
             'bottom_compartment',
+            'energy_day',
+            'energy_hour',
+            'energy_month',
+            'energy_total',
             'energy_total_counter',
             'middle_compartment',
             'one_touch_deodorize',

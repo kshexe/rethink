@@ -6,6 +6,7 @@ import HADevice from './base'
 import AABBDevice from './aabb_device'
 import log from '@/util/logging'
 import { note as recordNote } from '../frame-recorder'
+import * as energyAccumulator from '../energy-accumulator'
 
 /*
  * LG kimchi fridge (김치냉장고), ThinQ model 3REK2G03VI200S_2, a 3-compartment unit (상칸/중칸/하칸
@@ -139,6 +140,16 @@ import { note as recordNote } from '../frame-recorder'
  * independently calibrated against the app's own kWh figure to the same precision the fridge's
  * counter was) is left off rather than asserted.
  *
+ * UNIT CONFIRMED (2026-09-12): this model's own app screen exposes an hourly Wh breakdown (most
+ * models this fork has seen so far only get a monthly total), so `<delta>` could be checked
+ * directly against real figures instead of the fridge's own once-a-day total. Summing `<delta>`
+ * samples that fall within the same clock hour and comparing to the app's per-hour Wh value for
+ * 2026-09-12: 02:00 matched exactly (41 computed, 41 shown), 03:00 was 42 vs 40, other hours ±2 -
+ * consistent with Wh and with the small mismatch being the ~15-minute sample cadence not lining up
+ * with the clock-hour boundary, not a wrong scale. `<delta>` now feeds `energy-accumulator.ts` (see
+ * FX___S.ts for the same module used the same way) for hour/day/month/total figures that survive
+ * the running total's own unpredictable resets; the raw counter above is kept as-is alongside it.
+ *
  * NOT YET DECODED, left deliberately unmodelled:
  *   - `11 31` (51 bytes): fires rarely, contains two readable ASCII part/serial-number-looking
  *     strings (e.g. "SAA42276301") - an identification/inventory block, not live state. Recognised
@@ -170,6 +181,7 @@ const WRITE_ECHO_OPCODE = 0xe6
 const ENERGY_SUB = 0x11
 const ENERGY_OPCODE = 0x3e
 const ENERGY_FRAME_LEN = 7
+const ENERGY_DELTA_OFFSET = 3
 const ENERGY_TOTAL_OFFSET = 4
 /** `f0 e5 00 02 01 ff 01 00` - constant across every write captured; only the selector (= the
  *  target's own record byte index) and the value after it ever change. */
@@ -316,6 +328,49 @@ export default class Device extends AABBDevice {
                     state_class: 'total_increasing',
                     state_topic: '$this/energy_total_counter',
                 },
+                // Calendar-boundary Wh figures - see energy-accumulator.ts and the file header's
+                // ENERGY COUNTER/UNIT CONFIRMED sections. These survive the raw counter's own
+                // unpredictable resets; energy_total is a lifetime total that only grows.
+                energy_hour: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-energy_hour',
+                    name: 'Energy this hour',
+                    icon: 'mdi:lightning-bolt',
+                    device_class: 'energy',
+                    unit_of_measurement: 'Wh',
+                    state_class: 'total',
+                    state_topic: '$this/energy_hour',
+                },
+                energy_day: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-energy_day',
+                    name: 'Energy today',
+                    icon: 'mdi:lightning-bolt',
+                    device_class: 'energy',
+                    unit_of_measurement: 'Wh',
+                    state_class: 'total',
+                    state_topic: '$this/energy_day',
+                },
+                energy_month: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-energy_month',
+                    name: 'Energy this month',
+                    icon: 'mdi:lightning-bolt',
+                    device_class: 'energy',
+                    unit_of_measurement: 'Wh',
+                    state_class: 'total',
+                    state_topic: '$this/energy_month',
+                },
+                energy_total: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-energy_total',
+                    name: 'Energy total',
+                    icon: 'mdi:lightning-bolt',
+                    device_class: 'energy',
+                    unit_of_measurement: 'Wh',
+                    state_class: 'total_increasing',
+                    state_topic: '$this/energy_total',
+                },
             },
         })
 
@@ -330,7 +385,11 @@ export default class Device extends AABBDevice {
     start() {
         super.start()
         this.query()
-        this.queryTimer = setInterval(() => this.query(), QUERY_INTERVAL_MS)
+        void this.refreshEnergyStats()
+        this.queryTimer = setInterval(() => {
+            this.query()
+            void this.refreshEnergyStats()
+        }, QUERY_INTERVAL_MS)
     }
 
     cancelPendingWork() {
@@ -341,6 +400,27 @@ export default class Device extends AABBDevice {
 
     query() {
         this.send(QUERY_FRAME)
+    }
+
+    /** Adds a newly-seen Wh delta (see the file header's ENERGY COUNTER/UNIT CONFIRMED sections)
+     *  and republishes the calendar-boundary figures. */
+    private async recordEnergyDelta(deltaWh: number) {
+        const stats = await energyAccumulator.addDelta(this.id, deltaWh)
+        this.publishProperty('energy_hour', stats.hourWh)
+        this.publishProperty('energy_day', stats.dayWh)
+        this.publishProperty('energy_month', stats.monthWh)
+        this.publishProperty('energy_total', stats.totalWh)
+    }
+
+    /** Rolls the calendar buckets over (without adding a delta) and republishes, so a poll that
+     *  finds nothing new still keeps hour/day/month current instead of carrying a stale figure
+     *  into the new hour/day/month. */
+    private async refreshEnergyStats() {
+        const stats = await energyAccumulator.current(this.id)
+        this.publishProperty('energy_hour', stats.hourWh)
+        this.publishProperty('energy_day', stats.dayWh)
+        this.publishProperty('energy_month', stats.monthWh)
+        this.publishProperty('energy_total', stats.totalWh)
     }
 
     /** Applies a state record (10 bytes) - shared between the `ec` state frame's current half and
@@ -458,6 +538,8 @@ export default class Device extends AABBDevice {
                 this.energyTotal = total
                 this.publishProperty('energy_total_counter', total)
             }
+            const delta = buf[ENERGY_DELTA_OFFSET]
+            if (delta > 0) void this.recordEnergyDelta(delta)
             return
         }
 
