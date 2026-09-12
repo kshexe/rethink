@@ -138,11 +138,15 @@ type SwingAxis = {
     attach?: number[]
 }
 
-/* This unit's vanes: on/off, on their own pair of tags rather than positional ones. */
-const SWING_AXES_ON_OFF: SwingAxis[] = [
-    { tag: 0x205, name: 'swing_mode', levels: SWING_ON_OFF },
-    { tag: 0x206, name: 'swing_horizontal_mode', levels: SWING_ON_OFF },
-]
+/*
+ * This unit's horizontal vanes: plain on/off (0x206). Vertical (0x205) used to be here too, as a
+ * second on/off axis - folded into the "상하 각도" select instead (see TAG_VERTICAL_ANGLE's own
+ * comment and addModelFields()) once 2026-09-12 live testing showed the app's own vertical menu
+ * treats "swing on" as just one more choice alongside its 1-6 fixed angles, not a separate control.
+ * With only one axis left, this uses 'swing_mode' (HA's primary swing attribute), not
+ * 'swing_horizontal_mode' - see the SwingAxis type comment on why a single axis gets that one.
+ */
+const SWING_AXES_ON_OFF: SwingAxis[] = [{ tag: 0x206, name: 'swing_mode', levels: SWING_ON_OFF }]
 
 /* The discovery config once the climate component is known to be in it */
 type ClimateConfig = DeviceDiscovery & { components: { climate: ClimateComponent } }
@@ -719,14 +723,41 @@ export default class Device extends TLVDevice {
         ])
 
         // 상하 각도 (0x321) - see the constant's own comment above for how this was found.
-        this.addValueSelect(config, 'vertical_angle', TAG_VERTICAL_ANGLE, '상하 각도', 'mdi:angle-acute', [
-            ['1', 1],
-            ['2', 2],
-            ['3', 3],
-            ['4', 4],
-            ['5', 5],
-            ['6', 6],
-        ])
+        // Modelled on addWindModeSelect() just below: a single select mutually exclusive with a
+        // tag that already has its own field registration (0x205, this unit's plain vertical
+        // swing-on-off, also driving the climate entity's own swing_mode) - fields_by_id only
+        // holds one definition per tag, so this can't be a second addField on 0x205, and the
+        // write has to set two tags at once anyway (a fixed angle only takes effect once swing is
+        // off). Confirmed 2026-09-12 live that the app's own "자동" choice in this same menu is
+        // just 0x205=1, not a distinct value on 0x321 itself - so read and write both fold the two
+        // tags into the one entity here instead of leaving 자동 to a separate switch.
+        if (this.raw_clip_state[TAG_VERTICAL_ANGLE] != null && !config.components['vertical_angle']) {
+            config.components['vertical_angle'] = allowExtendedType({
+                platform: 'select',
+                unique_id: '$deviceid-vertical_angle',
+                name: '상하 각도',
+                icon: 'mdi:angle-acute',
+                entity_category: 'config',
+                options: ['1', '2', '3', '4', '5', '6', 'auto'],
+                state_topic: '$this/vertical_angle',
+                command_topic: '$this/vertical_angle/set',
+            })
+            this.addField(
+                config,
+                {
+                    id: TAG_VERTICAL_ANGLE,
+                    name: 'vertical_angle_shadow',
+                    comp: 'vertical_angle',
+                    readable: false,
+                    writable: false,
+                    read_callback: () => {
+                        this.HA.publishProperty(this.id, 'vertical_angle', this.verticalAngleFromState())
+                        return false
+                    },
+                },
+                false,
+            )
+        }
 
         // 0x23f ("comfort energy saving", distinct from the plain power saving of 0x20d that
         // is exposed below as "power_save" - modelJSON's own name for it, airState.powerSave.basic,
@@ -1790,11 +1821,32 @@ export default class Device extends TLVDevice {
         return 'off'
     }
 
+    // 상하 각도: "auto" means vertical swing is on (0x205=1); a number means swing is off and
+    // 0x321 holds that fixed position. Swing wins if somehow both look set at once - matches the
+    // panel, where turning swing on is what makes the numbered position stop applying.
+    verticalAngleFromState(): string {
+        if (this.raw_clip_state[0x205]) return 'auto'
+        const angle = this.raw_clip_state[TAG_VERTICAL_ANGLE]
+        return angle != null ? String(angle) : 'auto'
+    }
+
     setProperty(prop: string, mqttValue: string) {
         if (prop === 'wind_mode') {
             const on = Device.WIND_TO_FLAG[mqttValue]
             // select one flag exclusively: chosen=1, everything else (incl. 0x3d5 release)=0
             const tlv = Device.WIND_FLAGS.map((id) => ({ t: id, v: id === on ? 1 : 0 }))
+            for (const { t, v } of tlv) this.raw_clip_state[t] = v
+            this.send([1, 1, 2, 1, 1], tlv)
+            return
+        }
+        if (prop === 'vertical_angle') {
+            const tlv =
+                mqttValue === 'auto'
+                    ? [{ t: 0x205, v: 1 }]
+                    : [
+                          { t: TAG_VERTICAL_ANGLE, v: Number(mqttValue) },
+                          { t: 0x205, v: 0 },
+                      ]
             for (const { t, v } of tlv) this.raw_clip_state[t] = v
             this.send([1, 1, 2, 1, 1], tlv)
             return

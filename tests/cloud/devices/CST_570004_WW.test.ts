@@ -113,10 +113,13 @@ describe(MODEL_ID, () => {
         // auto-dry sensor (0x2CB bit2) is masked because auto-dry is exposed as a select instead.
         assert.ok(c.power_save, 'power_save present (from 0x2CB bit1)')
 
-        // CST fan scale and on/off swing.
+        // CST fan scale and on/off swing. Only one swing axis left on the climate entity itself
+        // (0x206, horizontal) - vertical (0x205) moved into the vertical_angle select below, so
+        // it uses swing_mode (HA's primary attribute) rather than swing_horizontal_mode; see
+        // SWING_AXES_ON_OFF's own comment.
         assert.deepEqual(c.climate.fan_modes, ['auto', 'very low', 'low', 'medium', 'high', 'power'])
         assert.deepEqual(c.climate.swing_modes, ['on', 'off'])
-        assert.deepEqual(c.climate.swing_horizontal_modes, ['on', 'off'])
+        assert.ok(!c.climate.swing_horizontal_modes, 'no second swing axis - folded into vertical_angle')
 
         // Extra components CST adds.
         assert.equal(c.autodry_setting?.platform, 'select')
@@ -282,7 +285,7 @@ describe(MODEL_ID, () => {
         'ED56002FBD5A00960BC88D5D03CD61020C9009C40A88087D0C8AC40E9C16640668066C067006740678067C' +
         '068008F80F7407C8189501E9380C84346C2'
 
-    test('vertical_angle select reads 0x321 (1..6, "상하 각도")', (t) => {
+    test('vertical_angle select reads 0x321 (1..6) or "auto" when swing (0x205) is on', (t) => {
         enableMockTimers(t)
         const { ha, thinq, dev } = makeDevice()
         thinq.resetRecorder()
@@ -293,10 +296,67 @@ describe(MODEL_ID, () => {
 
         const c = ha.devices[DEVICE_ID].config!.components as Record<string, any>
         assert.equal(c.vertical_angle?.platform, 'select')
-        assert.deepEqual(c.vertical_angle.options, ['1', '2', '3', '4', '5', '6'])
+        assert.deepEqual(c.vertical_angle.options, ['1', '2', '3', '4', '5', '6', 'auto'])
 
         thinq.emit('data', buf(QUERY_RESPONSE_WITH_VERTICAL_ANGLE_HEX))
-        assert.equal(ha.getProperty(DEVICE_ID, 'vertical_angle', 'state'), '3') // 0x321=3
+        assert.equal(ha.getProperty(DEVICE_ID, 'vertical_angle', 'state'), '3') // 0x321=3, 0x205=0
+
+        // Swing (0x205) on wins over whatever 0x321 last held. 0x205 has its own field (driving
+        // the climate entity's swing_mode), so set it directly rather than via a frame, then
+        // re-process 0x321 alone to re-trigger the shadow read (a real state dump would carry
+        // both together - see the read_callback's own comment for why that is relied on here).
+        dev.raw_clip_state[0x205] = 1
+        dev.processKeyValue(0x321, 3)
+        assert.equal(ha.getProperty(DEVICE_ID, 'vertical_angle', 'state'), 'auto')
+
+        dev.drop()
+    })
+
+    test('writing vertical_angle=4 sets 0x321=4 and clears swing (0x205=0)', (t) => {
+        enableMockTimers(t)
+        const { ha, thinq, dev } = makeDevice()
+        thinq.resetRecorder()
+
+        thinq.emit('data', buf(CAPS_RESPONSE_HEX))
+        thinq.emit('data', buf(QUERY_RESPONSE_WITH_VERTICAL_ANGLE_HEX))
+        tickMockTimers(t, 600)
+
+        dev.raw_clip_state[0x205] = 1 // swing was on
+        thinq.resetRecorder()
+
+        ha.setProperty(DEVICE_ID, 'vertical_angle', 'command', '4')
+
+        assert.equal(thinq.outbox.length, 1)
+        const frame = thinq.outbox[0]
+        const m = new Map(TLV.parse(frame.subarray(11, frame.length - 2)).map(({ t, v }) => [t, v]))
+        assert.equal(m.get(0x321), 4, 'angle written')
+        assert.equal(m.get(0x205), 0, 'swing forced off in the same frame')
+
+        dev.drop()
+    })
+
+    test('writing vertical_angle="auto" sets swing (0x205=1), no 0x321 write', (t) => {
+        enableMockTimers(t)
+        const { ha, thinq, dev } = makeDevice()
+        thinq.resetRecorder()
+
+        thinq.emit('data', buf(CAPS_RESPONSE_HEX))
+        thinq.emit('data', buf(QUERY_RESPONSE_WITH_VERTICAL_ANGLE_HEX))
+        tickMockTimers(t, 600)
+
+        dev.raw_clip_state[0x205] = 0
+        thinq.resetRecorder()
+
+        ha.setProperty(DEVICE_ID, 'vertical_angle', 'command', 'auto')
+
+        assert.equal(thinq.outbox.length, 1)
+        const frame = thinq.outbox[0]
+        const tlvs = TLV.parse(frame.subarray(11, frame.length - 2))
+        assert.deepEqual(
+            tlvs.map(({ t, v }) => [t, v]),
+            [[0x205, 1]],
+            'only 0x205 is written for auto',
+        )
 
         dev.drop()
     })
