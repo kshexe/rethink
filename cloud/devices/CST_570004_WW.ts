@@ -37,6 +37,14 @@ const TAG_AUTO_DRY_REMAIN = 0x225
 const TAG_POWER_W = 0x2b3
 const TAG_FILTER_REMAINING = 0x355
 const TAG_FILTER_LIFE = 0x356
+/*
+ * 상하(vertical) 회전 각도 고정 - 스윙(0x205) on/off와는 별개 컨트롤: 1~6단, 이 유닛에서
+ * 확인됨(2026-09-12, 실제 앱 조작 중 이서에어컨의 raw TLV 캡처로 태그/값 확정 -
+ * 0x321=2/3/4/5/6/1로 순서대로 눌러 순환하는 것까지 실측). modelJSON은 1~5단+자동(100)으로
+ * 문서화하지만 실물은 6단까지 있고, "자동"은 아직 실측 못 함(값 미확인) - 옵션에서 뺌.
+ * FRAMELOG_FINDINGS 메모의 옛 "0x321 (2/8737/2) mixed" 항목이 바로 이것.
+ */
+const TAG_VERTICAL_ANGLE = 0x321
 /* The two tags an IDU may use to report whether it is actually running */
 const TAG_IDU_THERMO_ON_OFF = 0x189
 const TAG_IDU_RUNNING_ALT = 0x6c
@@ -708,6 +716,16 @@ export default class Device extends TLVDevice {
             ['off', 100],
             ['50%', 150],
             ['100%', 200],
+        ])
+
+        // 상하 각도 (0x321) - see the constant's own comment above for how this was found.
+        this.addValueSelect(config, 'vertical_angle', TAG_VERTICAL_ANGLE, '상하 각도', 'mdi:angle-acute', [
+            ['1', 1],
+            ['2', 2],
+            ['3', 3],
+            ['4', 4],
+            ['5', 5],
+            ['6', 6],
         ])
 
         // 0x23f ("comfort energy saving", distinct from the plain power saving of 0x20d that

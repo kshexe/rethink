@@ -268,4 +268,36 @@ describe(MODEL_ID, () => {
         assert.equal(ha.devices[DEVICE_ID].properties['power_save-'], 'OFF')
         dev.drop()
     })
+
+    /*
+     * 상하 각도 (0x321) - see the constant's own comment in CST_570004_WW.ts for how this was
+     * found (2026-09-12, live TLV capture while cycling the real unit through all 6 positions
+     * and back). QUERY_RESPONSE_HEX predates the discovery and doesn't carry this tag, so this
+     * test uses its own copy with 0x321=3 appended (rebuilt with the same TLV/crc16 helpers the
+     * handler itself uses, not a hand-edited hex string).
+     */
+    const QUERY_RESPONSE_WITH_VERTICAL_ANGLE_HEX =
+        '000004000000A7020400857DC07E407E867F50347F90307F0086808840D4C0D500C84181408180C940A38' +
+        '0A3C0A400A440F540F580F5C08340838389501E83C08FC0CD40CD00CCC0CDA0032BADA01CC6ACC0AD41B54' +
+        'ED56002FBD5A00960BC88D5D03CD61020C9009C40A88087D0C8AC40E9C16640668066C067006740678067C' +
+        '068008F80F7407C8189501E9380C84346C2'
+
+    test('vertical_angle select reads 0x321 (1..6, "상하 각도")', (t) => {
+        enableMockTimers(t)
+        const { ha, thinq, dev } = makeDevice()
+        thinq.resetRecorder()
+
+        thinq.emit('data', buf(CAPS_RESPONSE_HEX))
+        thinq.emit('data', buf(QUERY_RESPONSE_WITH_VERTICAL_ANGLE_HEX))
+        tickMockTimers(t, 600)
+
+        const c = ha.devices[DEVICE_ID].config!.components as Record<string, any>
+        assert.equal(c.vertical_angle?.platform, 'select')
+        assert.deepEqual(c.vertical_angle.options, ['1', '2', '3', '4', '5', '6'])
+
+        thinq.emit('data', buf(QUERY_RESPONSE_WITH_VERTICAL_ANGLE_HEX))
+        assert.equal(ha.getProperty(DEVICE_ID, 'vertical_angle', 'state'), '3') // 0x321=3
+
+        dev.drop()
+    })
 })
