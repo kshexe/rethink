@@ -72,16 +72,18 @@ function buildSettingsWrite(pairs: [key: number, value: number][]): Buffer {
     return Buffer.from(body)
 }
 
-/** TRIAL (2026-09-12): see RD20_S.ts's identical constant for why this fridge-family query frame
- *  is worth trying here too - the appliance never sends or answers a query of its own otherwise,
- *  so status only ever arrives as a command echo. A no-op if ignored. */
+/** ACTIVE QUERY (2026-09-12, see RD20_S.ts's identical constant): this fridge-family query frame
+ *  also elicits a real response here, even though nothing is read from it any more (see the
+ *  processAABB comment below). Sent once on connect only, not on a repeating timer: this
+ *  appliance already broadcasts its own course-table frame every 1-2s on its own, unprompted -
+ *  confirmed 2026-09-13 by watching the live frame log with no query in flight at all. Re-asking
+ *  every 5 minutes bought nothing beyond that one initial connect-time answer (the retracted power
+ *  byte was never republished anyway), so a periodic re-query was dropped as dead weight; the
+ *  appliance's own continuous chatter is what would carry a future decoded field instead. */
 const QUERY_FRAME = Buffer.from('f0ed1211010000010400', 'hex')
-const QUERY_INTERVAL_MS = 5 * 60 * 1000
 
 export default class Device extends AABBDevice {
     power: boolean | undefined
-
-    private queryTimer: ReturnType<typeof setInterval> | undefined
 
     /** (dir:tag) pairs already flagged as unrecognised, so a repeating one is noted once. */
     private seenUnknown = new Set<string>()
@@ -110,13 +112,6 @@ export default class Device extends AABBDevice {
     start() {
         super.start()
         this.send(QUERY_FRAME)
-        this.queryTimer = setInterval(() => this.send(QUERY_FRAME), QUERY_INTERVAL_MS)
-    }
-
-    cancelPendingWork() {
-        clearInterval(this.queryTimer)
-        this.queryTimer = undefined
-        super.cancelPendingWork()
     }
 
     setProperty(prop: string, mqttValue: string) {
