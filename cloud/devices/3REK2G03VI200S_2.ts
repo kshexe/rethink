@@ -158,6 +158,22 @@ import * as energyAccumulator from '../energy-accumulator'
  *   - room2Temp (the one modelJSON field with no corresponding physical compartment on this unit -
  *     see record[2]/record[5] above).
  *
+ * NOTIFICATION (candidate, 2026-09-14): found while looking for this model's equivalent of
+ * FX___S.ts's `notification` event entity, which the official `lg_thinq` integration exposes for
+ * this fridge too (`event.gimcinaengjanggo_notification`) but this handler had never attempted.
+ * `11 72 <13-byte payload>` (15 bytes total) - the opcode number `0x72` matches FX___S's own
+ * `MSG_NOTIFY` exactly (different device family, same envelope, same convention for "this is the
+ * notify channel"), and `payload[0] === 0` in the one real sample caught so far matches the same
+ * gate FX___S's `processNotification` uses. Only one sample exists (`payload[1] = 23`, caught
+ * incidentally during an unrelated option-write test, not against any real named event like a
+ * door-left-open or filter-due alert), so there is no name to give it yet - published as a raw
+ * diagnostic `notification_code` number rather than guessed at, the same caution this fork gives
+ * every under-sampled field. A real notification firing while this is live would show up as this
+ * number changing; matching that moment to what actually happened in the app is what would turn
+ * it into a named event the way FX___S's own `NOTIFICATION` map is. The same opcode was searched
+ * for on 2REF21EBNSX_3.ts (the other fridge) and never once appeared in its logs - that model's
+ * own notification channel, if it has one, is still completely unlocated.
+ *
  * See RETHINK memory `rethink_migration_status` for the raw capture log this was built from.
  */
 
@@ -176,6 +192,12 @@ const QUERY_INTERVAL_MS = 5 * 60 * 1000
 
 const WRITE_ECHO_SUB = 0x11
 const WRITE_ECHO_OPCODE = 0xe6
+
+/** See the file header's NOTIFICATION section. */
+const NOTIFY_SUB = 0x11
+const NOTIFY_OPCODE = 0x72
+const NOTIFY_FRAME_LEN = 15
+const NOTIFY_CODE_OFFSET = 3
 
 /** See the file header's ENERGY COUNTER section. */
 const ENERGY_SUB = 0x11
@@ -327,6 +349,16 @@ export default class Device extends AABBDevice {
                     icon: 'mdi:lightning-bolt-outline',
                     state_class: 'total_increasing',
                     state_topic: '$this/energy_total_counter',
+                },
+                // See the file header's NOTIFICATION section - a raw, unnamed code (one sample so
+                // far), not the named `event` entity FX___S.ts has for its own notify channel.
+                notification_code: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-notification_code',
+                    name: 'Notification code (raw, unnamed)',
+                    icon: 'mdi:bell-outline',
+                    entity_category: 'diagnostic',
+                    state_topic: '$this/notification_code',
                 },
                 // Calendar-boundary Wh figures - see energy-accumulator.ts and the file header's
                 // ENERGY COUNTER/UNIT CONFIRMED sections. These survive the raw counter's own
@@ -540,6 +572,14 @@ export default class Device extends AABBDevice {
             }
             const delta = buf[ENERGY_DELTA_OFFSET]
             if (delta > 0) void this.recordEnergyDelta(delta)
+            return
+        }
+
+        // notification channel: <sub=0x11> 72 <payload> - see the file header's NOTIFICATION
+        // section. Only published when the leading payload byte is 0, the same gate FX___S.ts
+        // uses for its own notify channel.
+        if (buf.length === NOTIFY_FRAME_LEN && buf[0] === NOTIFY_SUB && buf[1] === NOTIFY_OPCODE && buf[2] === 0) {
+            this.publishProperty('notification_code', buf[NOTIFY_CODE_OFFSET])
             return
         }
 
