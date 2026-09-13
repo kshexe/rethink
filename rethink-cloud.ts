@@ -134,6 +134,26 @@ function t2setup(manager: DeviceManager) {
 
     const acceptor = new T2Acceptor(broker)
     acceptor.on('newDevice', manager.accept.bind(manager))
+
+    // Every appliance socket gets explicitly destroyed (an immediate FIN/RST) before this process
+    // exits, rather than leaving that to whatever the OS/container runtime does with a dying
+    // process's file descriptors on its own (2026-09-13 - prompted by a real add-on-restart-time
+    // disconnect a kimchi fridge never recovered from on its own, see RETHINK memory
+    // `rethink_migration_status`). This does not fix the appliance's own reconnect logic - that
+    // is firmware this project has no visibility into, and the same day's log showed this exact
+    // appliance surviving several earlier restarts cleanly, so the failure looks like an
+    // intermittent flake on the appliance side rather than something reliably reproducible here -
+    // but sending an unambiguous, immediate close on every restart (deploy or otherwise) removes
+    // one variable: an appliance that is merely slow to notice a half-closed connection, rather
+    // than one that never notices at all, should now have the clearest possible signal to
+    // reconnect on every restart, not just most of them.
+    const shutdown = (signal: string) => {
+        log('status', `${signal} received - closing ${broker.clients.size} appliance connection(s) before exit`)
+        for (const client of broker.clients) client.destroy()
+        process.exit(0)
+    }
+    process.on('SIGTERM', () => shutdown('SIGTERM'))
+    process.on('SIGINT', () => shutdown('SIGINT'))
 }
 
 // HA connector
