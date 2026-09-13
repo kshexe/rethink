@@ -35,6 +35,14 @@ const START_SNOW_RAIN_DRY = buf('aa14f0e5000201ff040a1b23007f0000030131bb') // �
 const START_BLANKET_WARM = buf('aa14f0e5000201ff040a1c23007f0000030130bb') // 담요 데우기
 const START_SCARF_STYLING = buf('aa14f0e5000201ff040a1d23007f0000030133bb') // 목도리 스타일링
 
+// Real 0xEC dual-record status frame, captured 2026-09-13 changing course from 강력 스타일링
+// (id 4, 53분, the appliance's default) to 정장/코트 스타일링 (id 5, 31분) while powered on -
+// see the file header's STATUS RECORD section.
+const STATUS_EC_SUIT_COAT_31MIN = buf(
+    'aaff310a005a007b34000100ec00480a00000400000035003501000000000000000002190000001600060000000000000000000a' +
+        '0000050000001f001f01000000000000000002190000001600060000000000000000005a51bb',
+)
+
 function makeDevice() {
     const ha = new MockHAConnection()
     const thinq = new MockThinq2Device(DEVICE_ID, META)
@@ -43,13 +51,21 @@ function makeDevice() {
 }
 
 describe(MODEL_ID, () => {
-    test('declares power, course and start, and nothing else', () => {
+    test('declares power, course and start as writable, plus two read-only diagnostics', () => {
         const { ha } = makeDevice()
         const components = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
-        assert.deepEqual(Object.keys(components).sort(), ['course', 'power', 'start'])
+        assert.deepEqual(Object.keys(components).sort(), [
+            'active_course',
+            'course',
+            'duration_minutes',
+            'power',
+            'start',
+        ])
         assert.equal(components.power.command_topic, '$this/power/set')
         assert.equal(components.course.command_topic, '$this/course/set')
         assert.equal(components.start.command_topic, '$this/start/set')
+        assert.equal(components.active_course.command_topic, undefined)
+        assert.equal(components.duration_minutes.command_topic, undefined)
     })
 
     test('the course select only offers the courses with a confirmed id', () => {
@@ -66,6 +82,19 @@ describe(MODEL_ID, () => {
             '눈/비 건조',
             '담요 데우기',
             '목도리 스타일링',
+            '정장/코트 스타일링',
+            '울/니트 스타일링',
+            '셔츠 한 벌 건조',
+            '인공지능 건조',
+            '침구,베개 살균',
+            '모피/가죽 스타일링',
+            '패딩 건조',
+            '패딩 스타일링',
+            '실내 제습',
+            '시간 건조',
+            '아기옷 살균',
+            '인형 살균',
+            '청바지 스타일링',
         ])
         // Matches the appliance's own default, confirmed by START_STRONG_STYLING below being the
         // frame that came back when the user pressed 시작 without touching the course picker.
@@ -129,6 +158,18 @@ describe(MODEL_ID, () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', ACK)
         assert.equal(ha.devices[DEVICE_ID].properties.power, undefined)
+    })
+
+    test('a real 0xEC status frame decodes power/active course/duration off record[9]/[2]/[6]', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', STATUS_EC_SUIT_COAT_31MIN)
+        const props = ha.devices[DEVICE_ID].properties
+        assert.equal(props.power, 'ON')
+        assert.equal(props.active_course, '정장/코트 스타일링')
+        assert.equal(props.duration_minutes, 31)
+        // The writable "course" select (what a future Start press will use) is untouched by a
+        // status read - it only reflects the appliance's live panel, see the file header.
+        assert.equal(props.course, '강력 스타일링')
     })
 
     test('start reproduces the captured start frame for the default course', () => {

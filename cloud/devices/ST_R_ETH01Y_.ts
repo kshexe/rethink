@@ -76,18 +76,56 @@ import { note as recordNote } from '../frame-recorder'
  * starts until the tank is refilled. The select below only offers the 10 confirmed courses on
  * purpose: guessing an id for an unswept course would risk starting the wrong one.
  *
- * POWER READ-BACK (decoded 2026-09-12): the power-command echo above never got past one ambiguous
- * capture and is still not read from. But this model's real status record - `buf[0..1] == 0x31
- * 0x0a`, the MSG_TUNNEL envelope FX___S documents (extended-length test, inner type `0xec`/`0xeb`
- * at `payload[6]`, two 36-byte records back to back for `0xec`, one alone for `0xeb`) - does carry
- * it, once the record is actually extracted instead of left as a raw unmodelled shape (see the
- * len 30/50/101/141 note below - this is that record, decoded). Driving power on/off myself on
- * my.lgthinq.com and cross-checking the LG cloud's own `washerDryer.state` (POWEROFF=0/INITIAL=1/
- * ...) against the very next status record each time, repeated 4+ times: `record[2]` and
- * `record[9]` move together, `(0,0)` when the cloud says POWEROFF and `(4,1)` when it says
- * INITIAL (a sample taken right in the middle of a command's round trip can still show the
- * previous value - the record only settles a beat after the command lands). `power` is read from
- * `record[2]` when a status record arrives, in addition to the existing optimistic publish.
+ * POWER READ-BACK (decoded 2026-09-12, CORRECTED 2026-09-13 - see STATUS RECORD below): the
+ * power-command echo above never got past one ambiguous capture and is still not read from. This
+ * model's real status record - `buf[0..1] == 0x31 0x0a`, the MSG_TUNNEL envelope FX___S documents
+ * (extended-length test, inner type `0xec`/`0xeb` at `payload[6]`, two 36-byte records back to
+ * back for `0xec`, one alone for `0xeb`) - does carry it, once the record is extracted. The
+ * original pass here read power from `record[2]`, cross-checking the LG cloud's own
+ * `washerDryer.state` 4+ times and finding `record[2]`/`record[9]` moved together, `(0,0)` for
+ * POWEROFF and `(4,1)` for INITIAL. That held up because every one of those repeats left the
+ * appliance on its default course (강력 스타일링, id 4) the whole time - `record[2]` is actually
+ * the *course id*, not power, and it only looked like a clean power pair because "off" resets it
+ * to 0 and the only course ever active during that test happened to be id 4. The 2026-09-13 course
+ * sweep below broke that coincidence (changing course changes `record[2]` while `power` stays put)
+ * and found the real, course-independent power bit at `record[9]` alone (`0` off / `1` on) - see
+ * STATUS RECORD.
+ *
+ * STATUS RECORD, FULL DECODE (2026-09-13): cracked open the same way H01.ts's dishwasher record
+ * was the same day - selecting every named course in the app's picker in turn and reading back the
+ * very next status record, then adjusting a time-adjustable course's duration up and down.
+ *
+ *   record[2]  - course id. Confirmed for every course below by name; unconfirmed ids read back
+ *                as a bare number rather than guessed at.
+ *   record[9]  - power: 0 = off, 1 = on. Resets to 0 (with `record[2]` also resetting to 0)
+ *                whenever the appliance is off, independent of whatever course is selected -
+ *                this is the byte the original pass above was actually (accidentally) reading.
+ *   record[6]  - the course's expected duration in minutes (record[8] is an exact copy). Tracks
+ *                live: for a fixed-duration course this is just that course's preset, but for a
+ *                time-adjustable course (실내 제습/시간 건조) it reflects whatever duration was
+ *                just dialled in, confirmed by watching 2시간→4시간 land here unchanged elsewhere.
+ *   record[1]  - a step index used only by time-adjustable courses (0 for every fixed-duration
+ *                course seen) - climbed 1,2,3,...,10 as 시간 건조's duration was clicked through
+ *                30/40/.../180 minutes, and 8→11 for 실내 제습's 2h→4h. Not itself published (its
+ *                information is redundant with `record[6]`'s actual minutes); noted here so a
+ *                future session does not mistake it for a course-category field, which is what it
+ *                looked like on first glance (see the retracted read further up for why that kind
+ *                of coincidence is worth documenting even after it is ruled out).
+ *
+ * COURSE ID SWEEP, PART 2 (2026-09-13) - the ~31 ids the 2026-09-09 sweep in the file header above
+ * could not attribute with confidence, now confirmed the same one-control-at-a-time way. Combined
+ * with the original 10, this is every id seen against a real unit so far (all in `COURSES` below):
+ *
+ *   0x02 = 인공지능 스타일링 (29분, appliance shows no time - see hasFixedDuration below)
+ *   0x03 = 급속 스타일링 (18분)              0x1F = 아기옷 살균 (64분)
+ *   0x04 = 강력 스타일링 (53분, default)     0x25 = 인형 살균 (71분)
+ *   0x05 = 정장/코트 스타일링 (31분)         0x2A = 청바지 스타일링 (71분)
+ *   0x06 = 울/니트 스타일링 (26분)           0x0D = 셔츠 한 벌 건조 (39분)
+ *   0x0E = 인공지능 건조 (내부값 90분, 화면엔 안 뜸)
+ *   0x11 = 침구,베개 살균 (72분)             0x12 = 모피/가죽 스타일링 (35분)
+ *   0x13 = 패딩 건조 (110분)                 0x14 = 패딩 스타일링 (48분)
+ *   0x0F = 실내 제습 (시간 조절형, 2h/4h 확인 - record[1] 참고)
+ *   0x17 = 시간 건조 (시간 조절형, 30분~3시간 - record[1] 참고)
  */
 
 const FROM_DEVICE_ACK_OPCODE = 0xe5
@@ -101,15 +139,18 @@ const KEY_RESERVE = 0x7f
 /** Always 0x00 in every capture so far; meaning unconfirmed, reproduced literally. */
 const KEY_UNKNOWN_23 = 0x23
 
-/** See the file header's POWER READ-BACK section - the MSG_TUNNEL envelope FX___S.ts documents,
+/** See the file header's STATUS RECORD section - the MSG_TUNNEL envelope FX___S.ts documents,
  *  reused here just for the record split (this handler does not otherwise parse the record). */
 const MSG_TUNNEL = 0x0a
 const INNER_STATE = 0xec
 const INNER_STATE_SINGLE = 0xeb
 const RECORD_LEN = 36
-const POWER_OFFSET = 2
+const REC_COURSE_ID = 2
+const REC_POWER = 9
+const REC_DURATION_MINUTES = 6
 
-/** The only course ids confirmed against a real unit; see file header. */
+/** Every course id confirmed against a real unit so far; see the file header's two COURSE ID
+ *  SWEEP sections. */
 const COURSES: Record<string, number> = {
     '강력 스타일링': 0x04,
     '표준 살균': 0x0a,
@@ -121,6 +162,19 @@ const COURSES: Record<string, number> = {
     '눈/비 건조': 0x1b,
     '담요 데우기': 0x1c,
     '목도리 스타일링': 0x1d,
+    '정장/코트 스타일링': 0x05,
+    '울/니트 스타일링': 0x06,
+    '셔츠 한 벌 건조': 0x0d,
+    '인공지능 건조': 0x0e,
+    '침구,베개 살균': 0x11,
+    '모피/가죽 스타일링': 0x12,
+    '패딩 건조': 0x13,
+    '패딩 스타일링': 0x14,
+    '실내 제습': 0x0f,
+    '시간 건조': 0x17,
+    '아기옷 살균': 0x1f,
+    '인형 살균': 0x25,
+    '청바지 스타일링': 0x2a,
 }
 const COURSE_BY_ID: Record<number, string> = Object.fromEntries(Object.entries(COURSES).map(([k, v]) => [v, k]))
 const DEFAULT_COURSE = COURSES['강력 스타일링']
@@ -178,6 +232,26 @@ export default class Device extends AABBDevice {
                     name: 'Start',
                     icon: 'mdi:play',
                 },
+                // Read-only: what the appliance's own panel is actually showing right now, which
+                // may not match the `course` select above (that one is only "what a future Start
+                // press will use", set either by us or by this same read - see processAABB).
+                active_course: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-active_course',
+                    state_topic: '$this/active_course',
+                    name: 'Active course',
+                    icon: 'mdi:tshirt-crew-outline',
+                    entity_category: 'diagnostic',
+                },
+                duration_minutes: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-duration_minutes',
+                    state_topic: '$this/duration_minutes',
+                    name: 'Course duration',
+                    icon: 'mdi:timer-outline',
+                    device_class: 'duration',
+                    unit_of_measurement: 'min',
+                },
             },
         })
 
@@ -227,8 +301,7 @@ export default class Device extends AABBDevice {
         // ack: <sub> 00 e5 00  (4 bytes) - nothing to publish, just confirms the write landed
         if (buf.length === 4 && buf[1] === 0x00 && buf[2] === FROM_DEVICE_ACK_OPCODE && buf[3] === 0x00) return
 
-        // Status record - see file header's POWER READ-BACK section. Only the power bit is
-        // decoded from it so far; the rest of both 36-byte records is not.
+        // Status record - see file header's STATUS RECORD section.
         if (buf[1] === MSG_TUNNEL) {
             const extended = buf.readUInt16BE(2) === buf.length + 4
             const payload = extended ? buf.subarray(4) : buf.subarray(2)
@@ -237,10 +310,19 @@ export default class Device extends AABBDevice {
                 const offset = payload[6] === INNER_STATE ? RECORD_LEN : payload[6] === INNER_STATE_SINGLE ? 0 : -1
                 if (offset >= 0 && data.length >= offset + RECORD_LEN) {
                     const record = data.subarray(offset, offset + RECORD_LEN)
-                    const on = record[POWER_OFFSET] !== 0
+
+                    const on = record[REC_POWER] !== 0
                     if (on !== this.power) {
                         this.power = on
                         this.publishProperty('power', on ? 'ON' : 'OFF')
+                    }
+
+                    // record[REC_COURSE_ID] resets to 0 (not a real course id) while off - see
+                    // file header's STATUS RECORD section - so only trust it while on.
+                    if (on) {
+                        const courseId = record[REC_COURSE_ID]
+                        this.publishProperty('active_course', COURSE_BY_ID[courseId] ?? `unknown_${courseId}`)
+                        this.publishProperty('duration_minutes', record[REC_DURATION_MINUTES])
                     }
                     return
                 }
