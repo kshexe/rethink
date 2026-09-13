@@ -20,6 +20,11 @@ const ACK = buf('aa082000e500e2bb')
 const BUNDLED_STATUS = buf(
     'aa3d20e6000201ff01020000000002132e00000000000000003300000000002e01008100000000080000000000000000020020300000000000000027bb',
 )
+// Real 0xEC dual-record status frame, captured 2026-09-13 mid-cycle - see the file header's
+// REMAINING_MINUTES section. record[13] of the "new" half reads 28 (0x1c).
+const STATUS_EC_28_MIN_LEFT = buf(
+    'aaff200a0072009a01000100ec006000001702136100000000000000001d00630348002e0c0b8100000000080000000000000008100100300000000000000000001702136100000000000000001c00630348002e0c0b81000000000800000000000000081001003000000000000000462bbb',
+)
 
 function makeDevice() {
     const ha = new MockHAConnection()
@@ -29,11 +34,12 @@ function makeDevice() {
 }
 
 describe(MODEL_ID, () => {
-    test('declares exactly one writable component: power', () => {
+    test('declares power as the only writable component, plus remaining_minutes read-only', () => {
         const { ha } = makeDevice()
         const components = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
-        assert.deepEqual(Object.keys(components), ['power'])
+        assert.deepEqual(Object.keys(components), ['power', 'remaining_minutes'])
         assert.equal(components.power.command_topic, '$this/power/set')
+        assert.equal(components.remaining_minutes.command_topic, undefined)
     })
 
     /*
@@ -78,5 +84,11 @@ describe(MODEL_ID, () => {
         // the file header. It must not move the property at all.
         thinq.emit('data', BUNDLED_STATUS)
         assert.equal(ha.devices[DEVICE_ID].properties.power, 'ON')
+    })
+
+    test('a real query-response status frame publishes remaining_minutes', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', STATUS_EC_28_MIN_LEFT)
+        assert.equal(ha.devices[DEVICE_ID].properties.remaining_minutes, 28)
     })
 })

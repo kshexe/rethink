@@ -51,6 +51,18 @@ import { note as recordNote } from '../frame-recorder'
  * shows an explicit "원격제어가 꺼져 있어 코스를 바꿔도 세탁기에 업데이트되지 않습니다." warning
  * and the on-box frame log for the relevant window is empty). Capturing those needs 원격제어
  * armed at the appliance itself first.
+ *
+ * REMAINING_MINUTES (candidate, 2026-09-13): the TRIAL query above also carries the same
+ * MSG_TUNNEL envelope FX___S.ts documents (extended-length check, inner type `0xec`/`0xeb` at
+ * `payload[6]`, two 48-byte records back to back for `0xec`, one alone for `0xeb`). `record[13]`
+ * tracked a real running cycle's remaining time closely across three samples ~7-9 minutes apart
+ * (91 -> 84 -> 79 minutes, each drop matching the elapsed wall-clock gap to within a minute), and
+ * the last of those landed within 1 of the appliance's own on-screen "OO:OO 남음" readout at the
+ * same moment. Not as rigorously pinned down as RD20_S's own remaining_minutes (only 3 samples
+ * from one real cycle, not a cycle mined start-to-finish down to 0, and no cross-check yet against
+ * the official `lg_thinq` integration's own sensor) - published as a best-effort reading rather
+ * than left undecoded, but treat a value from this field with a bit more caution than the rest of
+ * this file until a full cycle confirms it reaches 0 at completion.
  */
 
 const FROM_DEVICE_ACK_OPCODE = 0xe5
@@ -82,6 +94,14 @@ function buildSettingsWrite(pairs: [key: number, value: number][]): Buffer {
  *  appliance's own continuous chatter is what would carry a future decoded field instead. */
 const QUERY_FRAME = Buffer.from('f0ed1211010000010400', 'hex')
 
+/** See the file header's REMAINING_MINUTES section - the MSG_TUNNEL envelope FX___S.ts
+ *  documents, reused here just for the record split (nothing else in the record is parsed yet). */
+const MSG_TUNNEL = 0x0a
+const INNER_STATE = 0xec
+const INNER_STATE_SINGLE = 0xeb
+const RECORD_LEN = 48
+const REMAINING_MINUTES_OFFSET = 13
+
 export default class Device extends AABBDevice {
     power: boolean | undefined
 
@@ -101,6 +121,17 @@ export default class Device extends AABBDevice {
                     command_topic: '$this/power/set',
                     name: '',
                     icon: 'mdi:washing-machine',
+                },
+                // See the file header's REMAINING_MINUTES section - a candidate reading, not as
+                // rigorously confirmed as this fork's other remaining_minutes fields yet.
+                remaining_minutes: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-remaining_minutes',
+                    state_topic: '$this/remaining_minutes',
+                    name: 'Remaining time',
+                    icon: 'mdi:timer-outline',
+                    device_class: 'duration',
+                    unit_of_measurement: 'min',
                 },
             },
         })
@@ -143,14 +174,22 @@ export default class Device extends AABBDevice {
             return
         }
 
-        // Response to the TRIAL query (see the QUERY_FRAME note above) - TRIED AND RETRACTED
-        // (2026-09-12), same as H01.ts's identical analogy: the equivalent byte there turned out
-        // not to track power at all (settled on the wrong value against a confirmed-ON appliance).
-        // Recognised here only so it does not spam the unmodelled log; nothing is read from it.
-        if (buf[1] === 0x0a) {
+        // Response to the TRIAL query (see the QUERY_FRAME note above) - the power bit here was
+        // TRIED AND RETRACTED (2026-09-12, same as H01.ts's identical analogy: the equivalent
+        // byte there turned out not to track power at all), but see the file header's
+        // REMAINING_MINUTES section for the one field that is now read from it.
+        if (buf[1] === MSG_TUNNEL) {
             const extended = buf.readUInt16BE(2) === buf.length + 4
             const payload = extended ? buf.subarray(4) : buf.subarray(2)
-            if (payload.length > 10 && payload[6] === 0xeb) return
+            if (payload.length > 6) {
+                const data = payload.subarray(10)
+                const offset = payload[6] === INNER_STATE ? RECORD_LEN : payload[6] === INNER_STATE_SINGLE ? 0 : -1
+                if (offset >= 0 && data.length >= offset + RECORD_LEN) {
+                    const record = data.subarray(offset, offset + RECORD_LEN)
+                    this.publishProperty('remaining_minutes', record[REMAINING_MINUTES_OFFSET])
+                    return
+                }
+            }
         }
 
         // Anything else is a frame this handler does not parse yet (the 61-byte periodic status
