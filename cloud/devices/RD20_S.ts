@@ -6,6 +6,7 @@ import HADevice from './base'
 import AABBDevice from './aabb_device'
 import log from '@/util/logging'
 import { note as recordNote } from '../frame-recorder'
+import * as energyAccumulator from '../energy-accumulator'
 
 /*
  * LG dryer (건조기), ThinQ model RD20_S, deviceType 202.
@@ -113,6 +114,22 @@ import { note as recordNote } from '../frame-recorder'
  * times. Other values seen for this byte in the wider log (0x00, 0x04, 0x45) were not captured
  * inside a cycle mined closely enough to place with confidence, so they publish as
  * `unknown_<value>` rather than being guessed at.
+ *
+ * ENERGY (decoded 2026-09-13): `buf[81]` (`buf[31]` is the "old" record's copy of the same field,
+ * same +50 pairing as everything else in this frame) is a **1 Wh/count, mod-256 rolling total** -
+ * not a delta report like FX___S's `0x3E` or a persistent multi-byte total like
+ * 3REK2G03VI200S_2.ts's `11 3E`, just a single byte that increments once per Wh consumed and wraps
+ * 255->0. Confirmed against a real full cycle (이불, 00:55-02:32 KST, 97 minutes): the app's own
+ * "사용 이력" detail screen for that exact cycle reports "전력 사용량 1.06kWh" (1058 Wh in the
+ * underlying `powerUsageAmount` field); the raw byte climbed 0->255 four full times over the same
+ * window and ended at 34 - `4*256+34 = 1058`, an exact match. Appears to reset to 0 at the start of
+ * each new cycle (the very first status frame of this run already read 0), so the delta computed
+ * between two consecutive readings is wrap-safe (`(cur - prev + 256) % 256`) but NOT safe across a
+ * gap where the appliance went idle and cycled again in between (this frame shape stops entirely
+ * while idle - see REMAINING_MINUTES above - so a reset-to-0 for a new cycle would otherwise be
+ * misread as a huge fake delta); guarded by simply discarding any single-step delta implausibly
+ * large for a ~5-10s report interval (`ENERGY_MAX_PLAUSIBLE_DELTA`) rather than trying to detect the
+ * gap directly. Feeds `energy-accumulator.ts` the same way 3REK2G03VI200S_2.ts/FX___S.ts do.
  */
 
 const FROM_DEVICE_ACK_OPCODE = 0xe5
@@ -132,6 +149,12 @@ const REMAINING_MINUTES_OFFSET = 73
 
 /** See the file header's STATUS section. Same old/new +50 pairing as REMAINING_MINUTES_OFFSET. */
 const STATUS_OFFSET = 89
+
+/** See the file header's ENERGY section. Same old/new +50 pairing as the other fields above. */
+const ENERGY_OFFSET = 81
+/** A real report every few seconds at dryer wattage does not add more than this many Wh in one
+ *  step - anything above is a cycle-boundary reset (see file header), not a real delta. */
+const ENERGY_MAX_PLAUSIBLE_DELTA = 50
 
 /** See the file header's POWER READ-BACK section. */
 const POWER_ECHO_TYPE = 0xe6
@@ -172,6 +195,10 @@ export default class Device extends AABBDevice {
     power: boolean | undefined
     status: string | undefined
 
+    /** The last raw (mod-256) energy byte seen, to compute the next delta against - see the file
+     *  header's ENERGY section. `undefined` until the first status frame arrives. */
+    private lastEnergyRaw: number | undefined
+
     /** (dir:tag) pairs already flagged as unrecognised, so a repeating one is noted once. */
     private seenUnknown = new Set<string>()
 
@@ -207,6 +234,48 @@ export default class Device extends AABBDevice {
                     name: 'Status',
                     icon: 'mdi:tumble-dryer',
                 },
+                // Calendar-boundary Wh figures fed by the file header's ENERGY byte, via
+                // energy-accumulator.ts - survive the raw counter's own per-cycle resets.
+                energy_hour: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-energy_hour',
+                    name: 'Energy this hour',
+                    icon: 'mdi:lightning-bolt',
+                    device_class: 'energy',
+                    unit_of_measurement: 'Wh',
+                    state_class: 'total_increasing',
+                    state_topic: '$this/energy_hour',
+                },
+                energy_day: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-energy_day',
+                    name: 'Energy today',
+                    icon: 'mdi:lightning-bolt',
+                    device_class: 'energy',
+                    unit_of_measurement: 'Wh',
+                    state_class: 'total_increasing',
+                    state_topic: '$this/energy_day',
+                },
+                energy_month: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-energy_month',
+                    name: 'Energy this month',
+                    icon: 'mdi:lightning-bolt',
+                    device_class: 'energy',
+                    unit_of_measurement: 'Wh',
+                    state_class: 'total_increasing',
+                    state_topic: '$this/energy_month',
+                },
+                energy_total: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-energy_total',
+                    name: 'Energy total',
+                    icon: 'mdi:lightning-bolt',
+                    device_class: 'energy',
+                    unit_of_measurement: 'Wh',
+                    state_class: 'total_increasing',
+                    state_topic: '$this/energy_total',
+                },
             },
         })
 
@@ -217,6 +286,16 @@ export default class Device extends AABBDevice {
     start() {
         super.start()
         this.send(QUERY_FRAME)
+    }
+
+    /** Adds a newly-seen Wh delta (see the file header's ENERGY section) and republishes the
+     *  calendar-boundary figures. */
+    private async recordEnergyDelta(deltaWh: number) {
+        const stats = await energyAccumulator.addDelta(this.id, deltaWh)
+        this.publishProperty('energy_hour', stats.hourWh)
+        this.publishProperty('energy_day', stats.dayWh)
+        this.publishProperty('energy_month', stats.monthWh)
+        this.publishProperty('energy_total', stats.totalWh)
     }
 
     setProperty(prop: string, mqttValue: string) {
@@ -251,6 +330,16 @@ export default class Device extends AABBDevice {
                 this.status = status
                 this.publishProperty('status', status)
             }
+
+            // See the file header's ENERGY section - a mod-256 rolling Wh counter, so the delta
+            // since the last reading wraps safely; a delta this large in one step can only be a
+            // cycle-boundary reset, not real consumption, and is discarded rather than counted.
+            const energyRaw = buf[ENERGY_OFFSET]
+            if (this.lastEnergyRaw !== undefined) {
+                const delta = (energyRaw - this.lastEnergyRaw + 256) % 256
+                if (delta > 0 && delta <= ENERGY_MAX_PLAUSIBLE_DELTA) void this.recordEnergyDelta(delta)
+            }
+            this.lastEnergyRaw = energyRaw
             return
         }
 

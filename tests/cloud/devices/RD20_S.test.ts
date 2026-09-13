@@ -1,12 +1,32 @@
 import { describe, test } from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import DUT from '@/cloud/devices/RD20_S'
 import type { Metadata } from '@/cloud/thinq'
+import { configure as configureEnergyAccumulator } from '@/cloud/energy-accumulator'
 import { MockHAConnection, MockThinq2Device, buf } from '@/tests/helpers/mocks'
 
 const DEVICE_ID = 'test-id'
 const MODEL_ID = 'RD20_S'
 const META: Metadata = { modelId: MODEL_ID, modelName: MODEL_ID, swVersion: '1.0' }
+
+/** energy-accumulator.ts persists to disk and caches by device id - point it at a fresh scratch
+ *  dir (which also clears its cache) so each energy test starts from nothing, the same way
+ *  tests/cloud/frame-recorder.test.ts isolates itself, and so these tests never touch the real
+ *  /share/rethink/energy path. */
+function freshEnergyDir() {
+    const dir = mkdtempSync(join(tmpdir(), 'rd20s-energy-test-'))
+    configureEnergyAccumulator(dir)
+    process.on('exit', () => rmSync(dir, { recursive: true, force: true }))
+}
+
+/** recordEnergyDelta() is fire-and-forget (`void ...`) from processAABB, so its file I/O has not
+ *  necessarily landed yet the instant `thinq.emit` returns - give it a beat. */
+async function settle() {
+    await new Promise((r) => setTimeout(r, 50))
+}
 
 /*
  * Fixtures. All REAL frames, captured 2026-09-09 against a real unit by clicking the power
@@ -63,18 +83,38 @@ const STATUS_COMPLETE_1_MIN_LEFT = buf(
     'aaff300a007600744b000100ec006400000200002c00000000010082081100050577041c000000000041800700000000000000000000000000000000000000000000000200002c00000000010082040800070578041c00000020000180070000000000000000000000000000000000000000005b57bb',
 )
 
-function makeDevice() {
+/*
+ * Two real, consecutive 114-byte status frames from the 이불 cycle used to confirm the ENERGY
+ * byte (2026-09-13) - buf[81] reads 0 then 1, a plain +1 Wh step. See RD20_S.ts's file header for
+ * how the byte's scale itself was confirmed (this pair only exercises the delta plumbing).
+ */
+const ENERGY_0WH = buf(
+    'aaff300a007600d72a000100ec0064000000000000000000000000000100000000000000000000000000800700000000000000000000000000000000000000000000000200000400000000af00af07010002000000040000000000418007000000000000000000000000000000000000000000e155bb',
+)
+const ENERGY_1WH = buf(
+    'aaff300a007600d749000100ec006400000200000400000000af00af0701000200000004000000000041800700000000000000000000000000000000000000000000000200000400000000ae00af070100020001000400000000004180070000000000000000000000000000000000000000005e59bb',
+)
+
+function makeDevice(id = DEVICE_ID) {
     const ha = new MockHAConnection()
-    const thinq = new MockThinq2Device(DEVICE_ID, META)
+    const thinq = new MockThinq2Device(id, META)
     const dev = new DUT(ha.asConnection(), thinq, META)
-    return { ha, thinq, dev }
+    return { ha, thinq, dev, id }
 }
 
 describe(MODEL_ID, () => {
     test('declares power and remaining_minutes', () => {
         const { ha } = makeDevice()
         const components = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
-        assert.deepEqual(Object.keys(components), ['power', 'remaining_minutes', 'status'])
+        assert.deepEqual(Object.keys(components), [
+            'power',
+            'remaining_minutes',
+            'status',
+            'energy_hour',
+            'energy_day',
+            'energy_month',
+            'energy_total',
+        ])
         assert.equal(components.power.command_topic, '$this/power/set')
         assert.equal(components.remaining_minutes.platform, 'sensor')
         assert.equal(components.remaining_minutes.unit_of_measurement, 'min')
@@ -150,5 +190,39 @@ describe(MODEL_ID, () => {
         frame[2 + 89] = 0x99
         thinq.emit('data', frame)
         assert.equal(ha.devices[DEVICE_ID].properties.status, 'unknown_153')
+    })
+
+    test('a real +1Wh step between two consecutive status frames publishes an energy delta', async () => {
+        freshEnergyDir()
+        // A device id distinct from DEVICE_ID: other tests in this file emit real status frames
+        // too (for remaining_minutes/status), each with their own incidental buf[81] byte, and
+        // their own fire-and-forget recordEnergyDelta call can still land after this test starts
+        // - a shared id would let a stray delta from one of those bleed into this test's total.
+        const { ha, thinq } = makeDevice('energy-test-1')
+        // First frame only establishes lastEnergyRaw (0) - nothing to diff against yet, so no
+        // energy_* publish happens here.
+        thinq.emit('data', ENERGY_0WH)
+        await settle()
+        assert.equal(ha.devices['energy-test-1'].properties.energy_hour, undefined)
+        // The second frame's buf[81] reads 1 - a plausible +1 Wh step - so this one publishes.
+        thinq.emit('data', ENERGY_1WH)
+        await settle()
+        assert.equal(ha.devices['energy-test-1'].properties.energy_hour, 1)
+        assert.equal(ha.devices['energy-test-1'].properties.energy_total, 1)
+    })
+
+    test('a large jump in the energy byte (cycle-boundary reset) is discarded, not counted', async () => {
+        freshEnergyDir()
+        const { ha, thinq } = makeDevice('energy-test-2')
+        thinq.emit('data', ENERGY_0WH)
+        await settle()
+        // Same shape as ENERGY_1WH, but with the energy byte forced far past the plausible
+        // per-step ceiling - simulating a fresh cycle's counter having reset (see the file
+        // header's ENERGY section for why this must not be read as a real 200Wh step).
+        const frame = Buffer.from(ENERGY_1WH)
+        frame[2 + 81] = 200
+        thinq.emit('data', frame)
+        await settle()
+        assert.equal(ha.devices['energy-test-2'].properties.energy_hour, undefined)
     })
 })
