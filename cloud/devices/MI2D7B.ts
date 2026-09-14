@@ -25,6 +25,21 @@ import { note as recordNote } from '../frame-recorder'
  * ST_R_ETH01Y_ (styler) except the from-device leading byte (0x20 here, a device-class marker -
  * not asserted against below since nothing here depends on it).
  *
+ * NOTIFICATION (decoded 2026-09-14): cross-referenced the official `lg_thinq` integration's live
+ * `event.miniweosi_notification` history (`event_types: [washing_is_complete,
+ * error_during_washing]`) against this device's own frame log, same technique used for
+ * ST_R_ETH01Y_.ts (styler) and RD20_S.ts (dryer) - RD20_S's own two-frame burst shows up here too,
+ * byte-identical in structure (just this model's own sub byte, 0x20):
+ *
+ *   20 72 00 00 00        (buf[3]=0)
+ *   20 72 00 c8 00        (buf[3]=0xc8)
+ *
+ * Both frames fire back to back, ~1.3-1.4s before the cloud event, confirmed on 2 independent real
+ * samples (2026-09-13, 02:47 and 09:06). Only `washing_is_complete` has ever actually fired -
+ * `error_during_washing` never has, so it is not known which (if either) of the two codes above
+ * would carry it instead; both known codes are mapped to `washing_is_complete` here since that is
+ * the only outcome either has ever been observed producing.
+ *
  * The ack is followed by a much longer from-device frame (61 bytes) that STARTS with what looks
  * like the same shape ST_R_ETH01Y_'s clean 13-byte power echo has - `e6 00 02 01 ff 01 02` - and
  * was briefly read as one. It is not: that styler echo's next byte is the state that was just
@@ -102,6 +117,17 @@ const INNER_STATE_SINGLE = 0xeb
 const RECORD_LEN = 48
 const REMAINING_MINUTES_OFFSET = 13
 
+/** See the file header's NOTIFICATION section. Same convention as ST_R_ETH01Y_.ts/RD20_S.ts's
+ *  <sub> 72 <payload> channel, sub=0x20 for this model; not a fixed frame length. */
+const NOTIFY_SUB = 0x20
+const NOTIFY_OPCODE = 0x72
+const NOTIFY_CODE_OFFSET = 3
+const NOTIFICATION: Record<number, string> = {
+    0: 'washing_is_complete',
+    0xc8: 'washing_is_complete',
+}
+const NOTIFICATION_OPTIONS = [...new Set(Object.values(NOTIFICATION))]
+
 export default class Device extends AABBDevice {
     power: boolean | undefined
 
@@ -133,11 +159,24 @@ export default class Device extends AABBDevice {
                     device_class: 'duration',
                     unit_of_measurement: 'min',
                 },
+                // See the file header's NOTIFICATION section.
+                notification: {
+                    platform: 'event',
+                    unique_id: '$deviceid-notification',
+                    state_topic: '$this/notification',
+                    event_types: NOTIFICATION_OPTIONS,
+                    name: 'Notification',
+                    icon: 'mdi:bell-ring-outline',
+                },
             },
         })
 
         this.setConfig(config)
-        log('status', this.id, 'MI2D7B (미니워시) handler started - power on/off only, see file header')
+        log(
+            'status',
+            this.id,
+            'MI2D7B (미니워시) handler started - power on/off, remaining_minutes, notification, see file header',
+        )
     }
 
     start() {
@@ -160,9 +199,24 @@ export default class Device extends AABBDevice {
         }
     }
 
+    /** Events do not go through publishProperty - not deduped (a repeat of the same event must
+     *  still fire) and not retained (an event entity should not replay a stale past occurrence at
+     *  every reconnect) - see FX___S.ts's identical method for the full reasoning. */
+    publishEvent(topic: string, eventType: string) {
+        this.HA.publishProperty(this.id, topic, JSON.stringify({ event_type: eventType }), { retain: false })
+    }
+
     processAABB(buf: Buffer) {
         // ack: <sub> 00 e5 00  (4 bytes) - nothing to publish, just confirms the write landed
         if (buf.length === 4 && buf[1] === 0x00 && buf[2] === FROM_DEVICE_ACK_OPCODE && buf[3] === 0x00) return
+
+        // notification channel: <sub=0x20> 72 <payload> - see the file header's NOTIFICATION
+        // section. Frame length is not fixed, so only the sub/opcode/gate byte are checked.
+        if (buf[0] === NOTIFY_SUB && buf[1] === NOTIFY_OPCODE && buf.length > NOTIFY_CODE_OFFSET && buf[2] === 0) {
+            const name = NOTIFICATION[buf[NOTIFY_CODE_OFFSET]]
+            if (name !== undefined) this.publishEvent('notification', name)
+            return
+        }
 
         // The 57-byte `e6` echo of a power command - see file header's POWER READ-BACK section.
         if (buf.length === POWER_ECHO_LEN && buf[1] === POWER_ECHO_TYPE) {

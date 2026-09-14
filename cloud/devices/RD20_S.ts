@@ -62,6 +62,27 @@ import * as energyAccumulator from '../energy-accumulator'
  * scheme above, so none of their byte offsets apply here. The only thing that carried over is
  * two frame-type byte VALUES matching by coincidence, not layout: buf[1]==0x72 (heartbeat) and
  * 0xE2 (idle/keepalive snapshot) appear in both, per upstream's header comment for that model.
+ * CORRECTION (2026-09-14) - see the file header's NOTIFICATION section below: at least for THIS
+ * model, buf[1]==0x72 is not a heartbeat at all - it appears only twice a day (tied to real
+ * completion events, not on any regular interval), so "heartbeat" was upstream's own guess for a
+ * different model and does not carry over here any more than the byte-offset layout did.
+ *
+ * NOTIFICATION (decoded 2026-09-14): cross-referenced the official `lg_thinq` integration's live
+ * `event.geonjogi_notification` history (`event_types: [drying_is_complete, drying_failed]`)
+ * against this device's own frame log, same technique used for 3REK2G03VI200S_2.ts (kimchi
+ * fridge)/ML32PWFOTA.ts (oven)/ST_R_ETH01Y_.ts (styler). Two short frames fire back to back right
+ * before every real completion, confirmed on 4 independent samples (2026-09-09, 09-11, and twice on
+ * 09-13) - counted separately against a full day of ~2000 other frames from this device and found
+ * on no other occasion that day, ruling out any periodic/heartbeat reading of buf[1]==0x72 above:
+ *
+ *   30 72 00 00 00        (buf[3]=0)
+ *   30 72 00 c8 00        (buf[3]=0xc8)
+ *
+ * Both ~1.1-1.6s before the cloud event. Only `drying_is_complete` has ever actually fired -
+ * `drying_failed` never has, so it is not known which (if either) of the two codes above would
+ * carry it instead; both known codes are mapped to `drying_is_complete` here since that is the
+ * only outcome either has ever been observed producing (same reasoning MI2D7B.ts's own identical
+ * two-code pattern uses for washing_is_complete).
  *
  * REMAINING_MINUTES (decoded 2026-09-10, and corrected the same day - see below): rather than
  * running a fresh test cycle, this was decoded from a real dry cycle already sitting in rethink's
@@ -160,6 +181,17 @@ const ENERGY_MAX_PLAUSIBLE_DELTA = 50
 const POWER_ECHO_TYPE = 0xe6
 const POWER_ECHO_LEN = 58
 const POWER_OFFSET = 33
+
+/** See the file header's NOTIFICATION section. Same <sub> 72 <payload> convention
+ *  ST_R_ETH01Y_.ts/MI2D7B.ts use, sub=0x30 for this model; not a fixed frame length. */
+const NOTIFY_SUB = 0x30
+const NOTIFY_OPCODE = 0x72
+const NOTIFY_CODE_OFFSET = 3
+const NOTIFICATION: Record<number, string> = {
+    0: 'drying_is_complete',
+    0xc8: 'drying_is_complete',
+}
+const NOTIFICATION_OPTIONS = [...new Set(Object.values(NOTIFICATION))]
 
 const STATUS_NAMES: Record<number, string> = {
     0x41: 'running',
@@ -276,11 +308,24 @@ export default class Device extends AABBDevice {
                     state_class: 'total_increasing',
                     state_topic: '$this/energy_total',
                 },
+                // See the file header's NOTIFICATION section.
+                notification: {
+                    platform: 'event',
+                    unique_id: '$deviceid-notification',
+                    state_topic: '$this/notification',
+                    event_types: NOTIFICATION_OPTIONS,
+                    name: 'Notification',
+                    icon: 'mdi:bell-ring-outline',
+                },
             },
         })
 
         this.setConfig(config)
-        log('status', this.id, 'RD20_S (건조기) handler started - power on/off only, see file header')
+        log(
+            'status',
+            this.id,
+            'RD20_S (건조기) handler started - power, remaining_minutes, status, energy, notification, see file header',
+        )
     }
 
     start() {
@@ -313,9 +358,24 @@ export default class Device extends AABBDevice {
         }
     }
 
+    /** Events do not go through publishProperty - not deduped (a repeat of the same event must
+     *  still fire) and not retained (an event entity should not replay a stale past occurrence at
+     *  every reconnect) - see FX___S.ts's identical method for the full reasoning. */
+    publishEvent(topic: string, eventType: string) {
+        this.HA.publishProperty(this.id, topic, JSON.stringify({ event_type: eventType }), { retain: false })
+    }
+
     processAABB(buf: Buffer) {
         // ack: <sub> 00 e5 00  (4 bytes) - nothing to publish, just confirms the write landed
         if (buf.length === 4 && buf[1] === 0x00 && buf[2] === FROM_DEVICE_ACK_OPCODE && buf[3] === 0x00) return
+
+        // notification channel: <sub=0x30> 72 <payload> - see the file header's NOTIFICATION
+        // section. Frame length is not fixed, so only the sub/opcode/gate byte are checked.
+        if (buf[0] === NOTIFY_SUB && buf[1] === NOTIFY_OPCODE && buf.length > NOTIFY_CODE_OFFSET && buf[2] === 0) {
+            const name = NOTIFICATION[buf[NOTIFY_CODE_OFFSET]]
+            if (name !== undefined) this.publishEvent('notification', name)
+            return
+        }
 
         // 114-byte status frame carrying the `00 01 00 ec` marker - see file header's
         // REMAINING_MINUTES section. Only this one field is decoded; the rest of the body is not.

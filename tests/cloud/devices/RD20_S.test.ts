@@ -95,6 +95,12 @@ const ENERGY_1WH = buf(
     'aaff300a007600d749000100ec006400000200000400000000af00af0701000200000004000000000041800700000000000000000000000000000000000000000000000200000400000000ae00af070100020001000400000000004180070000000000000000000000000000000000000000005e59bb',
 )
 
+// Real notification-channel frames - see the file header's NOTIFICATION section. Confirmed on 4
+// independent real completions (2026-09-09, 09-11, and twice on 09-13), each ~1.1-1.6s before the
+// official integration's event.geonjogi_notification fired drying_is_complete.
+const NOTIFICATION_CODE_00 = buf('aa09307200000000bb')
+const NOTIFICATION_CODE_C8 = buf('aa09307200c80048bb')
+
 function makeDevice(id = DEVICE_ID) {
     const ha = new MockHAConnection()
     const thinq = new MockThinq2Device(id, META)
@@ -114,6 +120,7 @@ describe(MODEL_ID, () => {
             'energy_day',
             'energy_month',
             'energy_total',
+            'notification',
         ])
         assert.equal(components.power.command_topic, '$this/power/set')
         assert.equal(components.remaining_minutes.platform, 'sensor')
@@ -224,5 +231,16 @@ describe(MODEL_ID, () => {
         thinq.emit('data', frame)
         await settle()
         assert.equal(ha.devices['energy-test-2'].properties.energy_hour, undefined)
+    })
+
+    test('both real notification-channel codes publish drying_is_complete', () => {
+        for (const frame of [NOTIFICATION_CODE_00, NOTIFICATION_CODE_C8]) {
+            const { ha, thinq } = makeDevice()
+            thinq.emit('data', frame)
+            assert.equal(
+                JSON.parse(String(ha.devices[DEVICE_ID].properties.notification)).event_type,
+                'drying_is_complete',
+            )
+        }
     })
 })

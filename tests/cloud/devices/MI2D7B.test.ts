@@ -25,6 +25,11 @@ const BUNDLED_STATUS = buf(
 const STATUS_EC_28_MIN_LEFT = buf(
     'aaff200a0072009a01000100ec006000001702136100000000000000001d00630348002e0c0b8100000000080000000000000008100100300000000000000000001702136100000000000000001c00630348002e0c0b81000000000800000000000000081001003000000000000000462bbb',
 )
+// Real notification-channel frames - see the file header's NOTIFICATION section. Captured twice
+// independently (2026-09-13, 02:47 and 09:06), each ~1.3-1.4s before the official integration's
+// event.miniweosi_notification fired washing_is_complete.
+const NOTIFICATION_CODE_00 = buf('aa09207200000010bb')
+const NOTIFICATION_CODE_C8 = buf('aa09207200c80058bb')
 
 function makeDevice() {
     const ha = new MockHAConnection()
@@ -34,10 +39,10 @@ function makeDevice() {
 }
 
 describe(MODEL_ID, () => {
-    test('declares power as the only writable component, plus remaining_minutes read-only', () => {
+    test('declares power as the only writable component, plus remaining_minutes/notification read-only', () => {
         const { ha } = makeDevice()
         const components = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
-        assert.deepEqual(Object.keys(components), ['power', 'remaining_minutes'])
+        assert.deepEqual(Object.keys(components), ['power', 'remaining_minutes', 'notification'])
         assert.equal(components.power.command_topic, '$this/power/set')
         assert.equal(components.remaining_minutes.command_topic, undefined)
     })
@@ -90,5 +95,16 @@ describe(MODEL_ID, () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', STATUS_EC_28_MIN_LEFT)
         assert.equal(ha.devices[DEVICE_ID].properties.remaining_minutes, 28)
+    })
+
+    test('both real notification-channel codes publish washing_is_complete', () => {
+        for (const frame of [NOTIFICATION_CODE_00, NOTIFICATION_CODE_C8]) {
+            const { ha, thinq } = makeDevice()
+            thinq.emit('data', frame)
+            assert.equal(
+                JSON.parse(String(ha.devices[DEVICE_ID].properties.notification)).event_type,
+                'washing_is_complete',
+            )
+        }
     })
 })
