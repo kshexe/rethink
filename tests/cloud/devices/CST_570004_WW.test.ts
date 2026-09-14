@@ -211,6 +211,30 @@ describe(MODEL_ID, () => {
         dev.drop()
     })
 
+    test('0x1fe also stops publishing in fan_only, matching lg_thinq - even though the raw value is real', (t) => {
+        const { ha, dev } = buildReadyDevice(t)
+
+        // Baseline: cool mode, a real setpoint reads through as-is.
+        dev.raw_clip_state[0x1f7] = 1
+        dev.processKeyValue(0x1f9, 0) // cool
+        dev.processKeyValue(0x1fe, 52)
+        assert.equal(ha.getProperty(DEVICE_ID, 'climate', 'temperature_state'), 26)
+
+        // Unlike auto, fan_only's raw value is not bogus - checked live 2026-09-14 against the
+        // same unit's own lg_thinq entity, which read `temperature: None` in fan_only at the same
+        // moment this tag held a perfectly plausible 26°C. Suppressed anyway, for parity with the
+        // official integration's presentation - see this field's own read_xform comment.
+        dev.processKeyValue(0x1f9, 2) // fan_only
+        dev.processKeyValue(0x1fe, 52)
+        assert.equal(
+            ha.getProperty(DEVICE_ID, 'climate', 'temperature_state'),
+            26,
+            'still the last cool-mode setpoint - not republished, not cleared',
+        )
+
+        dev.drop()
+    })
+
     test('selecting a mode while off turns the unit on (attaches 0x1f7=1)', (t) => {
         const { ha, thinq, dev } = buildReadyDevice(t)
 
