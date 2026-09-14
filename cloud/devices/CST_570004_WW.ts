@@ -952,20 +952,25 @@ export default class Device extends TLVDevice {
              * showing a bogus 15-19°C computed by dividing the offset code in half, which is what
              * this field (and lg_thinq's own equivalent) did before this was noticed.
              *
-             * FAN_ONLY IS DIFFERENT: unlike auto, the raw value here is a real remembered setpoint
-             * (2026-09-14, confirmed live on 거실 while it sat in fan_only - the raw value read a
-             * plausible 26°C, not a bogus one), so suppressing it is not a data-integrity fix the
-             * way auto's is. It is done anyway, to match `lg_thinq`'s own presentation for the same
-             * unit at the same moment: its `temperature` attribute reads `None` while in fan_only
-             * (checked side by side with this entity, both against the live 거실 unit), which is
-             * what makes its slider not move - not a mode-conditional supported_features (both
-             * entities keep TARGET_TEMPERATURE set the whole time), just no value to show. The
-             * setpoint the unit is holding is not lost - it is still there in the raw tag - this
-             * only stops the two integrations disagreeing about whether fan_only has one.
+             * FAN_ONLY AND DRY ARE DIFFERENT: unlike auto, the raw value in these two is a real
+             * remembered setpoint, not a bogus code. Fan_only was confirmed live (2026-09-14,
+             * 거실 - the raw value read a plausible 26°C against `lg_thinq`'s own `temperature:
+             * None` on the same unit at the same moment), so suppressing it there is not a
+             * data-integrity fix the way auto's is - it matches the official integration's
+             * presentation, and the setpoint is not lost, just not published while the mode
+             * cannot act on it. Dry is the owner's report the same day, of the same behaviour on
+             * the same unit in `lg_thinq` (slider not moving) - not independently checked against
+             * a live dry-mode frame the way fan_only was, because that meant switching the unit
+             * into dry to look, and this is a read-side presentation choice, not a bug fix a wrong
+             * guess here would be safe to leave uncorrected until it is.
              */
             read_xform: (raw) => {
                 const mode = this.getModeTLV()
-                if (mode === this.modeMaps.toWire.get('auto') || mode === this.modeMaps.toWire.get('fan_only')) {
+                if (
+                    mode === this.modeMaps.toWire.get('auto') ||
+                    mode === this.modeMaps.toWire.get('fan_only') ||
+                    mode === this.modeMaps.toWire.get('dry')
+                ) {
                     return undefined
                 }
                 return raw / 2

@@ -235,6 +235,25 @@ describe(MODEL_ID, () => {
         dev.drop()
     })
 
+    test("0x1fe also stops publishing in dry, per the owner's report of lg_thinq doing the same", (t) => {
+        const { ha, dev } = buildReadyDevice(t)
+
+        dev.raw_clip_state[0x1f7] = 1
+        dev.processKeyValue(0x1f9, 0) // cool
+        dev.processKeyValue(0x1fe, 52)
+        assert.equal(ha.getProperty(DEVICE_ID, 'climate', 'temperature_state'), 26)
+
+        dev.processKeyValue(0x1f9, 1) // dry
+        dev.processKeyValue(0x1fe, 52)
+        assert.equal(
+            ha.getProperty(DEVICE_ID, 'climate', 'temperature_state'),
+            26,
+            'still the last cool-mode setpoint - not republished',
+        )
+
+        dev.drop()
+    })
+
     test('selecting a mode while off turns the unit on (attaches 0x1f7=1)', (t) => {
         const { ha, thinq, dev } = buildReadyDevice(t)
 
