@@ -191,15 +191,31 @@ import { note as recordNote } from '../frame-recorder'
  * checkbox flips - so `COURSES` only offers the 6 base modes; the combo record[1] values are
  * decoded for reading but this handler cannot send them. Whether sending a
  * multi-hour 식품건조/발효 duration actually reaches the appliance correctly (see MIN/MAX SECONDS
- * above). The `40 bf` and `40 72` frames that appeared alongside real cooks and maintenance runs
- * (something event/notification-shaped, given the timing) - not decoded at all (`40 eb`, a
- * similarly-shaped frame this handler used to leave unmodelled too, turned out to be a plain
- * periodic heartbeat carrying the same 28-byte record as `40 ec`'s current half - see
- * QUERY_OPCODE_LO - but `40 bf`/`40 72` are a different shape and remain unexplained). A real fault
- * mid-cook. Whether the oven itself reports its own door open/closed the way the fridge does. Also
- * 스팀 mode pops a "물통을 채워주세요" (fill the water tank) confirm dialog in the UI before it
- * will send - not reproduced or needed here since this handler only ever queues a course, never
- * starts one.
+ * above). The `40 bf` frame that appeared alongside real cooks and maintenance runs (something
+ * event/notification-shaped, given the timing) - not decoded at all (`40 eb`, a similarly-shaped
+ * frame this handler used to leave unmodelled too, turned out to be a plain periodic heartbeat
+ * carrying the same 28-byte record as `40 ec`'s current half - see QUERY_OPCODE_LO - but `40 bf`
+ * is a different shape and remains unexplained; `40 72` is decoded now, see NOTIFICATION below). A
+ * real fault mid-cook. Whether the oven itself reports its own door open/closed the way the fridge
+ * does. Also 스팀 mode pops a "물통을 채워주세요" (fill the water tank) confirm dialog in the UI
+ * before it will send - not reproduced or needed here since this handler only ever queues a
+ * course, never starts one.
+ *
+ * NOTIFICATION (decoded 2026-09-14): `40 72 <13-byte payload>` (15 bytes total) - the same channel
+ * shape and opcode number (`0x72`) FX___S.ts/3REK2G03VI200S_2.ts use for their own notify
+ * channels, `payload[0] === 0` gate included. Named by exact-timestamp correlation against the
+ * official `lg_thinq` integration's own `event.gwangpaobeun_notification` history: this frame
+ * (`payload[1] = 1`) appeared ~1.4s before both real `preheating_is_complete` firings the official
+ * integration logged (2026-09-10 09:51:43 and 10:15:04 KST) - a clean match, twice. The official
+ * integration's other three possible types for this model - `time_to_clean`, `error_has_occurred`,
+ * and `cooking_is_complete` (which despite the name means "turned off", not "food is done" - the
+ * official strings.json translates it as exactly that) - were checked the same way and never once
+ * lined up with a `40 72` frame at the matching timestamp, `cooking_is_complete` included despite
+ * it firing many times a day: this looks like the same "cloud computes it from polled state,
+ * appliance never pushes a dedicated frame" pattern 2REF21EBNSX_3.ts's own door-open notification
+ * turned out to be, and moot besides since `cooking_is_complete` only means the power state this
+ * handler already tracks turned off. Only `preheating_is_complete` is published; an unrecognised
+ * code is left unpublished rather than guessed at.
  *
  * CONFIRMED NOT NETWORKED: 잠금 설정 (control lock) - the user engaged and released it directly
  * on the physical panel (no representation in the official app either) and no distinctive frame
@@ -213,6 +229,15 @@ const STATE_OPCODE_LO = 0xec
 /** The periodic single-record heartbeat sibling of `40 ec` - see processAABB's `40 eb` branch. */
 const QUERY_OPCODE_LO = 0xeb
 const STATE_RECORD_LEN = 28
+
+/** See the file header's NOTIFICATION section. */
+const NOTIFY_OPCODE = 0x72
+const NOTIFY_FRAME_LEN = 15
+const NOTIFY_CODE_OFFSET = 3
+const NOTIFICATION: Record<number, string> = {
+    1: 'preheating_is_complete',
+}
+const NOTIFICATION_OPTIONS = [...new Set(Object.values(NOTIFICATION))]
 
 /** record[0] values confirmed against the official lg_thinq integration's own status strings -
  *  see the file header's STATE section. Anything else is passed through as `unknown_<n>`. */
@@ -452,6 +477,13 @@ export default class Device extends AABBDevice {
 
     private seenUnknown = new Set<string>()
 
+    /** Events do not go through publishProperty - not deduped (a repeat of the same event must
+     *  still fire) and not retained (an event entity should not replay a stale past occurrence at
+     *  every reconnect) - see FX___S.ts's identical method for the full reasoning. */
+    publishEvent(topic: string, eventType: string) {
+        this.HA.publishProperty(this.id, topic, JSON.stringify({ event_type: eventType }), { retain: false })
+    }
+
     constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
         super(HA, thinq)
 
@@ -557,6 +589,15 @@ export default class Device extends AABBDevice {
                     icon: 'mdi:timer-outline',
                     device_class: 'duration',
                     unit_of_measurement: 's',
+                },
+                // See the file header's NOTIFICATION section.
+                notification: {
+                    platform: 'event',
+                    unique_id: '$deviceid-notification',
+                    state_topic: '$this/notification',
+                    event_types: NOTIFICATION_OPTIONS,
+                    name: 'Notification',
+                    icon: 'mdi:bell-ring-outline',
                 },
             },
         })
@@ -688,6 +729,15 @@ export default class Device extends AABBDevice {
         // is purely something the appliance already sends on its own that was going unread.
         if (buf.length === 2 + STATE_RECORD_LEN && buf[0] === STATE_OPCODE_HI && buf[1] === QUERY_OPCODE_LO) {
             this.applyStateRecord(buf.subarray(2, 2 + STATE_RECORD_LEN))
+            return
+        }
+
+        // notification channel: `40 72 <payload>` - see the file header's NOTIFICATION section.
+        // Only published when the leading payload byte is 0 and the code is one this fork can
+        // name; an unnamed code is left unpublished rather than guessed at.
+        if (buf.length === NOTIFY_FRAME_LEN && buf[0] === STATE_OPCODE_HI && buf[1] === NOTIFY_OPCODE && buf[2] === 0) {
+            const name = NOTIFICATION[buf[NOTIFY_CODE_OFFSET]]
+            if (name !== undefined) this.publishEvent('notification', name)
             return
         }
 

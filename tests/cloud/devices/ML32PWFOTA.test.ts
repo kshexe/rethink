@@ -25,6 +25,11 @@ const GRILL_500 = buf(
 const MICROWAVE_DEFAULT_100 = buf(
     'aa4cf0430101010000003c000000000000006500000000000000000000000000000000000000000000000000000000000000000000000000000000010000000704020003000004000000b7bb',
 )
+// Real 15-byte notification-channel frame, matched by exact timestamp (~1.4s before) to the
+// official lg_thinq integration's own preheating_is_complete firing - see the file header's
+// NOTIFICATION section. payload[1] (buf[3]) = 1.
+const NOTIFICATION_PREHEATING_COMPLETE = buf('aa13407200010a000000000000000000002fbb')
+
 const ACK_SEND = buf('aa084000430060bb')
 const ACK_CANCEL = buf('aa084000440063bb')
 const CANCEL_FRAME = buf('aa07f04400b0bb')
@@ -155,6 +160,7 @@ describe(MODEL_ID, () => {
             'cook_time_seconds',
             'course',
             'current_status',
+            'notification',
             'oven_temperature',
             'remaining_time',
             'send',
@@ -505,5 +511,14 @@ describe(MODEL_ID, () => {
             'same bucket regardless of which course was actually sent (구이 this time, not 오븐)',
         )
         assert.equal(ha.devices[DEVICE_ID].properties.remaining_time, 10)
+    })
+
+    test('a real notification-channel frame publishes preheating_is_complete', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', NOTIFICATION_PREHEATING_COMPLETE)
+        assert.equal(
+            JSON.parse(String(ha.devices[DEVICE_ID].properties.notification)).event_type,
+            'preheating_is_complete',
+        )
     })
 })
