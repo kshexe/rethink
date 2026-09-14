@@ -139,8 +139,8 @@ const SWING_ON_OFF: WireLevels = [
 
 /*
  * A single swing axis: which tag drives it, which of HA's two swing attributes it is published
- * as, and the values it takes. A unit with one swing only should use 'swing_mode' - HA renders
- * swing_horizontal_mode as the secondary control.
+ * as, and the values it takes. 'swing_mode' is HA's primary control (vertical, on this unit);
+ * 'swing_horizontal_mode' is the secondary one it renders alongside it.
  */
 type SwingAxis = {
     tag: number
@@ -148,17 +148,47 @@ type SwingAxis = {
     levels: WireLevels
     /* tags to re-send alongside the swing write, for units that want the context */
     attach?: number[]
+    /* run whenever this tag's value changes, in addition to publishing the axis itself - see
+     * swingAxes()'s own comment for why the vertical axis needs one and the horizontal does not */
+    onChange?: () => void
 }
 
 /*
- * This unit's horizontal vanes: plain on/off (0x206). Vertical (0x205) used to be here too, as a
- * second on/off axis - folded into the "상하 각도" select instead (see TAG_VERTICAL_ANGLE's own
- * comment and addModelFields()) once 2026-09-12 live testing showed the app's own vertical menu
- * treats "swing on" as just one more choice alongside its 1-6 fixed angles, not a separate control.
- * With only one axis left, this uses 'swing_mode' (HA's primary swing attribute), not
- * 'swing_horizontal_mode' - see the SwingAxis type comment on why a single axis gets that one.
+ * This unit's two vane axes, both plain on/off: 0x205 vertical, 0x206 horizontal.
+ *
+ * Vertical briefly lived only inside the "상하 각도" select instead (see TAG_VERTICAL_ANGLE's own
+ * comment and addModelFields()), on the reasoning that 2026-09-12 live testing showed the app's
+ * own vertical menu treats "swing on" as just one more choice alongside its 1-6 fixed angles, not
+ * a separate control - so this used to be the ONE axis on the climate entity, and it held
+ * 'swing_mode' rather than 'swing_horizontal_mode' on the strength of the SwingAxis type comment
+ * above (a single axis gets the primary one).
+ *
+ * That reasoning modelled the APP's UI, not `lg_thinq`'s. Checked side by side 2026-09-14 (same
+ * 거실 unit, same instant): `lg_thinq` publishes BOTH as ordinary swing attributes - `swing_mode`
+ * for vertical, `swing_horizontal_mode` for horizontal - which is also HA's own usual pairing for
+ * a two-axis unit. Matching it is worth a real functional change, not just a label: the owner had
+ * been reading horizontal state out of an attribute named for vertical, with no horizontal control
+ * at all and vertical buried in a separate select entity most dashboards would not think to look
+ * at for a "swing" button.
+ *
+ * BREAKING: any automation that read or wrote this unit's `swing_mode` expecting horizontal now
+ * gets vertical instead.
+ *
+ * The 상하 각도 select stays - it still does something swing_mode cannot, the 1-6 fixed positions
+ * - but it and this axis both drive 0x205, so the vertical axis carries an onChange that keeps the
+ * select in sync (see addModelFields' TAG_VERTICAL_ANGLE section). That also fixes a standing bug
+ * the pairing exposed: the select's own read hook only fires on 0x321 arriving, and a unit left on
+ * swing/auto the whole time it has been paired may never send a discrete 0x321 at all - which is
+ * exactly what 거실's did, reading `unknown` since it joined rather than `auto`. The vertical axis
+ * now republishes the select on every 0x205 report too, so its first swing state already resolves
+ * it - not just the next time someone sets a fixed angle by hand.
  */
-const SWING_AXES_ON_OFF: SwingAxis[] = [{ tag: 0x206, name: 'swing_mode', levels: SWING_ON_OFF }]
+function swingAxesOnOff(onVerticalChange: () => void): SwingAxis[] {
+    return [
+        { tag: 0x205, name: 'swing_mode', levels: SWING_ON_OFF, onChange: onVerticalChange },
+        { tag: 0x206, name: 'swing_horizontal_mode', levels: SWING_ON_OFF },
+    ]
+}
 
 /* The discovery config once the climate component is known to be in it */
 type ClimateConfig = DeviceDiscovery & { components: { climate: ClimateComponent } }
@@ -672,7 +702,7 @@ export default class Device extends TLVDevice {
      * 0x205 / 0x206 rather than by position, which 0x2cd does not describe either way.
      */
     swingAxes(): SwingAxis[] {
-        return SWING_AXES_ON_OFF
+        return swingAxesOnOff(() => this.HA.publishProperty(this.id, 'vertical_angle', this.verticalAngleFromState()))
     }
 
     /*
@@ -1807,6 +1837,14 @@ export default class Device extends TLVDevice {
             read_xform: (raw) => toLabel.get(raw),
             write_xform: (val) => toWire.get(val),
             ...(axis.attach != null ? { write_attach: axis.attach } : {}),
+            ...(axis.onChange != null
+                ? {
+                      read_callback: () => {
+                          axis.onChange!()
+                          return true // still publish this axis's own value as usual
+                      },
+                  }
+                : {}),
         })
     }
 

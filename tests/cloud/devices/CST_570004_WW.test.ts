@@ -113,13 +113,12 @@ describe(MODEL_ID, () => {
         // auto-dry sensor (0x2CB bit2) is masked because auto-dry is exposed as a select instead.
         assert.ok(c.power_save, 'power_save present (from 0x2CB bit1)')
 
-        // CST fan scale and on/off swing. Only one swing axis left on the climate entity itself
-        // (0x206, horizontal) - vertical (0x205) moved into the vertical_angle select below, so
-        // it uses swing_mode (HA's primary attribute) rather than swing_horizontal_mode; see
-        // SWING_AXES_ON_OFF's own comment.
+        // CST fan scale and both swing axes: swing_mode is vertical (0x205), swing_horizontal_mode
+        // is horizontal (0x206) - matching lg_thinq's own pairing for this unit; see
+        // swingAxesOnOff()'s own comment for why vertical carries the primary name here.
         assert.deepEqual(c.climate.fan_modes, ['auto', 'very low', 'low', 'medium', 'high', 'power'])
         assert.deepEqual(c.climate.swing_modes, ['on', 'off'])
-        assert.ok(!c.climate.swing_horizontal_modes, 'no second swing axis - folded into vertical_angle')
+        assert.deepEqual(c.climate.swing_horizontal_modes, ['on', 'off'])
 
         // Extra components CST adds.
         assert.equal(c.autodry_setting?.platform, 'select')
@@ -423,6 +422,54 @@ describe(MODEL_ID, () => {
             [[0x205, 1]],
             'only 0x205 is written for auto',
         )
+
+        dev.drop()
+    })
+
+    test('swing_mode (vertical, 0x205) and swing_horizontal_mode (horizontal, 0x206) read and write independently', (t) => {
+        const { ha, thinq, dev } = buildReadyDevice(t)
+
+        dev.processKeyValue(0x205, 1)
+        dev.processKeyValue(0x206, 0)
+        assert.equal(ha.getProperty(DEVICE_ID, 'climate', 'swing_mode_state'), 'on')
+        assert.equal(ha.getProperty(DEVICE_ID, 'climate', 'swing_horizontal_mode_state'), 'off')
+
+        thinq.resetRecorder()
+        ha.setProperty(DEVICE_ID, 'climate', 'swing_horizontal_mode_command', 'on')
+        assert.equal(thinq.outbox.length, 1)
+        let m = new Map(TLV.parse(thinq.outbox[0].subarray(11, thinq.outbox[0].length - 2)).map(({ t, v }) => [t, v]))
+        assert.deepEqual([...m], [[0x206, 1]], 'writing horizontal touches only 0x206')
+
+        thinq.resetRecorder()
+        ha.setProperty(DEVICE_ID, 'climate', 'swing_mode_command', 'off')
+        assert.equal(thinq.outbox.length, 1)
+        m = new Map(TLV.parse(thinq.outbox[0].subarray(11, thinq.outbox[0].length - 2)).map(({ t, v }) => [t, v]))
+        assert.deepEqual([...m], [[0x205, 0]], 'writing vertical touches only 0x205')
+
+        dev.drop()
+    })
+
+    test('a unit that never sends a discrete 0x321 still resolves vertical_angle, not `unknown` forever', (t) => {
+        // The bug this closes: 거실's unit sat on swing the whole time it was paired and never
+        // once reported a fixed 0x321 angle, so the select's own read hook (which only fires on
+        // 0x321 arriving) never ran - `unknown` from pairing onward. swing_mode's read_callback
+        // now republishes vertical_angle on every 0x205 report too, so the very first swing state
+        // this unit ever sends is enough, with no 0x321 in sight.
+        enableMockTimers(t)
+        const { ha, thinq, dev } = makeDevice()
+        thinq.resetRecorder()
+
+        thinq.emit('data', buf(CAPS_RESPONSE_HEX))
+        // Carries 0x321 once (so the select gets created and knows its options) but the state
+        // fixture used from here on is deliberately the plain one, which never mentions 0x321
+        // again - the shape of a unit that has always been left on swing.
+        thinq.emit('data', buf(QUERY_RESPONSE_WITH_VERTICAL_ANGLE_HEX))
+        tickMockTimers(t, 600)
+
+        assert.equal(ha.devices[DEVICE_ID].config!.components.vertical_angle?.platform, 'select')
+
+        dev.processKeyValue(0x205, 1) // swing on - no further 0x321 in this test
+        assert.equal(ha.getProperty(DEVICE_ID, 'vertical_angle', 'state'), 'auto')
 
         dev.drop()
     })
