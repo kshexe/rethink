@@ -70,19 +70,25 @@ import * as energyAccumulator from '../energy-accumulator'
  * NOTIFICATION (decoded 2026-09-14): cross-referenced the official `lg_thinq` integration's live
  * `event.geonjogi_notification` history (`event_types: [drying_is_complete, drying_failed]`)
  * against this device's own frame log, same technique used for 3REK2G03VI200S_2.ts (kimchi
- * fridge)/ML32PWFOTA.ts (oven)/ST_R_ETH01Y_.ts (styler). Two short frames fire back to back right
- * before every real completion, confirmed on 4 independent samples (2026-09-09, 09-11, and twice on
- * 09-13) - counted separately against a full day of ~2000 other frames from this device and found
- * on no other occasion that day, ruling out any periodic/heartbeat reading of buf[1]==0x72 above:
+ * fridge)/ML32PWFOTA.ts (oven)/ST_R_ETH01Y_.ts (styler). A short frame fires right before every
+ * real completion:
  *
- *   30 72 00 00 00        (buf[3]=0)
- *   30 72 00 c8 00        (buf[3]=0xc8)
+ *   30 72 00 00 00        (buf[3]=0) = drying_is_complete
  *
- * Both ~1.1-1.6s before the cloud event. Only `drying_is_complete` has ever actually fired -
- * `drying_failed` never has, so it is not known which (if either) of the two codes above would
- * carry it instead; both known codes are mapped to `drying_is_complete` here since that is the
- * only outcome either has ever been observed producing (same reasoning MI2D7B.ts's own identical
- * two-code pattern uses for washing_is_complete).
+ * ~1.1-1.6s before the cloud event, confirmed on 4 independent samples (2026-09-09, 09-11, and
+ * twice on 09-13). `drying_failed` has never actually fired, so it is not known what code would
+ * carry it.
+ *
+ * CORRECTION (2026-09-14): `buf[3]=0xc8` was originally lumped into `drying_is_complete` too,
+ * since it always showed up right alongside the `0x00` frame at every completion seen so far. A
+ * live remote-control toggle test the same day broke that assumption: turning 원격제어 off by
+ * itself (mid-idle, no drying involved at all) produces a standalone `30 72 00 c8 00` with no
+ * preceding `0x00` frame, and turning it on produces `30 72 00 c9 00`. So `0xc8`/`0xc9` are their
+ * own thing - **원격제어 꺼짐/켜짐** - not part of the completion signal; they only ever appeared
+ * paired with `0x00` before because the app happens to also drop the remote-control session the
+ * moment a cycle finishes. `0xc8`/`0xc9` are read here as a `remote_control` binary_sensor instead
+ * of being folded into the `notification` event entity - confirmed by a live on/off/on/off round
+ * trip (4 samples, clean reversal each time).
  *
  * REMAINING_MINUTES (decoded 2026-09-10, and corrected the same day - see below): rather than
  * running a fresh test cycle, this was decoded from a real dry cycle already sitting in rethink's
@@ -151,6 +157,49 @@ import * as energyAccumulator from '../energy-accumulator'
  * misread as a huge fake delta); guarded by simply discarding any single-step delta implausibly
  * large for a ~5-10s report interval (`ENERGY_MAX_PLAUSIBLE_DELTA`) rather than trying to detect the
  * gap directly. Feeds `energy-accumulator.ts` the same way 3REK2G03VI200S_2.ts/FX___S.ts do.
+ *
+ * ALARM VOLUME, FEATURE FLAGS, RESERVATION MINUTES, AND `STATUS`'S OWN SECOND JOB (decoded
+ * 2026-09-14, live one-control-at-a-time testing while idle, each confirmed by an on/off/value
+ * round trip unless noted - and see the CORRECTION note right below, an offset bug in the
+ * scratch tooling used for this pass, not in this file, that is worth recording so a future
+ * session does not repeat it).
+ *
+ *   buf[82] (ALARM_VOLUME_OFFSET, right after ENERGY_OFFSET but a distinct byte - not dual-
+ *     purpose with it): the appliance's currently configured alarm volume, a plain 0-4 level, but
+ *     ONLY while idle (see below) - confirmed both by predicting the value from the on-screen
+ *     setting before checking the frame (매우크게→무음→매우크게→무음 round trip, `4→0→4→0`, all
+ *     four landing exactly right) and separately by setting 보통 and getting exactly `2`.
+ *   buf[87] (FEATURE_FLAGS_OFFSET): 0x08 구김방지(anti-wrinkle) · 0x20 드럼 라이트(drum light) ·
+ *     0x40 다림질알림(ironing alert) - each confirmed by an independent on/off reversal.
+ *   buf[89] (STATUS_OFFSET - the same byte the STATUS section above already reads): while idle
+ *     (never one of the three known running/cooling/complete enum values) this same byte carries
+ *     two extra bits instead - 0x08 예약 활성화(reservation active), confirmed by
+ *     arming/cancelling a reservation, and 0x10 버튼잠금(button lock), confirmed by toggling the
+ *     lock. Safe to read unconditionally alongside the enum: neither bit is ever set in any of
+ *     the three confirmed running-family values (0x41/0x61/0x01), so decodeStatus() itself is
+ *     untouched and these are just two more bits masked off the same read.
+ *   buf[70..71] (RESERVATION_MINUTES_OFFSET, 16-bit big-endian): the armed reservation's delay in
+ *     plain minutes - `00 b4` (180) for a 3-hour reservation, `04 74` (1140) for a 19-hour one,
+ *     back to `00 00` on cancel. The 2-byte width was only obvious once the 19h test pushed it
+ *     past 255 (the 3h sample alone read identically whether it was 1 byte or 2 with a zero high
+ *     byte).
+ *
+ * CORRECTION, same day: the scratch python used to diff live frames during this pass sliced the
+ * captured hex as a *string* (`hex[2:-2]`, dropping 2 hex *characters* = 1 byte off each end) and
+ * then subtracted 2 from an index into that to guess the real `buf[]` offset - AABBDevice actually
+ * strips 2 full *bytes* off each end (`buf.subarray(2, buf.length - 2)`), so the right correction
+ * was -1, not -2, and every offset that scratch tooling reported was one low. First noticed when
+ * `alarm_volume`'s naive offset (81) turned out to be literally `ENERGY_OFFSET`, implying the same
+ * byte somehow meant two things depending on state - re-deriving every one of this section's
+ * offsets against the *correctly* sliced buffer (using the already-validated ENERGY_OFFSET(81)/
+ * STATUS_OFFSET(89)/REMAINING_MINUTES_OFFSET(73) as known-good anchors to check the fix against)
+ * resolved that: there is no dual-purpose byte for ENERGY at all, alarm_volume simply lives one
+ * byte later at 82. STATUS(89) truly is reused for the lock/reservation bits, though - re-checked
+ * against the original validated running/cooling/complete fixtures, which read `unknown_N` at this
+ * offset never once by coincidence collides with 0x08 or 0x10, so no regression there either. The
+ * energy delta logic itself needed no gating fix in the end (the original always-record-every-
+ * frame behavior was already correct) - it only looked buggy because the earlier pass of this same
+ * mistake made a volume-level change look like it was landing in the energy byte.
  */
 
 const FROM_DEVICE_ACK_OPCODE = 0xe5
@@ -171,11 +220,41 @@ const REMAINING_MINUTES_OFFSET = 73
 /** See the file header's STATUS section. Same old/new +50 pairing as REMAINING_MINUTES_OFFSET. */
 const STATUS_OFFSET = 89
 
-/** See the file header's ENERGY section. Same old/new +50 pairing as the other fields above. */
+/** See the file header's ENERGY section. */
 const ENERGY_OFFSET = 81
 /** A real report every few seconds at dryer wattage does not add more than this many Wh in one
  *  step - anything above is a cycle-boundary reset (see file header), not a real delta. */
 const ENERGY_MAX_PLAUSIBLE_DELTA = 50
+
+/** See the file header's decoded-2026-09-14 section - a distinct byte from ENERGY_OFFSET, not
+ *  dual-purpose with it. Only meaningful (and only read) while STATUS is not one of the three
+ *  running-family values. */
+const ALARM_VOLUME_OFFSET = 82
+const ALARM_VOLUME_NAMES: Record<number, string> = {
+    0: 'mute',
+    1: 'low',
+    2: 'medium',
+    3: 'high',
+    4: 'very_high',
+}
+
+/** See the file header's decoded-2026-09-14 section. */
+const FEATURE_FLAGS_OFFSET = 87
+const FEATURE_ANTI_WRINKLE = 0x08
+const FEATURE_DRUM_LIGHT = 0x20
+const FEATURE_IRONING_ALERT = 0x40
+
+/** See the file header's decoded-2026-09-14 section - two extra bits on STATUS_OFFSET itself,
+ *  not a separate byte; never set in any of the three confirmed running-family enum values. */
+const OPTION_RESERVATION_ACTIVE = 0x08
+const OPTION_BUTTON_LOCK = 0x10
+
+const RESERVATION_MINUTES_OFFSET = 70
+
+/** See the file header's NOTIFICATION CORRECTION section - not part of the `notification` event
+ *  entity, read instead as a `remote_control` binary_sensor. */
+const NOTIFY_REMOTE_OFF = 0xc8
+const NOTIFY_REMOTE_ON = 0xc9
 
 /** See the file header's POWER READ-BACK section. */
 const POWER_ECHO_TYPE = 0xe6
@@ -189,7 +268,6 @@ const NOTIFY_OPCODE = 0x72
 const NOTIFY_CODE_OFFSET = 3
 const NOTIFICATION: Record<number, string> = {
     0: 'drying_is_complete',
-    0xc8: 'drying_is_complete',
 }
 const NOTIFICATION_OPTIONS = [...new Set(Object.values(NOTIFICATION))]
 
@@ -226,6 +304,7 @@ const QUERY_FRAME = Buffer.from('f0ed1211010000010400', 'hex')
 export default class Device extends AABBDevice {
     power: boolean | undefined
     status: string | undefined
+    remoteControl: boolean | undefined
 
     /** The last raw (mod-256) energy byte seen, to compute the next delta against - see the file
      *  header's ENERGY section. `undefined` until the first status frame arrives. */
@@ -317,6 +396,72 @@ export default class Device extends AABBDevice {
                     name: 'Notification',
                     icon: 'mdi:bell-ring-outline',
                 },
+                // See the file header's NOTIFICATION CORRECTION section - 0xc8/0xc9 on the same
+                // channel as `notification` above, split out since it is a state, not an event.
+                remote_control: {
+                    platform: 'binary_sensor',
+                    unique_id: '$deviceid-remote_control',
+                    state_topic: '$this/remote_control',
+                    name: 'Remote control',
+                    icon: 'mdi:remote',
+                    entity_category: 'diagnostic',
+                },
+                // See the file header's "FEATURE/OPTION FLAG BYTES" section - all four read-only,
+                // the write side for any of them has not been captured/confirmed yet.
+                drum_light: {
+                    platform: 'binary_sensor',
+                    unique_id: '$deviceid-drum_light',
+                    state_topic: '$this/drum_light',
+                    name: 'Drum light',
+                    icon: 'mdi:lightbulb-outline',
+                    entity_category: 'diagnostic',
+                },
+                anti_wrinkle: {
+                    platform: 'binary_sensor',
+                    unique_id: '$deviceid-anti_wrinkle',
+                    state_topic: '$this/anti_wrinkle',
+                    name: 'Anti-wrinkle',
+                    icon: 'mdi:tshirt-crew-outline',
+                    entity_category: 'diagnostic',
+                },
+                ironing_alert: {
+                    platform: 'binary_sensor',
+                    unique_id: '$deviceid-ironing_alert',
+                    state_topic: '$this/ironing_alert',
+                    name: 'Ironing alert',
+                    icon: 'mdi:iron-outline',
+                    entity_category: 'diagnostic',
+                },
+                button_lock: {
+                    platform: 'binary_sensor',
+                    unique_id: '$deviceid-button_lock',
+                    state_topic: '$this/button_lock',
+                    name: 'Button lock',
+                    icon: 'mdi:lock-outline',
+                    entity_category: 'diagnostic',
+                },
+                // See the file header's "FEATURE/OPTION FLAG BYTES" section. 0 when no
+                // reservation is armed.
+                reservation_minutes: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-reservation_minutes',
+                    state_topic: '$this/reservation_minutes',
+                    name: 'Reservation',
+                    icon: 'mdi:timer-plus-outline',
+                    device_class: 'duration',
+                    unit_of_measurement: 'min',
+                    entity_category: 'diagnostic',
+                },
+                // See the file header's "ENERGY BYTE IS DUAL-PURPOSE" section - only published
+                // while STATUS reads 'idle'; not touched at all while running.
+                alarm_volume: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-alarm_volume',
+                    state_topic: '$this/alarm_volume',
+                    name: 'Alarm volume',
+                    icon: 'mdi:volume-high',
+                    entity_category: 'diagnostic',
+                },
             },
         })
 
@@ -324,7 +469,7 @@ export default class Device extends AABBDevice {
         log(
             'status',
             this.id,
-            'RD20_S (건조기) handler started - power, remaining_minutes, status, energy, notification, see file header',
+            'RD20_S (건조기) handler started - power, remaining_minutes, status, energy, alarm_volume, feature flags, reservation, notification, remote_control, see file header',
         )
     }
 
@@ -372,7 +517,19 @@ export default class Device extends AABBDevice {
         // notification channel: <sub=0x30> 72 <payload> - see the file header's NOTIFICATION
         // section. Frame length is not fixed, so only the sub/opcode/gate byte are checked.
         if (buf[0] === NOTIFY_SUB && buf[1] === NOTIFY_OPCODE && buf.length > NOTIFY_CODE_OFFSET && buf[2] === 0) {
-            const name = NOTIFICATION[buf[NOTIFY_CODE_OFFSET]]
+            const code = buf[NOTIFY_CODE_OFFSET]
+
+            // See the file header's NOTIFICATION CORRECTION section - a state, not an event.
+            if (code === NOTIFY_REMOTE_ON || code === NOTIFY_REMOTE_OFF) {
+                const on = code === NOTIFY_REMOTE_ON
+                if (on !== this.remoteControl) {
+                    this.remoteControl = on
+                    this.publishProperty('remote_control', on ? 'ON' : 'OFF')
+                }
+                return
+            }
+
+            const name = NOTIFICATION[code]
             if (name !== undefined) this.publishEvent('notification', name)
             return
         }
@@ -400,6 +557,27 @@ export default class Device extends AABBDevice {
                 if (delta > 0 && delta <= ENERGY_MAX_PLAUSIBLE_DELTA) void this.recordEnergyDelta(delta)
             }
             this.lastEnergyRaw = energyRaw
+
+            // See the file header's decoded-2026-09-14 section - only meaningful while idle
+            // (STATUS is not one of the three running-family values); not published otherwise,
+            // rather than publishing a number that has no relation to alarm volume mid-cycle.
+            if (!(buf[STATUS_OFFSET] in STATUS_NAMES)) {
+                const raw = buf[ALARM_VOLUME_OFFSET]
+                this.publishProperty('alarm_volume', ALARM_VOLUME_NAMES[raw] ?? `unknown_${raw}`)
+            }
+
+            // See the file header's decoded-2026-09-14 section.
+            const features = buf[FEATURE_FLAGS_OFFSET]
+            this.publishProperty('drum_light', features & FEATURE_DRUM_LIGHT ? 'ON' : 'OFF')
+            this.publishProperty('anti_wrinkle', features & FEATURE_ANTI_WRINKLE ? 'ON' : 'OFF')
+            this.publishProperty('ironing_alert', features & FEATURE_IRONING_ALERT ? 'ON' : 'OFF')
+
+            // OPTION_RESERVATION_ACTIVE (0x08, also on STATUS_OFFSET) is not separately exposed -
+            // reservation_minutes already carries the same information (0 = none armed) without
+            // needing a second entity.
+            this.publishProperty('button_lock', buf[STATUS_OFFSET] & OPTION_BUTTON_LOCK ? 'ON' : 'OFF')
+
+            this.publishProperty('reservation_minutes', buf.readUInt16BE(RESERVATION_MINUTES_OFFSET))
             return
         }
 

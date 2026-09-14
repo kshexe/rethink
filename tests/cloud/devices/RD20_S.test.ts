@@ -99,7 +99,56 @@ const ENERGY_1WH = buf(
 // independent real completions (2026-09-09, 09-11, and twice on 09-13), each ~1.1-1.6s before the
 // official integration's event.geonjogi_notification fired drying_is_complete.
 const NOTIFICATION_CODE_00 = buf('aa09307200000000bb')
-const NOTIFICATION_CODE_C8 = buf('aa09307200c80048bb')
+// See the file header's NOTIFICATION CORRECTION section - these two are remote_control, not part
+// of the drying_is_complete signal (a live toggle test the same day disproved the original lumped
+// reading of 0xc8). Confirmed by a clean on/off/on/off round trip (4 samples).
+const NOTIFICATION_REMOTE_ON = buf('aa09307200c9004bbb')
+const NOTIFICATION_REMOTE_OFF = buf('aa09307200c80048bb')
+
+/*
+ * Real 114-byte status frames, mined from the live one-control-at-a-time idle testing that found
+ * the fields below (2026-09-14) - see RD20_S.ts's file header for the full account, including the
+ * scratch-tooling offset bug that had to be found and corrected first. Each pair is consecutive
+ * real captures spanning exactly one control's on/off (or armed/cancelled) transition, nothing
+ * else changing between them.
+ */
+const DRUM_LIGHT_OFF = buf(
+    'aaff300a00760044c2000100ec00640003020000070000000064001e010000000000000700000020000480070000000000000000000000000000000000000000000003020000070000000064001e010000000000000700000000000480070000000000000000000000000000000000000000008958bb',
+)
+const DRUM_LIGHT_ON = buf(
+    'aaff300a00760044d3000100ec00640003020000070000000064001e010000000000000700000000000480070000000000000000000000000000000000000000000003020000070000000064001e010000000000000700000020000480070000000000000000000000000000000000000000009578bb',
+)
+const IRONING_ALERT_ON = buf(
+    'aaff300a007600458b000100ec00640003020000070000000064001e010000000000000700000000000480070000000000000000000000000000000000000000000003020000070000000064001e010000000000040700000040000480070000000000000000000000000000000000000000005326bb',
+)
+const IRONING_ALERT_OFF = buf(
+    'aaff300a0076004599000100ec00640003020000070000000064001e010000000000040700000040000480070000000000000000000000000000000000000000000003020000070000000064001e01000000000004070000000000048007000000000000000000000000000000000000000000bfe3bb',
+)
+const ANTI_WRINKLE_ON = buf(
+    'aaff300a00760045d3000100ec00640003020000070004740064001e010000000000000700000000000c80070000000000000000000000000000000000000000000003020000070004740064001e010000000000000700000008000c80070000000000000000000000000000000000000000008416bb',
+)
+const ANTI_WRINKLE_OFF = buf(
+    'aaff300a00760045d8000100ec00640003020000070004740064001e010000000000000700000008000c80070000000000000000000000000000000000000000000003020000070004740064001e010000000000000700000000000c80070000000000000000000000000000000000000000008dcabb',
+)
+const BUTTON_LOCK_ON = buf(
+    'aaff300a00760044f1000100ec00640003020000070000000064001e010000000000000700000020000480070000000000000000000000000000000000000000000003020000070000000064001e010000000000000700000020001480070000000000000000000000000000000000000000007444bb',
+)
+const BUTTON_LOCK_OFF = buf(
+    'aaff300a0076004501000100ec00640003020000070000000064001e010000000000000700000020001480070000000000000000000000000000000000000000000003020000070000000064001e01000000000000070000002000048007000000000000000000000000000000000000000000d5debb',
+)
+// 3-hour reservation just armed - buf[70..71] = 00 b4 (180 min).
+const RESERVATION_3H = buf(
+    'aaff300a00760045be000100ec00640003020000070000000064001e010000000000040700000000000480070000000000000000000000000000000000000000000003020000070000b40064001e010000000000040700000000000c80070000000000000000000000000000000000000000005081bb',
+)
+// Cancelled - buf[70..71] back to 00 00.
+const RESERVATION_OFF = buf(
+    'aaff300a00760045e0000100ec00640003020000070004740064001e010000000000000700000000000c80070000000000000000000000000000000000000000000003020000070000000064001e010000000000000700000000000480070000000000000000000000000000000000000000008a08bb',
+)
+// buf[89] reads 0x04 here (idle, not one of the three running-family values), buf[82]=2 - the
+// alarm volume was set to 보통 (medium) just before this was captured, predicted then confirmed.
+const ALARM_VOLUME_MEDIUM = buf(
+    'aaff300a0076004510000100ec00640003020000070000000064001e010000000000010700000020000480070000000000000000000000000000000000000000000003020000070000000064001e010000000000020700000020000480070000000000000000000000000000000000000000008a31bb',
+)
 
 function makeDevice(id = DEVICE_ID) {
     const ha = new MockHAConnection()
@@ -121,6 +170,13 @@ describe(MODEL_ID, () => {
             'energy_month',
             'energy_total',
             'notification',
+            'remote_control',
+            'drum_light',
+            'anti_wrinkle',
+            'ironing_alert',
+            'button_lock',
+            'reservation_minutes',
+            'alarm_volume',
         ])
         assert.equal(components.power.command_topic, '$this/power/set')
         assert.equal(components.remaining_minutes.platform, 'sensor')
@@ -233,14 +289,73 @@ describe(MODEL_ID, () => {
         assert.equal(ha.devices['energy-test-2'].properties.energy_hour, undefined)
     })
 
-    test('both real notification-channel codes publish drying_is_complete', () => {
-        for (const frame of [NOTIFICATION_CODE_00, NOTIFICATION_CODE_C8]) {
-            const { ha, thinq } = makeDevice()
-            thinq.emit('data', frame)
-            assert.equal(
-                JSON.parse(String(ha.devices[DEVICE_ID].properties.notification)).event_type,
-                'drying_is_complete',
-            )
-        }
+    test('notification code 0 publishes drying_is_complete', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', NOTIFICATION_CODE_00)
+        assert.equal(JSON.parse(String(ha.devices[DEVICE_ID].properties.notification)).event_type, 'drying_is_complete')
+    })
+
+    // See the file header's NOTIFICATION CORRECTION section - 0xc8/0xc9 are remote_control, not
+    // drying_is_complete.
+    test('notification codes 0xc9/0xc8 publish remote_control, not drying_is_complete', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', NOTIFICATION_REMOTE_ON)
+        assert.equal(ha.devices[DEVICE_ID].properties.remote_control, 'ON')
+        assert.equal(ha.devices[DEVICE_ID].properties.notification, undefined)
+        thinq.emit('data', NOTIFICATION_REMOTE_OFF)
+        assert.equal(ha.devices[DEVICE_ID].properties.remote_control, 'OFF')
+        assert.equal(ha.devices[DEVICE_ID].properties.notification, undefined)
+    })
+
+    test('drum_light reads buf[87] 0x20, confirmed by a real on/off reversal', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', DRUM_LIGHT_OFF)
+        assert.equal(ha.devices[DEVICE_ID].properties.drum_light, 'OFF')
+        thinq.emit('data', DRUM_LIGHT_ON)
+        assert.equal(ha.devices[DEVICE_ID].properties.drum_light, 'ON')
+    })
+
+    test('ironing_alert reads buf[87] 0x40, confirmed by a real on/off reversal', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', IRONING_ALERT_ON)
+        assert.equal(ha.devices[DEVICE_ID].properties.ironing_alert, 'ON')
+        thinq.emit('data', IRONING_ALERT_OFF)
+        assert.equal(ha.devices[DEVICE_ID].properties.ironing_alert, 'OFF')
+    })
+
+    test('anti_wrinkle reads buf[87] 0x08, confirmed by a real on/off reversal', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', ANTI_WRINKLE_ON)
+        assert.equal(ha.devices[DEVICE_ID].properties.anti_wrinkle, 'ON')
+        thinq.emit('data', ANTI_WRINKLE_OFF)
+        assert.equal(ha.devices[DEVICE_ID].properties.anti_wrinkle, 'OFF')
+    })
+
+    test('button_lock reads buf[89] (STATUS_OFFSET) bit 0x10, confirmed by a real on/off reversal', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', BUTTON_LOCK_ON)
+        assert.equal(ha.devices[DEVICE_ID].properties.button_lock, 'ON')
+        thinq.emit('data', BUTTON_LOCK_OFF)
+        assert.equal(ha.devices[DEVICE_ID].properties.button_lock, 'OFF')
+    })
+
+    test('reservation_minutes reads buf[70..71] as 16-bit minutes, confirmed by a real arm/cancel', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', RESERVATION_3H)
+        assert.equal(ha.devices[DEVICE_ID].properties.reservation_minutes, 180)
+        thinq.emit('data', RESERVATION_OFF)
+        assert.equal(ha.devices[DEVICE_ID].properties.reservation_minutes, 0)
+    })
+
+    test('alarm_volume reads buf[82] while idle, matching the on-screen 보통(medium) setting', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', ALARM_VOLUME_MEDIUM)
+        assert.equal(ha.devices[DEVICE_ID].properties.alarm_volume, 'medium')
+    })
+
+    test('alarm_volume is not published while a real cycle is running (STATUS is running/cooling/complete)', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', STATUS_RUNNING_18_MIN_LEFT)
+        assert.equal(ha.devices[DEVICE_ID].properties.alarm_volume, undefined)
     })
 })
