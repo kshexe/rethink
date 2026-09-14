@@ -21,6 +21,18 @@ type CheckMode = (arg: number) => boolean
  * accounting. This handler is not shared with any other model (nothing else in this fork uses
  * this protocol family), so the generic protocol plumbing and this unit's own specifics live
  * together in this one file rather than split across a shared base class.
+ *
+ * AUTO MODE'S 0x1fe IS NOT A TEMPERATURE (2026-09-14, cross-referenced from another CST_570004_WW
+ * fork/PR's own write-up rather than live-tested against this unit - see the field's own comment
+ * for the caveat): in auto mode this tag only takes 30/32/34/36/38, a 5-step "comfort" offset
+ * (raw = 34 + 2*offset, offset -2..+2) the app shows as 더워요/조금 더워요/적당해요/조금 추워요/
+ * 추워요 - not a settable degree value at all, and stored separately from whatever setpoint was
+ * last used in cool/dry (switching back out of auto restores it unchanged). Dividing this by 2
+ * the way every other mode's setpoint is read produces a bogus 15-19°C, the same mistake
+ * `lg_thinq` itself makes for this tag. HA's climate entity has no way to give the same slider a
+ * different range per mode (see makeClimateConfig()), so this cannot be turned into a working
+ * -2..+2 control - the target_temperature field just stops publishing anything while in auto
+ * (see TAG_TEMP_TARGET's read_xform) rather than showing a number that was never a temperature.
  */
 
 /*
@@ -928,7 +940,19 @@ export default class Device extends TLVDevice {
             id: TAG_TEMP_TARGET,
             name: 'temperature',
             comp: 'climate',
-            read_xform: (raw) => raw / 2,
+            /*
+             * In auto mode this tag is not a temperature at all - see the file header's AUTO
+             * MODE section: it only takes 30/32/34/36/38, a 5-step "comfort" offset (-2..+2) the
+             * app shows as 더워요/조금 더워요/적당해요/조금 추워요/추워요, unrelated to the
+             * cooling-mode setpoint range this entity's min/max are configured for. HA's climate
+             * entity has one fixed min/max declared once at discovery time (see
+             * makeClimateConfig()) with no per-mode override, so there is no way to make the same
+             * slider sensibly show or set that offset while in auto - undefined here just skips
+             * publishing (read_xform's contract - see tlv_device.ts's processKeyValue) rather than
+             * showing a bogus 15-19°C computed by dividing the offset code in half, which is what
+             * this field (and lg_thinq's own equivalent) did before this was noticed.
+             */
+            read_xform: (raw) => (this.getModeTLV() === this.modeMaps.toWire.get('auto') ? undefined : raw / 2),
             /*
              * HA is told the range and will not offer anything outside it, so the clamp only
              * catches a setpoint arriving from elsewhere - which the unit would reject anyway.

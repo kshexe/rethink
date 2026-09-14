@@ -188,6 +188,29 @@ describe(MODEL_ID, () => {
         dev.drop()
     })
 
+    test('0x1fe stops publishing as a temperature once the unit is in auto mode', (t) => {
+        const { ha, dev } = buildReadyDevice(t)
+
+        // Baseline: cool mode, a real setpoint reads through as-is.
+        dev.raw_clip_state[0x1f7] = 1
+        dev.processKeyValue(0x1f9, 0) // cool
+        dev.processKeyValue(0x1fe, 48)
+        assert.equal(ha.getProperty(DEVICE_ID, 'climate', 'temperature_state'), 24)
+
+        // Switching to auto and receiving one of its 5 comfort-offset codes (36 = offset 1, not
+        // 18°C) must not overwrite the setpoint with that bogus half - see the file header's AUTO
+        // MODE section and this field's own read_xform comment.
+        dev.processKeyValue(0x1f9, 3) // auto
+        dev.processKeyValue(0x1fe, 36)
+        assert.equal(
+            ha.getProperty(DEVICE_ID, 'climate', 'temperature_state'),
+            24,
+            'still the last real cool-mode setpoint, not 36/2',
+        )
+
+        dev.drop()
+    })
+
     test('selecting a mode while off turns the unit on (attaches 0x1f7=1)', (t) => {
         const { ha, thinq, dev } = buildReadyDevice(t)
 
