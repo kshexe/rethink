@@ -43,6 +43,13 @@ const STATUS_EC_SUIT_COAT_31MIN = buf(
         '0000050000001f001f01000000000000000002190000001600060000000000000000005a51bb',
 )
 
+// Real notification-channel frames - see the file header's NOTIFICATION section. Captured twice
+// independently (09-09 and 09-12), each ~1.5-2s before the official integration's
+// event.seutailreo_notification fired styling_is_complete.
+const NOTIFICATION_STYLING_IS_COMPLETE = buf('aa09317200000003bb')
+// Only 1 sample so far (09-09 11:38:27) - tentative, see the file header.
+const NOTIFICATION_ERROR_HAS_OCCURRED = buf('aa0c317200640300000095bb')
+
 function makeDevice() {
     const ha = new MockHAConnection()
     const thinq = new MockThinq2Device(DEVICE_ID, META)
@@ -58,6 +65,7 @@ describe(MODEL_ID, () => {
             'active_course',
             'course',
             'duration_minutes',
+            'notification',
             'power',
             'start',
         ])
@@ -207,5 +215,21 @@ describe(MODEL_ID, () => {
      */
     test('the captured "send" frame differs from "start" only in the operation key', () => {
         assert.equal(SEND_STRONG_STYLING.length + 2, START_STRONG_STYLING.length)
+    })
+
+    test('a real notification-channel frame publishes styling_is_complete', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', NOTIFICATION_STYLING_IS_COMPLETE)
+        assert.equal(
+            JSON.parse(String(ha.devices[DEVICE_ID].properties.notification)).event_type,
+            'styling_is_complete',
+        )
+    })
+
+    // Tentative decode (1 sample) - see the file header's NOTIFICATION section.
+    test('a real notification-channel frame publishes error_has_occurred', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', NOTIFICATION_ERROR_HAS_OCCURRED)
+        assert.equal(JSON.parse(String(ha.devices[DEVICE_ID].properties.notification)).event_type, 'error_has_occurred')
     })
 })

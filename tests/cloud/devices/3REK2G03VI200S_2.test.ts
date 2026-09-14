@@ -52,8 +52,9 @@ const ENERGY_REPORT_TOTAL_246 = buf('aa0b113e001000f60e4dbb')
 const ENERGY_REPORT_DELTA_16_TOTAL_262 = buf('aa0b113e001001060f7fbb')
 
 // Real 15-byte notification-channel frame, the one sample caught so far - see the file header's
-// NOTIFICATION section. payload[1] (buf[3]) = 23, uncorrelated with any named real-world event yet.
-const NOTIFICATION_CODE_23 = buf('aa13117200170a0000000000000000000034bb')
+// NOTIFICATION section. payload[1] (buf[3]) = 23 = 'door_is_open', this model's only possible
+// notification type per the official integration's own declared event_types.
+const NOTIFICATION_DOOR_IS_OPEN = buf('aa13117200170a0000000000000000000034bb')
 
 function makeDevice() {
     const ha = new MockHAConnection()
@@ -94,7 +95,7 @@ describe(MODEL_ID, () => {
             'energy_total',
             'energy_total_counter',
             'middle_compartment',
-            'notification_code',
+            'notification',
             'one_touch_deodorize',
             'top_compartment',
             'top_door_open',
@@ -275,9 +276,9 @@ describe(MODEL_ID, () => {
         )
     })
 
-    test('a real notification-channel frame publishes its raw, unnamed code', () => {
+    test('a real notification-channel frame publishes door_is_open', () => {
         const { ha, thinq } = makeDevice()
-        thinq.emit('data', NOTIFICATION_CODE_23)
-        assert.equal(ha.devices[DEVICE_ID].properties.notification_code, 23)
+        thinq.emit('data', NOTIFICATION_DOOR_IS_OPEN)
+        assert.equal(JSON.parse(String(ha.devices[DEVICE_ID].properties.notification)).event_type, 'door_is_open')
     })
 })

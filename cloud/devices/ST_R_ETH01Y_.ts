@@ -126,6 +126,34 @@ import { note as recordNote } from '../frame-recorder'
  *   0x13 = 패딩 건조 (110분)                 0x14 = 패딩 스타일링 (48분)
  *   0x0F = 실내 제습 (시간 조절형, 2h/4h 확인 - record[1] 참고)
  *   0x17 = 시간 건조 (시간 조절형, 30분~3시간 - record[1] 참고)
+ *
+ * NOTIFICATION (decoded 2026-09-14): found the same way as 3REK2G03VI200S_2.ts's (kimchi fridge)
+ * and ML32PWFOTA.ts's (oven) - cross-referencing the official `lg_thinq` integration's live
+ * `event.seutailreo_notification` entity (`event_types: [styling_is_complete, error_has_occurred]`)
+ * history against this device's own frame log. Same `<sub> 72 <payload>` convention those two
+ * devices use (`sub = 0x31` here, matching this model's other from-device frames - see POWER
+ * above), but NOT a fixed 15-byte frame like theirs - length varies with the payload:
+ *
+ *   styling_is_complete   31 72 00 00 00              (2 independent samples, 09-09 and 09-12,
+ *                                                       each ~1.5-1.7s before the cloud event fired)
+ *   error_has_occurred    31 72 00 64 03 00 00 00     (1 sample only, 09-09 11:38:27, ~1.6s before
+ *                                                       the cloud event - code value 0x64/100 reads
+ *                                                       like a generic "an error happened" bucket,
+ *                                                       but with only one capture this is tentative,
+ *                                                       same confidence tier as MI2D7B's
+ *                                                       remaining_minutes)
+ *
+ * `buf[2]` is 0 in both (the same gate byte the other two devices use) and the code lives at
+ * `buf[3]` same as them, so `NOTIFY_CODE_OFFSET` is shared - only the fixed frame-length check is
+ * dropped here since this model's frames aren't a constant size.
+ *
+ * The `event.seutailreo_error` entity's *specific* fault (`need_water_replenishment`, fired
+ * 2026-09-09 11:38:59.953 - 31s after the error_has_occurred sample above) did NOT correlate with
+ * any `0x72`-shaped frame nearby, only the regular EC status record. Diffing that record against
+ * an unrelated normal sample (different course/duration, so most bytes differ for unrelated
+ * reasons) could not isolate a specific flag byte - unresolved, needs a live one-variable-at-a-time
+ * reproduction (or another real fault) to pin down, the same way the regular fridge's per-fault
+ * codes remain unresolved.
  */
 
 const FROM_DEVICE_ACK_OPCODE = 0xe5
@@ -148,6 +176,18 @@ const RECORD_LEN = 36
 const REC_COURSE_ID = 2
 const REC_POWER = 9
 const REC_DURATION_MINUTES = 6
+
+/** See the file header's NOTIFICATION section. Unlike 3REK2G03VI200S_2.ts/ML32PWFOTA.ts, frame
+ *  length is NOT fixed here, so there is no NOTIFY_FRAME_LEN to check. */
+const NOTIFY_SUB = 0x31
+const NOTIFY_OPCODE = 0x72
+const NOTIFY_CODE_OFFSET = 3
+const NOTIFICATION: Record<number, string> = {
+    0: 'styling_is_complete',
+    // Tentative - only 1 sample so far, see the file header.
+    0x64: 'error_has_occurred',
+}
+const NOTIFICATION_OPTIONS = [...new Set(Object.values(NOTIFICATION))]
 
 /** Every course id confirmed against a real unit so far; see the file header's two COURSE ID
  *  SWEEP sections. */
@@ -252,6 +292,15 @@ export default class Device extends AABBDevice {
                     device_class: 'duration',
                     unit_of_measurement: 'min',
                 },
+                // See the file header's NOTIFICATION section.
+                notification: {
+                    platform: 'event',
+                    unique_id: '$deviceid-notification',
+                    state_topic: '$this/notification',
+                    event_types: NOTIFICATION_OPTIONS,
+                    name: 'Notification',
+                    icon: 'mdi:bell-ring-outline',
+                },
             },
         })
 
@@ -297,9 +346,25 @@ export default class Device extends AABBDevice {
         }
     }
 
+    /** Events do not go through publishProperty - not deduped (a repeat of the same event must
+     *  still fire) and not retained (an event entity should not replay a stale past occurrence at
+     *  every reconnect) - see FX___S.ts's identical method for the full reasoning. */
+    publishEvent(topic: string, eventType: string) {
+        this.HA.publishProperty(this.id, topic, JSON.stringify({ event_type: eventType }), { retain: false })
+    }
+
     processAABB(buf: Buffer) {
         // ack: <sub> 00 e5 00  (4 bytes) - nothing to publish, just confirms the write landed
         if (buf.length === 4 && buf[1] === 0x00 && buf[2] === FROM_DEVICE_ACK_OPCODE && buf[3] === 0x00) return
+
+        // notification channel: <sub=0x31> 72 <payload> - see the file header's NOTIFICATION
+        // section. Frame length is not fixed here (unlike the other two devices using this
+        // convention), so only the sub/opcode/gate byte are checked.
+        if (buf[0] === NOTIFY_SUB && buf[1] === NOTIFY_OPCODE && buf.length > NOTIFY_CODE_OFFSET && buf[2] === 0) {
+            const name = NOTIFICATION[buf[NOTIFY_CODE_OFFSET]]
+            if (name !== undefined) this.publishEvent('notification', name)
+            return
+        }
 
         // Status record - see file header's STATUS RECORD section.
         if (buf[1] === MSG_TUNNEL) {
