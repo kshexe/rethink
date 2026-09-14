@@ -269,9 +269,27 @@ describe('FX___S washer', () => {
         assert.equal(get(HA, 'child_lock'), 'OFF')
         assert.equal(get(HA, 'wrinkle_care'), 'OFF')
         assert.equal(get(HA, 'turbowash'), 'ON')
+        assert.equal(get(HA, 'drum_light'), 'OFF')
         // The same bit was read as "a cycle is loaded" before this was isolated on the panel.
         assert.equal(get(HA, 'status'), 'initial')
         assert.equal(get(HA, 'running'), 'OFF')
+    })
+
+    test('decodes the drum light, isolated from the flags byte at standby', () => {
+        const { HA, dut } = setup()
+        // Real values from the two clean toggles: same course, standby, nothing else in the 66 bytes
+        // differs. See FLAG_DRUM_LIGHT.
+        const off = Buffer.alloc(66)
+        off[20] = 1 // PHASE_STANDBY
+        const on = Buffer.from(off)
+        on[36] = 0x40
+
+        dut.processRecord(off)
+        assert.equal(get(HA, 'drum_light'), 'OFF')
+        dut.processRecord(on)
+        assert.equal(get(HA, 'drum_light'), 'ON')
+        dut.processRecord(off)
+        assert.equal(get(HA, 'drum_light'), 'OFF')
     })
 
     test('adds a course it has no name for and makes it selectable', () => {

@@ -202,6 +202,21 @@ const STEAM_ON = 0x10
 // nothing else, and the door lock follows a few seconds later.
 const FLAG_REMOTE_CONTROL = 0x10
 const FLAG_CHILD_LOCK = 0x20
+/*
+ * The drum light, isolated 2026-09-14 by toggling it at standby - not mid-cycle, where this same byte
+ * is also doing other work and a first attempt (running, then paused) produced two changes with no way
+ * to tell which one moved for which reason.
+ *
+ * At standby the pair was clean both ways. Same course selected, nothing else touched, one record
+ * before and one after each toggle - and across both directions only this byte moved:
+ *
+ *   off -> on   record[36] 0x00 -> 0x40, no other byte in the 66 differed
+ *   on -> off   the SAME dual-record frame carried both halves: the previous record (light still on)
+ *               read 0x40, the current one (already switched off) read 0x00
+ *
+ * Two independent transitions, two different capture attempts, one bit both times.
+ */
+const FLAG_DRUM_LIGHT = 0x40
 // Set while the drum is actually turning. It clears on pause, but it ALSO clears and re-sets on its
 // own mid-cycle (measured twice, with no command in between and the remaining time still counting down),
 // so it must not be used to mean "paused" - that is PHASE_PAUSED and nothing else.
@@ -1034,6 +1049,13 @@ export default class Device extends AABBDevice {
                     name: 'Wrinkle care',
                     icon: 'mdi:tshirt-crew',
                 },
+                drum_light: {
+                    platform: 'binary_sensor',
+                    unique_id: '$deviceid-drum-light',
+                    state_topic: '$this/drum_light',
+                    name: 'Drum light',
+                    icon: 'mdi:lightbulb',
+                },
                 // The three "is it happening now" sensors, which exist because the switches below
                 // cannot answer that question and be a setting at the same time. A switch has to
                 // hold what the NEXT cycle will do - that is what the owner set and what they can
@@ -1687,6 +1709,7 @@ export default class Device extends AABBDevice {
         // device_class 'lock' is inverted by Home Assistant's convention: on means unlocked.
         this.publishProperty('door_lock', rec[OFF_DOOR_LOCK] ? 'OFF' : 'ON')
         this.publishProperty('wrinkle_care', rec[OFF_WRINKLE_CARE] & WRINKLE_CARE_ON ? 'ON' : 'OFF')
+        this.publishProperty('drum_light', flags & FLAG_DRUM_LIGHT ? 'ON' : 'OFF')
 
         /*
          * Whether the cycle now under way is running with steam / TurboShot. The same two bits the
