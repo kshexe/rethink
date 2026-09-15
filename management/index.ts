@@ -213,6 +213,20 @@ export function app(ha: HA_bridge, manager: DeviceManager, bridge: Bridge | unde
             }),
         )
 
+        // Reverse-engineering aid: the cloud's own semantic snapshot for a device, to poll
+        // alongside the frame recorder and correlate named field changes against raw bytes -
+        // see Bridge.getDeviceStatus's own comment.
+        app.get(
+            '/bridge/:deviceId/snapshot',
+            asyncHandler(async (req, res) => {
+                try {
+                    res.json((await bridge.getDeviceStatus(req.params.deviceId)) ?? {})
+                } catch (err) {
+                    res.status(500).end(`${err}`)
+                }
+            }),
+        )
+
         function refreshBridgeStatus() {
             broadcast({ bridge: bridgeStatus() })
         }

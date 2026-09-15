@@ -144,11 +144,19 @@ export async function login(): Promise<State> {
     return { countryCode, refreshToken }
 }
 
+// Non-interactive: authenticate a fresh Client from a stored State, for callers that want
+// the REST side (e.g. getDeviceStatus's own semantic snapshot) rather than the MQTT push
+// feed - see rethink-capture.ts's --poll-snapshot.
+export async function authenticate(state: State): Promise<Client> {
+    const client = new Client({ countryCode: state.countryCode })
+    await client.auth(state.refreshToken)
+    return client
+}
+
 // Non-interactive: connect to the cloud MQTT feed using a State, deliver each message to
 // opts.onMessage.
 export async function connect(state: State, opts: ConnectOptions): Promise<mqtt.MqttClient> {
-    const client = new Client({ countryCode: state.countryCode })
-    await client.auth(state.refreshToken)
+    const client = await authenticate(state)
     const subscription = await generateSubscription(client)
     return openMQTT(client, subscription, opts)
 }

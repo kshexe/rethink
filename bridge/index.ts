@@ -260,6 +260,21 @@ export class Bridge extends TypedEmitter<BridgeEvents> {
         return client.controlDevice(id, body)
     }
 
+    /** Reverse-engineering aid: the cloud's own semantic `snapshot` for a device (the same
+     *  `service/devices/:id` call the app makes to render its status screen) - a named-field
+     *  reading (course/state/temperature/...) to log alongside the raw frame capture, so a
+     *  decoding session gets "what the cloud called it" and "what byte changed" on one clock
+     *  without a one-off manual cross-check each time. */
+    async getDeviceStatus(id: string) {
+        const creds = this.state.getCredentials()
+        if (!creds) throw new Error('Not logged in')
+        if (!this.bridgedDevices.has(id)) throw new Error('Bridge mode is not enabled for this device')
+
+        const client = new ThinqClient(creds.env)
+        await client.auth(creds.refreshToken)
+        return client.getDeviceStatus(id)
+    }
+
     isLoggedIn() {
         return !!this.state.getCredentials()
     }

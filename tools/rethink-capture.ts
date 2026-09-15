@@ -18,19 +18,29 @@
 // login (prompts for the country code, then the post-login URL) ONCE, up front — before
 // stdin is taken over for notes. If the cloud login/connect fails, the recorder exits
 // with an error rather than continuing a degraded capture.
+//
+// --poll-snapshot <ms> (implies --cloud) additionally polls the cloud's own semantic
+// `service/devices/:id` reading (course/state/temperature/... - the same call the app makes
+// to draw its status screen) on a timer and records {k:'snapshot'} events on the same clock.
+// The push feed above only fires on specific events (a cycle finishing, an error); this
+// catches everything else - which option is currently set, mid-cycle values with no push
+// of their own - without a one-off manual cross-check each time. Default interval 5000ms;
+// LG's own app polls at a similar cadence, and this shares the account's rate limit with it.
 
 import WebSocket from 'ws'
 import * as fs from 'node:fs'
 import readline from 'node:readline'
 import { decodePacket } from '@/util/packet-codec'
-import { connect as connectCloud, login } from '@/util/lgcloud/monitor'
+import { connect as connectCloud, login, authenticate as authenticateCloud } from '@/util/lgcloud/monitor'
 import { loadState, saveState } from '@/util/lgcloud/state'
 
 // minimal flag parse; the rest are positional
-//   --cloud         enable cloud correlation (logs in interactively if not already)
-//   --state <path>   override the oauth.json state location
+//   --cloud                enable cloud correlation (logs in interactively if not already)
+//   --state <path>          override the oauth.json state location
+//   --poll-snapshot [ms]   also poll the cloud's semantic snapshot (implies --cloud)
 let cloud = false
 let statePath: string | undefined
+let pollSnapshotMs: number | undefined
 const positionals: string[] = []
 const argv = process.argv.slice(2)
 for (let i = 0; i < argv.length; i++) {
@@ -38,12 +48,20 @@ for (let i = 0; i < argv.length; i++) {
     if (a === '--cloud') cloud = true
     else if (a === '--state') statePath = argv[++i]
     else if (a.startsWith('--state=')) statePath = a.slice('--state='.length)
-    else positionals.push(a)
+    else if (a === '--poll-snapshot') {
+        cloud = true
+        // Optional numeric argument; don't consume the next positional if there isn't one.
+        const next = argv[i + 1]
+        pollSnapshotMs = next !== undefined && /^\d+$/.test(next) ? Number(argv[++i]) : 5000
+    } else if (a.startsWith('--poll-snapshot=')) {
+        cloud = true
+        pollSnapshotMs = Number(a.slice('--poll-snapshot='.length)) || 5000
+    } else positionals.push(a)
 }
 const [hostArg, deviceId, outArg] = positionals
 if (!hostArg || !deviceId) {
     console.error(
-        'Usage: tsx tools/rethink-capture.ts [--cloud] [--state <path>] <mgmt-host[:port]> <device-uuid> [out.jsonl]',
+        'Usage: tsx tools/rethink-capture.ts [--cloud] [--poll-snapshot [ms]] [--state <path>] <mgmt-host[:port]> <device-uuid> [out.jsonl]',
     )
     process.exit(1)
 }
@@ -159,6 +177,24 @@ async function setupCloud() {
         },
     })
     emit({ k: 'marker', phase: 'cloud-connected' })
+
+    if (pollSnapshotMs !== undefined) {
+        // A second, independent authenticated client - the MQTT connection above pins its own
+        // clientId (see this module's own file header) and getDeviceStatus is a plain REST call,
+        // so there's no reason to route it through that connection.
+        const snapshotClient = await authenticateCloud(state)
+        console.error(`[cloud] polling snapshot every ${pollSnapshotMs}ms`)
+        const poll = async () => {
+            try {
+                const snapshot = await snapshotClient.getDeviceStatus(deviceId)
+                emit({ k: 'snapshot', state: snapshot })
+            } catch (err) {
+                emit({ k: 'snapshot', error: err instanceof Error ? err.message : String(err) })
+            }
+        }
+        void poll()
+        setInterval(poll, pollSnapshotMs)
+    }
 }
 
 setupCloud().then(
