@@ -153,7 +153,8 @@ describe(MODEL_ID, () => {
         assert.equal(ha.getProperty(DEVICE_ID, 'climate', 'mode_state'), 'off') // power 0x1F7=0
         assert.equal(ha.getProperty(DEVICE_ID, 'climate', 'fan_mode_state'), 'high') // 0x1FA=6
         assert.equal(ha.getProperty(DEVICE_ID, 'climate', 'current_temperature'), 26) // 0x1FD=52 /2
-        assert.equal(ha.getProperty(DEVICE_ID, 'climate', 'temperature_state'), 24) // 0x1FE=48 /2
+        // 0x1FE=48/2=24, but the unit is off here (mode_state above) - cleared, not shown.
+        assert.equal(ha.getProperty(DEVICE_ID, 'climate', 'temperature_state'), 'None')
         assert.equal(ha.getProperty(DEVICE_ID, 'humidity', 'state'), 81) // 0x336=811 /10
         assert.equal(ha.getProperty(DEVICE_ID, 'energy_current', 'state'), 0) // 0x2B3=0
         assert.equal(ha.getProperty(DEVICE_ID, 'autodry_setting', 'state'), '60 min') // 0x20E=3
@@ -187,7 +188,7 @@ describe(MODEL_ID, () => {
         dev.drop()
     })
 
-    test('0x1fe stops publishing as a temperature once the unit is in auto mode', (t) => {
+    test('0x1fe is actively cleared to unknown once the unit is in auto mode, not left stale', (t) => {
         const { ha, dev } = buildReadyDevice(t)
 
         // Baseline: cool mode, a real setpoint reads through as-is.
@@ -197,20 +198,18 @@ describe(MODEL_ID, () => {
         assert.equal(ha.getProperty(DEVICE_ID, 'climate', 'temperature_state'), 24)
 
         // Switching to auto and receiving one of its 5 comfort-offset codes (36 = offset 1, not
-        // 18°C) must not overwrite the setpoint with that bogus half - see the file header's AUTO
-        // MODE section and this field's own read_xform comment.
+        // 18°C) must not show that bogus half either - see the file header's AUTO MODE section
+        // and this field's own read_xform/read_callback comments. Publishing the special 'None'
+        // payload (see HA.publishProperty's own comment) is what makes HA show this as unknown,
+        // matching `lg_thinq`'s own `temperature: None` here rather than leaving 24 on screen.
         dev.processKeyValue(0x1f9, 3) // auto
         dev.processKeyValue(0x1fe, 36)
-        assert.equal(
-            ha.getProperty(DEVICE_ID, 'climate', 'temperature_state'),
-            24,
-            'still the last real cool-mode setpoint, not 36/2',
-        )
+        assert.equal(ha.getProperty(DEVICE_ID, 'climate', 'temperature_state'), 'None', 'cleared, not left at 24')
 
         dev.drop()
     })
 
-    test('0x1fe also stops publishing in fan_only, matching lg_thinq - even though the raw value is real', (t) => {
+    test('0x1fe is actively cleared in fan_only, matching lg_thinq - even though the raw value is real', (t) => {
         const { ha, dev } = buildReadyDevice(t)
 
         // Baseline: cool mode, a real setpoint reads through as-is.
@@ -221,20 +220,18 @@ describe(MODEL_ID, () => {
 
         // Unlike auto, fan_only's raw value is not bogus - checked live 2026-09-14 against the
         // same unit's own lg_thinq entity, which read `temperature: None` in fan_only at the same
-        // moment this tag held a perfectly plausible 26°C. Suppressed anyway, for parity with the
-        // official integration's presentation - see this field's own read_xform comment.
+        // moment this tag held a perfectly plausible 26°C. Cleared anyway, for parity with the
+        // official integration's presentation. A first cut of this only skipped republishing and
+        // left 26 on screen, which side-by-side testing against lg_thinq (2026-09-15, 이서, via
+        // HA rather than the app) caught as still wrong - see this field's own read_callback.
         dev.processKeyValue(0x1f9, 2) // fan_only
         dev.processKeyValue(0x1fe, 52)
-        assert.equal(
-            ha.getProperty(DEVICE_ID, 'climate', 'temperature_state'),
-            26,
-            'still the last cool-mode setpoint - not republished, not cleared',
-        )
+        assert.equal(ha.getProperty(DEVICE_ID, 'climate', 'temperature_state'), 'None', 'cleared, not left at 26')
 
         dev.drop()
     })
 
-    test("0x1fe also stops publishing in dry, per the owner's report of lg_thinq doing the same", (t) => {
+    test("0x1fe is actively cleared in dry, per the owner's report of lg_thinq doing the same", (t) => {
         const { ha, dev } = buildReadyDevice(t)
 
         dev.raw_clip_state[0x1f7] = 1
@@ -244,11 +241,25 @@ describe(MODEL_ID, () => {
 
         dev.processKeyValue(0x1f9, 1) // dry
         dev.processKeyValue(0x1fe, 52)
-        assert.equal(
-            ha.getProperty(DEVICE_ID, 'climate', 'temperature_state'),
-            26,
-            'still the last cool-mode setpoint - not republished',
-        )
+        assert.equal(ha.getProperty(DEVICE_ID, 'climate', 'temperature_state'), 'None', 'cleared, not left at 26')
+
+        dev.drop()
+    })
+
+    test('0x1fe is actively cleared while off too, not just the three running modes', (t) => {
+        const { ha, dev } = buildReadyDevice(t)
+
+        dev.raw_clip_state[0x1f7] = 1
+        dev.processKeyValue(0x1f9, 0) // cool
+        dev.processKeyValue(0x1fe, 52)
+        assert.equal(ha.getProperty(DEVICE_ID, 'climate', 'temperature_state'), 26)
+
+        // Off is not folded into the mode enum the way 'mode' itself reads it (getModeTLV()
+        // alone can't distinguish "off" from "on in cool") - see temperatureHiddenInCurrentMode's
+        // own comment for why this checks 0x1f7 as well as 0x1f9.
+        dev.processKeyValue(0x1f7, 0) // power off
+        dev.processKeyValue(0x1fe, 52)
+        assert.equal(ha.getProperty(DEVICE_ID, 'climate', 'temperature_state'), 'None', 'cleared, not left at 26')
 
         dev.drop()
     })

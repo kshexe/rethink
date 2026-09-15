@@ -659,6 +659,25 @@ export default class Device extends TLVDevice {
         return this.raw_clip_state[TAG_MODE]
     }
 
+    /*
+     * The four states in which `lg_thinq` shows no target temperature at all - off, plus the
+     * three modes TAG_TEMP_TARGET's own comment covers (auto/fan_only/dry). Off joins the set
+     * 2026-09-15, on the owner's word: the same "stale figure left on screen" problem the other
+     * three had, just via a different route (0x1f7 power off rather than 0x1f9 mode), so the
+     * check here is against both tags rather than folding "off" into the mode enum the way
+     * `mode`'s own read_xform does (`getPowerTLV() === 0 ? 'off' : ...`) - `getModeTLV()` alone
+     * cannot tell an off unit from one still on in cool, since power and mode are separate tags.
+     */
+    temperatureHiddenInCurrentMode(): boolean {
+        if (this.getPowerTLV() === 0) return true
+        const mode = this.getModeTLV()
+        return (
+            mode === this.modeMaps.toWire.get('auto') ||
+            mode === this.modeMaps.toWire.get('fan_only') ||
+            mode === this.modeMaps.toWire.get('dry')
+        )
+    }
+
     getIDUActionRunningTLVNum() {
         if (this.raw_clip_state[TAG_IDU_THERMO_ON_OFF] != null) return TAG_IDU_THERMO_ON_OFF
         if (this.raw_clip_state[TAG_IDU_RUNNING_ALT] != null) return TAG_IDU_RUNNING_ALT
@@ -1017,17 +1036,28 @@ export default class Device extends TLVDevice {
              * a live dry-mode frame the way fan_only was, because that meant switching the unit
              * into dry to look, and this is a read-side presentation choice, not a bug fix a wrong
              * guess here would be safe to leave uncorrected until it is.
+             *
+             * ACTIVELY CLEARED, not just skipped, as of 2026-09-15 - and OFF joins the three
+             * above. `read_xform` returning undefined only skips publishing (see
+             * processKeyValue's own contract), which was the first cut of this and turned out to
+             * be half the fix: it stopped a stale figure from being overwritten with a *new*
+             * bogus one, but the stale figure itself - whatever was last shown in cool/dry-with-
+             * a-real-setpoint before the mode changed - stayed on screen, frozen, because nothing
+             * ever told HA to blank it. Caught live comparing this entity side by side with
+             * `lg_thinq`'s own after switching 이서 to fan_only from HA: ours held the last
+             * cool-mode 26°C, lg_thinq read `None`. Publishing `undefined` through
+             * `HA.publishProperty` directly (not through read_xform) is what actually clears it -
+             * see that function's own "special case" comment - so this field now always computes
+             * the number and leaves the decision to read_callback below, which is the one place
+             * that can choose between publishing it and clearing it instead.
              */
-            read_xform: (raw) => {
-                const mode = this.getModeTLV()
-                if (
-                    mode === this.modeMaps.toWire.get('auto') ||
-                    mode === this.modeMaps.toWire.get('fan_only') ||
-                    mode === this.modeMaps.toWire.get('dry')
-                ) {
-                    return undefined
+            read_xform: (raw) => raw / 2,
+            read_callback: (val) => {
+                if (this.temperatureHiddenInCurrentMode()) {
+                    this.HA.publishProperty(this.id, 'climate-temperature', undefined)
+                    return false
                 }
-                return raw / 2
+                return true
             },
             /*
              * HA is told the range and will not offer anything outside it, so the clamp only
