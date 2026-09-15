@@ -34,9 +34,12 @@ import { note as recordNote } from '../frame-recorder'
  *                   `smartCareVersion: "V2"`, so the plain "smartCare" name in other models' modelJSON
  *                   is a different, older feature - keeping "v2" in the name says this is that one)
  *
- * modelJSON's `expressMode` is documented as three-valued (OFF / EXPRESS_ON / RAPID_ON), but only
- * two wire values were ever captured (0x01/0x02 below) - a third RAPID_ON wire value likely exists
- * and is simply unconfirmed, not ruled out. This handler still only exposes a binary switch.
+ * modelJSON documents `expressMode` as three-valued (OFF / EXPRESS_ON / RAPID_ON) and only two
+ * wire values were ever captured (0x01/0x02 below) - RESOLVED, not just unconfirmed, 2026-09-15:
+ * the owner checked the real unit's 특급냉동 menu directly and there is only one option to turn
+ * on, no separate rapid tier. RAPID_ON is schema shared across whatever product line this
+ * modelJSON covers, not a control this physical unit has - same shape as `convertibleTemp` below.
+ * The binary switch this handler exposes is the whole feature, not a partial one.
  *
  * Query: unlike the TLV family (TLVDevice queries its own caps/values on a timer, independent of
  * bridge mode), AABBDevice has no active-query mechanism at all - every AABB handler in this fork
