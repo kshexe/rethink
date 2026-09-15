@@ -45,6 +45,15 @@ const STATE_BOTTOM_TO_MEAT_FISH = buf('aa1a11ec0206ff0100ff000100010206ff0107ff0
 const WRITE_ONE_TOUCH_ON = buf('aa0ff0e5000201ff0100060001cdbb')
 const STATE_ONE_TOUCH_ON = buf('aa1a11ec0206ff0000ff000100010206ff0000ff0101000187bb')
 
+// 상칸 switched to 꺼짐(09) from the panel (2026-09-15) - both halves of the dual record already
+// agree 09, so this is the settled state after the switch, not a frame caught mid-transition.
+const STATE_TOP_OFF = buf('aa1a11ec0209ff0000ff010001010209ff0000ff0001000182bb')
+// 중칸/하칸 both switched to 꺼짐 in the same sitting - middle to 0x0d, bottom to 0x09. Also
+// caught here: turning 중/하칸 off flips 상칸 back from its own 꺼짐(09) to 냉동(06) as a real
+// appliance side effect (confirmed by the owner asking, not assumed) - see RECORD_TOP_MODE_NAMES'
+// own comment. This fixture is the state AFTER that settled, not the moment it happened.
+const STATE_MIDDLE_BOTTOM_OFF = buf('aa1a11ec0206ff0d09ff000001010206ff0d09ff00010001a8bb')
+
 // Two consecutive real `11 3e` energy reports, mined from the frame log (2026-09-10) - see the
 // file header's ENERGY COUNTER section. total 246 + delta 16 -> total 262, the additive
 // relationship confirmed across all 130 real samples mined, not just these two.
@@ -109,6 +118,7 @@ describe(MODEL_ID, () => {
             '냉장 (약)',
             '냉동',
             '익힘',
+            '꺼짐',
             '유산균 김치+',
         ])
         // 야채·과일 (중/강/약) and, on 하칸 only, 쌀·잡곡 come from this exact model's own official
@@ -123,6 +133,7 @@ describe(MODEL_ID, () => {
             '구입 김치',
             '유산균 김치+',
             '익힘',
+            '꺼짐',
         ])
         assert.deepEqual(components.bottom_compartment.options, [
             '맛지킴 김치 (중)',
@@ -134,6 +145,7 @@ describe(MODEL_ID, () => {
             '쌀·잡곡',
             '육류/생선',
             '오래 보관',
+            '꺼짐',
         ])
     })
 
@@ -203,6 +215,24 @@ describe(MODEL_ID, () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', STATE_TOP_TO_PROBIOTIC)
         assert.equal(ha.devices[DEVICE_ID].properties.top_compartment, '유산균 김치+')
+    })
+
+    test('상칸 꺼짐 - a raw value with no name in the original sweep, confirmed live 2026-09-15', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', STATE_TOP_OFF)
+        assert.equal(ha.devices[DEVICE_ID].properties.top_compartment, '꺼짐')
+    })
+
+    test('중칸/하칸 꺼짐 together - each compartment keeps its own off code (0x0d vs 0x09)', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', STATE_MIDDLE_BOTTOM_OFF)
+        assert.equal(ha.devices[DEVICE_ID].properties.middle_compartment, '꺼짐')
+        assert.equal(ha.devices[DEVICE_ID].properties.bottom_compartment, '꺼짐')
+        // The interlock side effect (상칸 forced back to 냉동) is real appliance behaviour, not
+        // something this handler enforces - this fixture is captured after it already happened,
+        // so 상칸 reads 냉동 here simply because that is what the frame says, not because turning
+        // 중/하칸 off is coded to also touch 상칸.
+        assert.equal(ha.devices[DEVICE_ID].properties.top_compartment, '냉동')
     })
 
     test('중칸 write reproduces the real frame byte for byte, published optimistically, then confirmed by the real state push', () => {

@@ -226,6 +226,18 @@ const RECORD_ONE_TOUCH_DEODORIZE = 6
 const RECORD_TOP_DOOR_CLOSED = 7
 const RECORD_ANY_DOOR_OPEN = 8
 
+/*
+ * "꺼짐"(off), added 2026-09-15 - confirmed live, all three compartments switched off from the
+ * panel in one sitting (상칸 first, then 중/하칸 together). Each compartment's own off code, not
+ * a shared one, matching the rest of these tables already being three separate vocabularies:
+ * 0x09 for 상칸, 0x0d for 중칸, 0x09 for 하칸 (상칸 and 하칸 sharing a raw value is coincidence,
+ * not a sign the two share a menu - see the file header on why they don't).
+ *
+ * Turning 중/하칸 off was also seen to flip 상칸 from its own 0x09 back to 0x06(냉동) as a side
+ * effect, unprompted - a real appliance interlock (confirmed by the owner asking, not assumed),
+ * not a transient read caught mid-navigation. Not modelled here: this table says what a value
+ * means, not when the appliance changes it out from under you.
+ */
 /** record[RECORD_TOP] values - see the file header for how these were confirmed. */
 const RECORD_TOP_MODE_NAMES: Record<number, string> = {
     0x00: '맛지킴 김치 (중)',
@@ -236,6 +248,7 @@ const RECORD_TOP_MODE_NAMES: Record<number, string> = {
     0x05: '냉장 (약)',
     0x06: '냉동',
     0x07: '익힘',
+    0x09: '꺼짐',
     0x0a: '유산균 김치+',
 }
 /** record[RECORD_MIDDLE] values - a different menu than 상칸's (see the file header). */
@@ -249,6 +262,7 @@ const RECORD_MIDDLE_MODE_NAMES: Record<number, string> = {
     0x06: '구입 김치',
     0x07: '유산균 김치+',
     0x0b: '익힘',
+    0x0d: '꺼짐',
 }
 /** record[RECORD_BOTTOM] values - a third, again different menu (see the file header). */
 const RECORD_BOTTOM_MODE_NAMES: Record<number, string> = {
@@ -261,6 +275,7 @@ const RECORD_BOTTOM_MODE_NAMES: Record<number, string> = {
     0x06: '쌀·잡곡',
     0x07: '육류/생선',
     0x08: '오래 보관',
+    0x09: '꺼짐',
 }
 
 function decodeMode(names: Record<number, string>, raw: number): string {
