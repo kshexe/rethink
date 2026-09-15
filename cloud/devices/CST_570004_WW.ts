@@ -55,8 +55,28 @@ const TAG_FILTER_LIFE = 0x356
  * 0x321=2/3/4/5/6/1로 순서대로 눌러 순환하는 것까지 실측). modelJSON은 1~5단+자동(100)으로
  * 문서화하지만 실물은 6단까지 있고, "자동"은 아직 실측 못 함(값 미확인) - 옵션에서 뺌.
  * FRAMELOG_FINDINGS 메모의 옛 "0x321 (2/8737/2) mixed" 항목이 바로 이것.
+ *
+ * CORRECTION, 2026-09-15 - the tag has two faces, and the 2026-09-12 note only ever saw the
+ * WRITE side. This unit's own echo of the SAME tag adds a constant: setting 1..6 comes back
+ * as 8737..8742 in the very next status frame - see VERTICAL_ANGLE_ECHO_BASE. Six live
+ * writes through the owner's own HA select confirmed the relationship exactly, one per
+ * position, each read back within half a second of its write:
+ *
+ *   write 0x321=1 -> echo 0x321=8737   write 0x321=4 -> echo 0x321=8740
+ *   write 0x321=2 -> echo 0x321=8738   write 0x321=5 -> echo 0x321=8741
+ *   write 0x321=3 -> echo 0x321=8739   write 0x321=6 -> echo 0x321=8742
+ *
+ * 8736 (0x2220) plus the position, every time - not a different field, not vane-position
+ * noise from a mid-sweep read (the "vStep" theory this correction retracts, floated before
+ * the owner's retest pinned it down exactly). Reading the raw echo as-is is what produced
+ * "8737"-style readings on the vertical_angle select - a value select can't display at all,
+ * since it is not one of the entity's own options - which is what this correction fixes:
+ * verticalAngleFromState() now subtracts the base before doing anything else with it.
  */
 const TAG_VERTICAL_ANGLE = 0x321
+/** What this unit's OWN echo of TAG_VERTICAL_ANGLE adds to the position it was just written -
+ *  see that constant's own comment for the six-point measurement this is built from. */
+const VERTICAL_ANGLE_ECHO_BASE = 8736
 /* The two tags an IDU may use to report whether it is actually running */
 const TAG_IDU_THERMO_ON_OFF = 0x189
 const TAG_IDU_RUNNING_ALT = 0x6c
@@ -702,7 +722,10 @@ export default class Device extends TLVDevice {
      * 0x205 / 0x206 rather than by position, which 0x2cd does not describe either way.
      */
     swingAxes(): SwingAxis[] {
-        return swingAxesOnOff(() => this.HA.publishProperty(this.id, 'vertical_angle', this.verticalAngleFromState()))
+        return swingAxesOnOff(() => {
+            const angle = this.verticalAngleFromState()
+            if (angle !== undefined) this.HA.publishProperty(this.id, 'vertical_angle', angle)
+        })
     }
 
     /*
@@ -793,7 +816,8 @@ export default class Device extends TLVDevice {
                     readable: false,
                     writable: false,
                     read_callback: () => {
-                        this.HA.publishProperty(this.id, 'vertical_angle', this.verticalAngleFromState())
+                        const angle = this.verticalAngleFromState()
+                        if (angle !== undefined) this.HA.publishProperty(this.id, 'vertical_angle', angle)
                         return false
                     },
                 },
@@ -1906,12 +1930,22 @@ export default class Device extends TLVDevice {
     }
 
     // 상하 각도: "auto" means vertical swing is on (0x205=1); a number means swing is off and
-    // 0x321 holds that fixed position. Swing wins if somehow both look set at once - matches the
-    // panel, where turning swing on is what makes the numbered position stop applying.
-    verticalAngleFromState(): string {
+    // 0x321 holds that fixed position, ECHO_BASE subtracted first - see TAG_VERTICAL_ANGLE's own
+    // comment. Swing wins if somehow both look set at once - matches the panel, where turning
+    // swing on is what makes the numbered position stop applying.
+    //
+    // undefined (not 'auto') for anything outside 1..6 once the base is off: a value the select
+    // cannot display anyway, and 'auto' would be a specific wrong guess rather than an honest
+    // "don't know yet" - the tag has already been seen echoing something other than a settled
+    // position (a live retest catching it mid-move, or an offset this unit's own firmware
+    // hasn't been checked against - see the correction). Callers publish only when this returns
+    // a string, which is what leaves the select showing its last good position instead.
+    verticalAngleFromState(): string | undefined {
         if (this.raw_clip_state[0x205]) return 'auto'
-        const angle = this.raw_clip_state[TAG_VERTICAL_ANGLE]
-        return angle != null ? String(angle) : 'auto'
+        const raw = this.raw_clip_state[TAG_VERTICAL_ANGLE]
+        if (raw == null) return undefined
+        const angle = raw - VERTICAL_ANGLE_ECHO_BASE
+        return angle >= 1 && angle <= 6 ? String(angle) : undefined
     }
 
     setProperty(prop: string, mqttValue: string) {

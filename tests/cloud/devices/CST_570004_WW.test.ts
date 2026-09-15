@@ -340,17 +340,21 @@ describe(MODEL_ID, () => {
     /*
      * 상하 각도 (0x321) - see the constant's own comment in CST_570004_WW.ts for how this was
      * found (2026-09-12, live TLV capture while cycling the real unit through all 6 positions
-     * and back). QUERY_RESPONSE_HEX predates the discovery and doesn't carry this tag, so this
-     * test uses its own copy with 0x321=3 appended (rebuilt with the same TLV/crc16 helpers the
-     * handler itself uses, not a hand-edited hex string).
+     * and back) and CORRECTED (2026-09-15, the owner's own HA-driven retest pinning down
+     * VERTICAL_ANGLE_ECHO_BASE). QUERY_RESPONSE_HEX predates the discovery and doesn't carry
+     * this tag, so this test uses its own copy with 0x321 appended TWICE - once as a plain
+     * write-side value (1, untouched, matching a value seen earlier in the same frame) and
+     * once as this unit's OWN echo of position 3 (8736 + 3 = 8739) - the second, "current" one
+     * is what the shadow field's read_callback actually reads. Rebuilt with the same
+     * TLV/crc16 helpers the handler itself uses, not a hand-edited hex string.
      */
     const QUERY_RESPONSE_WITH_VERTICAL_ANGLE_HEX =
-        '000004000000A7020400857DC07E407E867F50347F90307F0086808840D4C0D500C84181408180C940A38' +
+        '000004000000A7020400877DC07E407E867F50347F90307F0086808840D4C0D500C84181408180C940A38' +
         '0A3C0A400A440F540F580F5C08340838389501E83C08FC0CD40CD00CCC0CDA0032BADA01CC6ACC0AD41B54' +
         'ED56002FBD5A00960BC88D5D03CD61020C9009C40A88087D0C8AC40E9C16640668066C067006740678067C' +
-        '068008F80F7407C8189501E9380C84346C2'
+        '068008F80F7407C8189501E9380C8602223B03A'
 
-    test('vertical_angle select reads 0x321 (1..6) or "auto" when swing (0x205) is on', (t) => {
+    test('vertical_angle select reads 0x321 (1..6, echo-offset by VERTICAL_ANGLE_ECHO_BASE) or "auto" when swing (0x205) is on', (t) => {
         enableMockTimers(t)
         const { ha, thinq, dev } = makeDevice()
         thinq.resetRecorder()
@@ -364,15 +368,38 @@ describe(MODEL_ID, () => {
         assert.deepEqual(c.vertical_angle.options, ['1', '2', '3', '4', '5', '6', 'auto'])
 
         thinq.emit('data', buf(QUERY_RESPONSE_WITH_VERTICAL_ANGLE_HEX))
-        assert.equal(ha.getProperty(DEVICE_ID, 'vertical_angle', 'state'), '3') // 0x321=3, 0x205=0
+        assert.equal(ha.getProperty(DEVICE_ID, 'vertical_angle', 'state'), '3') // 0x321=8739 = base+3, 0x205=0
 
         // Swing (0x205) on wins over whatever 0x321 last held. 0x205 has its own field (driving
         // the climate entity's swing_mode), so set it directly rather than via a frame, then
         // re-process 0x321 alone to re-trigger the shadow read (a real state dump would carry
         // both together - see the read_callback's own comment for why that is relied on here).
         dev.raw_clip_state[0x205] = 1
-        dev.processKeyValue(0x321, 3)
+        dev.processKeyValue(0x321, 8736 + 3)
         assert.equal(ha.getProperty(DEVICE_ID, 'vertical_angle', 'state'), 'auto')
+
+        dev.drop()
+    })
+
+    test('an out-of-range 0x321 echo (mid-move, or an offset not yet confirmed) leaves the select alone', (t) => {
+        enableMockTimers(t)
+        const { ha, thinq, dev } = makeDevice()
+        thinq.resetRecorder()
+
+        thinq.emit('data', buf(CAPS_RESPONSE_HEX))
+        thinq.emit('data', buf(QUERY_RESPONSE_WITH_VERTICAL_ANGLE_HEX))
+        tickMockTimers(t, 600)
+        thinq.emit('data', buf(QUERY_RESPONSE_WITH_VERTICAL_ANGLE_HEX))
+        assert.equal(ha.getProperty(DEVICE_ID, 'vertical_angle', 'state'), '3')
+
+        // Neither a raw 1..6 (the write-side range) nor base+1..6 (the echo range) - the value
+        // this correction retracted a theory about (a mid-sweep "vStep" reading). Whatever it
+        // is, it is not a settled position, so the select must keep showing '3' rather than
+        // publishing something outside its own options (which HA would just reject anyway) or
+        // guessing 'auto'.
+        dev.raw_clip_state[0x205] = 0
+        dev.processKeyValue(0x321, 12345)
+        assert.equal(ha.getProperty(DEVICE_ID, 'vertical_angle', 'state'), '3', 'unchanged - not republished')
 
         dev.drop()
     })
