@@ -81,34 +81,33 @@ import * as energyAccumulator from '../energy-accumulator'
  *
  * Per-compartment storage modes confirmed live (2026-09-10, every option in each compartment's
  * own menu, one at a time, via the appliance's own confirm dialog - "식품이 상하지 않도록
- * 주의하세요. 온도(모드)를 바꿀까요?"), PLUS the ones below marked (json) - added after the fact by
- * cross-checking against this exact model's own official modelJSON schema (fetched via rethink's
- * `/bridge/<id>/modeljson`, see RETHINK memory), which turned up two real gaps live testing missed
- * and one live-transcription mistake:
+ * 주의하세요. 온도(모드)를 바꿀까요?"). A first pass of this sweep missed several options; the
+ * modelJSON cross-check below (fetched via rethink's `/bridge/<id>/modeljson`, see RETHINK
+ * memory) named them and gave byte values, and the owner then pressed every one of them from the
+ * panel directly (2026-09-15) to confirm both the byte and the on-screen Korean text - nothing
+ * in the tables below is modelJSON-only anymore:
  *
  *   - 상칸's own live-tested "냉장" submenu was mislabelled 상/중/약; modelJSON's `room1Temp_C`
- *     enum (index 3/4/5, label keys FRIDGE#MIDDLE/STRONG/WEAK) says 중/강/약 instead - the same
- *     중/강/약 pattern already used correctly everywhere else in this file. Corrected below.
- *   - 중칸/하칸 both have an entire submenu (modelJSON `room3Temp_C`/`room4Temp_C` index 3/4/5,
- *     label key VEGI_FRUIT#MIDDLE/STRONG/WEAK, "야채·과일") that the live sweep never triggered -
- *     added as index 0x03/0x04/0x05 on both, matching the byte values modelJSON documents.
- *   - 하칸 also has a `room4Temp_C` index 6 (label key RICE_GRAIN, "쌀·잡곡") never seen live -
- *     added as 0x06.
- *
- *   modelJSON gives the enum *indices* and English label keys authoritatively (it's LG's own
- *   schema for this exact model, not a guess) but not literal Korean display text (those are
- *   `@KM_*_W` localization keys, resolved client-side) - the three (json) entries' Korean labels
- *   below are this codebase's own best rendering of those keys, not confirmed against the app's
- *   real on-screen wording the way every other entry here is. Byte values are trustworthy either
- *   way; only the exact label text on these three is unverified.
+ *     enum (index 3/4/5, label keys FRIDGE#MIDDLE/STRONG/WEAK) said 중/강/약 instead - the same
+ *     중/강/약 pattern already used correctly everywhere else in this file. Corrected.
+ *   - 중칸/하칸 both have an entire submenu modelJSON documents (`room3Temp_C`/`room4Temp_C` index
+ *     3/4/5, label key VEGI_FRUIT#MIDDLE/STRONG/WEAK, "야채·과일") that the first sweep never
+ *     triggered - 0x03/0x04/0x05 on both, now pressed one at a time on the real unit.
+ *   - 하칸 also has a `room4Temp_C` index 6 (label key RICE_GRAIN, "쌀·잡곡") the first sweep
+ *     missed - 0x06, likewise pressed live.
+ *   - 꺼짐(off) exists on all three compartments, found live 2026-09-15 (not in modelJSON at all -
+ *     this one was never a documented option, just discovered by pressing it): 0x09 상칸, 0x0d
+ *     중칸, 0x09 하칸 - three different codes, not a shared "off" value, matching every other case
+ *     in these tables where 상칸/중칸/하칸 don't share a scheme. Turning 중/하칸 off was also seen
+ *     to flip 상칸 back to 냉동 as a real appliance interlock, not something modelled here (see
+ *     RECORD_TOP_MODE_NAMES' own comment).
  *
  *   상칸(top):    맛지킴 김치 (중)=0x00, (강)=0x01, (약)=0x02, 냉장 (중)=0x03, 냉장 (강)=0x04,
- *                 냉장 (약)=0x05, 냉동=0x06, 익힘=0x07, 유산균 김치+=0x0a
- *   중칸(middle): 맛지킴 김치 (중)=0x00, (강)=0x01, (약)=0x02, 야채·과일 (중)=0x03 (json),
- *                 (강)=0x04 (json), (약)=0x05 (json), 구입 김치=0x06, 유산균 김치+=0x07, 익힘=0x0b
- *   하칸(bottom): 맛지킴 김치 (중)=0x00, (강)=0x01, (약)=0x02, 야채·과일 (중)=0x03 (json),
- *                 (강)=0x04 (json), (약)=0x05 (json), 쌀·잡곡=0x06 (json), 육류/생선=0x07,
- *                 오래 보관=0x08
+ *                 냉장 (약)=0x05, 냉동=0x06, 익힘=0x07, 꺼짐=0x09, 유산균 김치+=0x0a
+ *   중칸(middle): 맛지킴 김치 (중)=0x00, (강)=0x01, (약)=0x02, 야채·과일 (중)=0x03, (강)=0x04,
+ *                 (약)=0x05, 구입 김치=0x06, 유산균 김치+=0x07, 익힘=0x0b, 꺼짐=0x0d
+ *   하칸(bottom): 맛지킴 김치 (중)=0x00, (강)=0x01, (약)=0x02, 야채·과일 (중)=0x03, (강)=0x04,
+ *                 (약)=0x05, 쌀·잡곡=0x06, 육류/생선=0x07, 오래 보관=0x08, 꺼짐=0x09
  *
  *   modelJSON also confirms the room<->compartment mapping this file already assumed:
  *   `roomConfig` maps room1Temp="@KM_TOP_ROOM_W", room3Temp="@KM_MIDDLE_ROOM_W",

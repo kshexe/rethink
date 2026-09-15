@@ -54,6 +54,12 @@ const STATE_TOP_OFF = buf('aa1a11ec0209ff0000ff010001010209ff0000ff0001000182bb'
 // own comment. This fixture is the state AFTER that settled, not the moment it happened.
 const STATE_MIDDLE_BOTTOM_OFF = buf('aa1a11ec0206ff0d09ff000001010206ff0d09ff00010001a8bb')
 
+// 중칸 야채·과일 - the two of its three levels the original 2026-09-10 sweep never triggered
+// (강 was caught separately, see the header), pressed live 2026-09-15 while cycling through the
+// whole submenu from the panel.
+const STATE_MIDDLE_VEGI_MEDIUM = buf('aa1a11ec0203ff0106ff000001010203ff0306ff000001018ebb') // -> 야채·과일 (중)
+const STATE_MIDDLE_VEGI_WEAK = buf('aa1a11ec0203ff0406ff000001010203ff0506ff00000101b5bb') // -> 야채·과일 (약)
+
 // Two consecutive real `11 3e` energy reports, mined from the frame log (2026-09-10) - see the
 // file header's ENERGY COUNTER section. total 246 + delta 16 -> total 262, the additive
 // relationship confirmed across all 130 real samples mined, not just these two.
@@ -121,8 +127,9 @@ describe(MODEL_ID, () => {
             '꺼짐',
             '유산균 김치+',
         ])
-        // 야채·과일 (중/강/약) and, on 하칸 only, 쌀·잡곡 come from this exact model's own official
-        // modelJSON schema (room3Temp_C/room4Temp_C), not a live capture - see the file header.
+        // 야채·과일 (중/강/약) and, on 하칸 only, 쌀·잡곡 were first added from this exact model's
+        // own official modelJSON schema (room3Temp_C/room4Temp_C); confirmed live 2026-09-15 -
+        // see the file header.
         assert.deepEqual(components.middle_compartment.options, [
             '맛지킴 김치 (중)',
             '맛지킴 김치 (강)',
@@ -233,6 +240,14 @@ describe(MODEL_ID, () => {
         // so 상칸 reads 냉동 here simply because that is what the frame says, not because turning
         // 중/하칸 off is coded to also touch 상칸.
         assert.equal(ha.devices[DEVICE_ID].properties.top_compartment, '냉동')
+    })
+
+    test('중칸 야채·과일 (중)/(약) - the two levels the original sweep missed, confirmed live 2026-09-15', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', STATE_MIDDLE_VEGI_MEDIUM)
+        assert.equal(ha.devices[DEVICE_ID].properties.middle_compartment, '야채·과일 (중)')
+        thinq.emit('data', STATE_MIDDLE_VEGI_WEAK)
+        assert.equal(ha.devices[DEVICE_ID].properties.middle_compartment, '야채·과일 (약)')
     })
 
     test('중칸 write reproduces the real frame byte for byte, published optimistically, then confirmed by the real state push', () => {
