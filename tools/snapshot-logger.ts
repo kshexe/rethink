@@ -82,13 +82,43 @@ async function main() {
     // account's rate limit, and avoids every device's write landing in the same JSONL flush.
     const staggerMs = deviceIds.length > 0 ? Math.max(200, Math.floor(intervalMs / deviceIds.length / 2)) : 0
 
+    // The access token client.auth() fetches is short-lived (LG's OAuth server hands out ~1h
+    // tokens) and nothing here was refreshing it - a first, unattended overnight run confirmed
+    // this the hard way: all 8 devices went to ERROR_FAILED_LOGIN in the same ~10s window once
+    // the token expired, and stayed there for the rest of the run since there was no recovery
+    // path at all. Two layers now: proactively re-auth on a timer well inside the token's own
+    // lifetime, and reactively re-auth once and retry on any error (covers an expiry landing
+    // between proactive refreshes, or any other transient auth hiccup).
+    const REAUTH_INTERVAL_MS = 40 * 60 * 1000
+    let lastAuthAt = Date.now()
+
+    async function reauth(reason: string) {
+        log(`re-authenticating (${reason})`)
+        await client.auth(state!.refreshToken)
+        lastAuthAt = Date.now()
+    }
+
     for (;;) {
+        if (Date.now() - lastAuthAt > REAUTH_INTERVAL_MS) {
+            try {
+                await reauth('scheduled refresh')
+            } catch (err) {
+                log(`scheduled re-auth failed, will retry next cycle: ${err instanceof Error ? err.message : err}`)
+            }
+        }
+
         for (const id of deviceIds) {
             try {
                 const snapshot = await client.getDeviceStatus(id)
                 appendEvent(id, { snapshot })
             } catch (err) {
-                appendEvent(id, { error: err instanceof Error ? err.message : String(err) })
+                try {
+                    await reauth('after error: ' + (err instanceof Error ? err.message : String(err)))
+                    const snapshot = await client.getDeviceStatus(id)
+                    appendEvent(id, { snapshot })
+                } catch (err2) {
+                    appendEvent(id, { error: err2 instanceof Error ? err2.message : String(err2) })
+                }
             }
             await new Promise((resolve) => setTimeout(resolve, staggerMs))
         }
