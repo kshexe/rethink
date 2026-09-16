@@ -1778,6 +1778,24 @@ export default class Device extends TLVDevice {
     ) {
         this.addSwitchComponent(config, name, desc, icon, this.modeDependentSwitchOptimistic)
 
+        /*
+         * A mode-gated switch (power_save) also gets its own availability topic, greyed out in HA
+         * rather than silently bouncing back to OFF a moment after being switched on - the write
+         * itself is already refused below regardless (`getPowerTLV`/`check_mode`), this only makes
+         * that visible before the click instead of after. Same pattern as FX___S's GATED_BUTTONS:
+         * a component's own `availability` replaces the device-level list rather than adding to
+         * it, so both device-wide topics have to be repeated here too.
+         */
+        if (check_mode) {
+            const comp = config.components[name] as unknown as Record<string, unknown>
+            comp.availability = [
+                { topic: '$this/availability' },
+                { topic: '$rethink/availability' },
+                { topic: `$this/${name}-availability` },
+            ]
+            comp.availability_mode = 'all'
+        }
+
         this.addField(config, {
             id: id,
             name: '',
@@ -1819,14 +1837,23 @@ export default class Device extends TLVDevice {
          * read_callback/publishProperty above.
          */
         if (check_mode) {
+            const updateAvailability = () => {
+                const ok = this.getPowerTLV() !== 0 && check_mode(this.getModeTLV())
+                this.HA.publishProperty(this.id, name + '-availability', ok ? 'online' : 'offline')
+                return ok
+            }
             this.modeChangeHooks.push(() => {
-                if (this.getPowerTLV() === 0 || !check_mode(this.getModeTLV())) {
+                if (!updateAvailability()) {
                     this.HA.publishProperty(this.id, name + '-', 'OFF')
                     return
                 }
                 if (this[field_name] === undefined) return
                 this.setProperty(name + '-', this[field_name] ? 'ON' : 'OFF')
             })
+            // Publish once immediately - an availability topic that has never been published
+            // reads as unavailable in HA, which would grey the switch out on every fresh connect
+            // until the next mode change happened to come along.
+            updateAvailability()
         } else {
             this.powerChangeHooks.push(() => {
                 if (this.getPowerTLV() === 0) {

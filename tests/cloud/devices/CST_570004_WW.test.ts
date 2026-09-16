@@ -401,6 +401,43 @@ describe(MODEL_ID, () => {
     })
 
     /*
+     * Real 2026-09-16 report: turning power_save on while not in cool mode looked broken - it
+     * flipped on optimistically in HA, then bounced straight back to off a moment later once the
+     * (correctly) refused write's mode-change hook ran. The refusal itself was already correct;
+     * this is about making it visible before the click instead of after, by greying the switch out
+     * via its own availability topic whenever it would be refused - see the field's own comment.
+     */
+    test('power_save goes unavailable outside cool mode/power-off, and back online in cool mode', (t) => {
+        const { ha, dev } = buildReadyDevice(t)
+
+        // buildReadyDevice()'s QUERY_RESPONSE_HEX is captured powered off - the component itself
+        // must carry the extra availability topic, and the initial publish (done once at
+        // registration, before any mode-change event) must already read offline while off.
+        const c = ha.devices[DEVICE_ID].config!.components as Record<string, any>
+        assert.deepEqual(c.power_save.availability, [
+            { topic: '$this/availability' },
+            { topic: '$rethink/availability' },
+            { topic: '$this/power_save-availability' },
+        ])
+        assert.equal(c.power_save.availability_mode, 'all')
+        assert.equal(ha.devices[DEVICE_ID].properties['power_save-availability'], 'offline')
+
+        // air_clean has no check_mode - must not get a custom availability list at all, or it
+        // would stop following the device-wide online/offline the moment it comes bundled with
+        // just its own three topics instead of inheriting the device's.
+        assert.ok(!('availability' in (c.air_clean ?? {})), 'air_clean unaffected - it has no check_mode')
+
+        dev.raw_clip_state[0x1f7] = 1 // power on
+        dev.processKeyValue(0x1f9, 2) // fan_only - power_save cannot run here
+        assert.equal(ha.devices[DEVICE_ID].properties['power_save-availability'], 'offline')
+
+        dev.processKeyValue(0x1f9, 0) // cool - now allowed
+        assert.equal(ha.devices[DEVICE_ID].properties['power_save-availability'], 'online')
+
+        dev.drop()
+    })
+
+    /*
      * 상하 각도 (0x321) - see the constant's own comment in CST_570004_WW.ts for how this was
      * found (2026-09-12, live TLV capture while cycling the real unit through all 6 positions
      * and back) and CORRECTED (2026-09-15, the owner's own HA-driven retest pinning down
