@@ -143,6 +143,48 @@ describe(MODEL_ID, () => {
         dev.drop()
     })
 
+    test("cooling-range caps arriving after initial discovery refreshes the climate config (not stuck on HA's 7-35 fallback)", (t) => {
+        const { ha, dev } = buildReadyDevice(t)
+
+        // The real-world case this covers (seen live 2026-09-16): this unit's 0x2E1/0x2E2 did not
+        // arrive in the same caps batch as everything else, so discovery went out without a range
+        // and HA fell back to its own 7-35°C default. buildReadyDevice()'s capture has both tags,
+        // so re-run discovery once with them wiped to get to that same starting point, rather than
+        // crafting a second caps capture that omits the two tags.
+        delete dev.raw_clip_state[0x2e1]
+        delete dev.raw_clip_state[0x2e2]
+        dev.climateRangeKnown = false
+        dev.initMakeSetConfig()
+
+        const before = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
+        assert.equal(before.climate.min_temp, undefined, 'no range yet, as if caps had been missing from the start')
+
+        // The caps arrive later, e.g. in a subsequent query response - one tag at a time, the way
+        // processKeyValue() actually receives them off the wire.
+        dev.processKeyValue(0x2e1, 32)
+        assert.equal(
+            (ha.devices[DEVICE_ID].config!.components as any).climate.min_temp,
+            undefined,
+            'still incomplete with only one of the two tags - must not republish a half-known range',
+        )
+
+        dev.processKeyValue(0x2e2, 60)
+        const after = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
+        assert.equal(after.climate.min_temp, 16, 'range now known (32/2) - config republished')
+        assert.equal(after.climate.max_temp, 30)
+
+        // Everything else assembled by rebuildConfig() must still be there - this must not have
+        // turned into a bare climate-only config that drops every other entity.
+        assert.equal(after.autodry_setting?.platform, 'select', 'non-climate entities preserved across the rebuild')
+
+        // A further, unrelated tag update must not keep re-publishing - climateRangeKnown latches.
+        const configRef = ha.devices[DEVICE_ID].config
+        dev.processKeyValue(0x2e1, 32)
+        assert.equal(ha.devices[DEVICE_ID].config, configRef, 'no further republish once the range is known')
+
+        dev.drop()
+    })
+
     test('initial values publish the expected HA properties', (t) => {
         const { ha, thinq, dev } = buildReadyDevice(t)
 

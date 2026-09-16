@@ -270,6 +270,15 @@ export default class Device extends TLVDevice {
     filterQueryTimer: ReturnType<typeof setInterval> | undefined
     /* A reset waiting for the query that reads the counter one last time; see the reset button. */
     filterDoReset: boolean = false
+    /*
+     * Whether temperatureRange() had a real answer the last time makeClimateConfig() ran. This
+     * unit's cooling-range caps (0x2e1/0x2e2) are not always in the same caps batch as the rest -
+     * seen live 2026-09-16 arriving after initMakeSetConfig() had already published discovery
+     * without them, which leaves HA's climate entity stuck on its own fallback 7-35°C forever
+     * (discovery min/max is read once at entity-creation time, not on every message). See
+     * processKeyValue() below, which republishes once the caps turn up late.
+     */
+    climateRangeKnown: boolean = false
 
     /* CST emits its async/query TLV frames with UART header byte 6 = 0xa7 instead of 0x87. */
     isHeaderByte6(byte: number): boolean {
@@ -796,6 +805,25 @@ export default class Device extends TLVDevice {
         return { min: min / 2, max: max / 2 }
     }
 
+    /*
+     * TAG_CAPS_TEMP_MIN/MAX have no addField() registration (they're not an HA entity, just
+     * temperatureRange()'s inputs), so the only way to notice them arriving is here, in the
+     * generic per-tag hook every incoming TLV already goes through. If they show up after
+     * climate discovery already went out without a range (climateRangeKnown false - see its own
+     * comment), rebuild and republish now; HA merges a same-unique_id discovery update into the
+     * existing entity rather than duplicating it, so this just fixes the slider's min/max in
+     * place. A no-op once climateRangeKnown is true, so this never republishes more than once.
+     */
+    processKeyValue(k: number, v: number): void {
+        super.processKeyValue(k, v)
+        if (!this.climateRangeKnown && (k === TAG_CAPS_TEMP_MIN || k === TAG_CAPS_TEMP_MAX)) {
+            if (this.temperatureRange() != null) {
+                log('status', this.id, 'cooling range caps arrived after initial discovery - refreshing climate config')
+                this.setConfig(this.rebuildConfig())
+            }
+        }
+    }
+
     /* Entities that so far only this model has been seen to report. */
     addModelFields(config: DeviceDiscovery) {
         // Display brightness (0x21f, the wall units' "display light"): raw 100/150/200. Those
@@ -876,11 +904,14 @@ export default class Device extends TLVDevice {
     }
 
     /*
-     * Assemble and install the discovery config. Each step below adds the entities for one
-     * concern and is a no-op when the unit does not have it; what decides that - a capability
-     * bit, a tag being reported, a per-model answer - is stated at the top of each.
+     * Assemble the discovery config. Each step below adds the entities for one concern and is a
+     * no-op when the unit does not have it; what decides that - a capability bit, a tag being
+     * reported, a per-model answer - is stated at the top of each. Pulled out from
+     * initMakeSetConfig() so a late capability arrival (see processKeyValue()) can rebuild and
+     * republish the whole thing without repeating that method's one-time side effects
+     * (startFilterRefresh()/query()).
      */
-    initMakeSetConfig() {
+    rebuildConfig(): DeviceDiscovery {
         const config = this.makeClimateConfig()
 
         this.addClimateCore(config)
@@ -892,7 +923,11 @@ export default class Device extends TLVDevice {
         this.addPowerSensor(config)
         this.addModelFields(config)
 
-        this.setConfig(config)
+        return config
+    }
+
+    initMakeSetConfig() {
+        this.setConfig(this.rebuildConfig())
         this.startFilterRefresh()
         this.query()
     }
@@ -903,6 +938,7 @@ export default class Device extends TLVDevice {
      */
     makeClimateConfig(): ClimateConfig {
         const range = this.temperatureRange()
+        this.climateRangeKnown = range != null
         const config: ClimateConfig = allowExtendedType({
             ...HADevice.config(this.meta),
             components: {
