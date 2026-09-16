@@ -71,7 +71,7 @@ const TAG_FILTER_LIFE = 0x356
  * the owner's retest pinned it down exactly). Reading the raw echo as-is is what produced
  * "8737"-style readings on the vertical_angle select - a value select can't display at all,
  * since it is not one of the entity's own options - which is what this correction fixes:
- * verticalAngleFromState() now subtracts the base before doing anything else with it.
+ * verticalSwingFromState() now subtracts the base before doing anything else with it.
  */
 const TAG_VERTICAL_ANGLE = 0x321
 /** What this unit's OWN echo of TAG_VERTICAL_ANGLE adds to the position it was just written -
@@ -168,63 +168,35 @@ function wireMaps(levels: WireLevels) {
     }
 }
 
-/* Plain on/off swing, 0x205 / 0x206 - the variant this cassette's vanes actually use */
+/* Plain on/off swing, 0x206 (horizontal) - the variant this cassette's vanes actually use */
 const SWING_ON_OFF: WireLevels = [
     ['on', 1],
     ['off', 0],
 ]
 
+/* Merged vertical swing options - see addVerticalSwingField()'s own comment. */
+const VERTICAL_SWING_OPTIONS = ['off', 'auto', '1단', '2단', '3단', '4단', '5단', '6단']
+
 /*
- * A single swing axis: which tag drives it, which of HA's two swing attributes it is published
- * as, and the values it takes. 'swing_mode' is HA's primary control (vertical, on this unit);
- * 'swing_horizontal_mode' is the secondary one it renders alongside it.
+ * A single swing axis: which tag drives it and the values it takes. Only ever the horizontal
+ * axis now - see its own comment just below.
  */
 type SwingAxis = {
     tag: number
-    name: 'swing_mode' | 'swing_horizontal_mode'
+    name: 'swing_horizontal_mode'
     levels: WireLevels
-    /* tags to re-send alongside the swing write, for units that want the context */
-    attach?: number[]
-    /* run whenever this tag's value changes, in addition to publishing the axis itself - see
-     * swingAxes()'s own comment for why the vertical axis needs one and the horizontal does not */
-    onChange?: () => void
 }
 
 /*
- * This unit's two vane axes, both plain on/off: 0x205 vertical, 0x206 horizontal.
- *
- * Vertical briefly lived only inside the "상하 각도" select instead (see TAG_VERTICAL_ANGLE's own
- * comment and addModelFields()), on the reasoning that 2026-09-12 live testing showed the app's
- * own vertical menu treats "swing on" as just one more choice alongside its 1-6 fixed angles, not
- * a separate control - so this used to be the ONE axis on the climate entity, and it held
- * 'swing_mode' rather than 'swing_horizontal_mode' on the strength of the SwingAxis type comment
- * above (a single axis gets the primary one).
- *
- * That reasoning modelled the APP's UI, not `lg_thinq`'s. Checked side by side 2026-09-14 (same
- * 거실 unit, same instant): `lg_thinq` publishes BOTH as ordinary swing attributes - `swing_mode`
- * for vertical, `swing_horizontal_mode` for horizontal - which is also HA's own usual pairing for
- * a two-axis unit. Matching it is worth a real functional change, not just a label: the owner had
- * been reading horizontal state out of an attribute named for vertical, with no horizontal control
- * at all and vertical buried in a separate select entity most dashboards would not think to look
- * at for a "swing" button.
- *
- * BREAKING: any automation that read or wrote this unit's `swing_mode` expecting horizontal now
- * gets vertical instead.
- *
- * The 상하 각도 select stays - it still does something swing_mode cannot, the 1-6 fixed positions
- * - but it and this axis both drive 0x205, so the vertical axis carries an onChange that keeps the
- * select in sync (see addModelFields' TAG_VERTICAL_ANGLE section). That also fixes a standing bug
- * the pairing exposed: the select's own read hook only fires on 0x321 arriving, and a unit left on
- * swing/auto the whole time it has been paired may never send a discrete 0x321 at all - which is
- * exactly what 거실's did, reading `unknown` since it joined rather than `auto`. The vertical axis
- * now republishes the select on every 0x205 report too, so its first swing state already resolves
- * it - not just the next time someone sets a fixed angle by hand.
+ * Horizontal vane, plain on/off on 0x206 - published as `swing_horizontal_mode`, matching
+ * `lg_thinq`'s own pairing for this unit (checked side by side 2026-09-14, same 거실 unit, same
+ * instant: it publishes vertical as `swing_mode` and horizontal as `swing_horizontal_mode`, HA's
+ * own usual naming for a two-axis unit). Vertical (0x205) used to be paired here the same way,
+ * but is now folded into the climate entity's `swing_mode` together with the fixed 1-6 positions
+ * - see addVerticalSwingField()'s own comment for that history.
  */
-function swingAxesOnOff(onVerticalChange: () => void): SwingAxis[] {
-    return [
-        { tag: 0x205, name: 'swing_mode', levels: SWING_ON_OFF, onChange: onVerticalChange },
-        { tag: 0x206, name: 'swing_horizontal_mode', levels: SWING_ON_OFF },
-    ]
+function swingAxesOnOff(): SwingAxis[] {
+    return [{ tag: 0x206, name: 'swing_horizontal_mode', levels: SWING_ON_OFF }]
 }
 
 /* The discovery config once the climate component is known to be in it */
@@ -314,14 +286,14 @@ export default class Device extends TLVDevice {
         ['auto', 3],
     ]
 
-    /* Fan speed: 0x1fa scale, six steps. */
+    /* Fan speed: 0x1fa scale, six steps. Korean labels per the owner's own naming. */
     readonly fanLevels: WireLevels = [
-        ['auto', 8],
-        ['very low', 1],
-        ['low', 2],
-        ['medium', 4],
-        ['high', 6],
-        ['power', 7],
+        ['미약풍', 1],
+        ['약풍', 2],
+        ['중풍', 4],
+        ['강풍', 6],
+        ['파워풍', 7],
+        ['자동', 8],
     ]
 
     /*
@@ -359,7 +331,7 @@ export default class Device extends TLVDevice {
      * which agrees with the fan list above on five of six but offers 0 where this says 1. The
      * list is what was derived by driving the appliance, so it wins over an unexplained
      * disagreement about the slowest step; letting the bitmap narrow it would silently drop
-     * "very low". Worth settling by writing 0 and seeing whether the panel shows the same step
+     * "미약풍". Worth settling by writing 0 and seeing whether the panel shows the same step
      * as 1 does.
      */
     fanCaps(): number | undefined {
@@ -763,14 +735,10 @@ export default class Device extends TLVDevice {
     }
 
     /*
-     * Which variant of the shared features this unit has. The vanes are driven as plain on/off on
-     * 0x205 / 0x206 rather than by position, which 0x2cd does not describe either way.
+     * The horizontal vane axis. Vertical is handled separately - see addVerticalSwingField().
      */
     swingAxes(): SwingAxis[] {
-        return swingAxesOnOff(() => {
-            const angle = this.verticalAngleFromState()
-            if (angle !== undefined) this.HA.publishProperty(this.id, 'vertical_angle', angle)
-        })
+        return swingAxesOnOff()
     }
 
     /*
@@ -854,44 +822,6 @@ export default class Device extends TLVDevice {
             ['50%', 150],
             ['100%', 200],
         ])
-
-        // 상하 각도 (0x321) - see the constant's own comment above for how this was found.
-        // Modelled on addWindModeSelect() just below: a single select mutually exclusive with a
-        // tag that already has its own field registration (0x205, this unit's plain vertical
-        // swing-on-off, also driving the climate entity's own swing_mode) - fields_by_id only
-        // holds one definition per tag, so this can't be a second addField on 0x205, and the
-        // write has to set two tags at once anyway (a fixed angle only takes effect once swing is
-        // off). Confirmed 2026-09-12 live that the app's own "자동" choice in this same menu is
-        // just 0x205=1, not a distinct value on 0x321 itself - so read and write both fold the two
-        // tags into the one entity here instead of leaving 자동 to a separate switch.
-        if (this.raw_clip_state[TAG_VERTICAL_ANGLE] != null && !config.components['vertical_angle']) {
-            config.components['vertical_angle'] = allowExtendedType({
-                platform: 'select',
-                unique_id: '$deviceid-vertical_angle',
-                name: '상하 각도',
-                icon: 'mdi:angle-acute',
-                entity_category: 'config',
-                options: ['1', '2', '3', '4', '5', '6', 'auto'],
-                state_topic: '$this/vertical_angle',
-                command_topic: '$this/vertical_angle/set',
-            })
-            this.addField(
-                config,
-                {
-                    id: TAG_VERTICAL_ANGLE,
-                    name: 'vertical_angle_shadow',
-                    comp: 'vertical_angle',
-                    readable: false,
-                    writable: false,
-                    read_callback: () => {
-                        const angle = this.verticalAngleFromState()
-                        if (angle !== undefined) this.HA.publishProperty(this.id, 'vertical_angle', angle)
-                        return false
-                    },
-                },
-                false,
-            )
-        }
 
         // 0x23f ("comfort energy saving", distinct from the plain power saving of 0x20d that
         // is exposed below as "power_save" - modelJSON's own name for it, airState.powerSave.basic,
@@ -1132,6 +1062,7 @@ export default class Device extends TLVDevice {
         for (const axis of this.swingAxes()) {
             this.addSwingField(config, axis)
         }
+        this.addVerticalSwingField(config)
     }
 
     /*
@@ -1936,28 +1867,84 @@ export default class Device extends TLVDevice {
     /*
      * Swing along one axis, as an attribute of the climate component rather than an entity of its
      * own. Same [label, wire] contract as addValueSelect: the mode list HA is offered and both
-     * transforms come from the one list.
+     * transforms come from the one list. Vertical no longer goes through here - see
+     * addVerticalSwingField() - so this only ever handles the plain on/off horizontal axis now.
      */
     addSwingField(config: ClimateConfig, axis: SwingAxis) {
         const { labels, toLabel, toWire } = wireMaps(axis.levels)
-        const attr = axis.name === 'swing_mode' ? 'swing_modes' : 'swing_horizontal_modes'
-        config['components']['climate'][attr] = labels
+        config['components']['climate']['swing_horizontal_modes'] = labels
         this.addField(config, {
             id: axis.tag,
             name: axis.name,
             comp: 'climate',
             read_xform: (raw) => toLabel.get(raw),
             write_xform: (val) => toWire.get(val),
-            ...(axis.attach != null ? { write_attach: axis.attach } : {}),
-            ...(axis.onChange != null
-                ? {
-                      read_callback: () => {
-                          axis.onChange!()
-                          return true // still publish this axis's own value as usual
-                      },
-                  }
-                : {}),
         })
+    }
+
+    /*
+     * Vertical swing, merged onto the climate entity's own `swing_mode` attribute: 'off' (stop,
+     * 0x205=0 alone - no explicit position), 'auto' (continuous swing, 0x205=1), or a fixed
+     * '1단'..'6단' position (0x205=0 + TAG_VERTICAL_ANGLE=N). Owner's own request, 2026-09-16,
+     * after using the separate "상하 각도" select (see its own history in TAG_VERTICAL_ANGLE's
+     * comment and the swingAxesOnOff() history above) and preferring one merged control over
+     * matching `lg_thinq`'s plain on/off pairing exactly.
+     *
+     * Modelled on addWindModeSelect() just below: mutually exclusive with a tag that already has
+     * its own field registration would be needed twice (0x205 and TAG_VERTICAL_ANGLE both affect
+     * this one HA attribute), so both get their own decoy addField() registration here - neither
+     * readable nor writable through the generic per-tag mechanism, both just re-deriving and
+     * republishing the combined value on change. The actual write is handled in setProperty()
+     * (prop 'climate-swing_mode'), since it has to set one or two tags together depending on which
+     * option was picked, which write_xform's single-tag contract cannot express.
+     *
+     * KNOWN LIMITATION: picking 'off' only ever sends 0x205=0, deliberately not touching
+     * TAG_VERTICAL_ANGLE (so a mid-swing stop is not forced onto one of the 6 detented positions
+     * it may not actually be sitting at) - but if this unit keeps echoing a stale, still-valid 1..6
+     * from before, verticalSwingFromState() has no way to tell that apart from a genuine fixed
+     * position and will keep showing "N단" instead of "off" until the vane is actually driven
+     * somewhere else. Not fixable from what the protocol reports; disclosed rather than hidden.
+     */
+    addVerticalSwingField(config: ClimateConfig) {
+        const climate = config['components']['climate'] as Record<string, unknown>
+        climate['swing_modes'] = VERTICAL_SWING_OPTIONS
+        // Set up manually, like wind_mode below - autoreg is off on both registrations further
+        // down, since neither is readable/writable through the generic per-tag mechanism (the
+        // value is derived from two tags, not read 1:1 off either one).
+        climate['swing_mode_state_topic'] = '$this/climate-swing_mode'
+        climate['swing_mode_command_topic'] = '$this/climate-swing_mode/set'
+
+        const republish = () => this.HA.publishProperty(this.id, 'climate-swing_mode', this.verticalSwingFromState())
+        this.addField(
+            config,
+            {
+                id: 0x205,
+                name: 'swing_mode',
+                comp: 'climate',
+                readable: false,
+                writable: false,
+                read_callback: () => {
+                    republish()
+                    return false
+                },
+            },
+            false,
+        )
+        this.addField(
+            config,
+            {
+                id: TAG_VERTICAL_ANGLE,
+                name: 'swing_mode_angle_shadow',
+                comp: 'climate',
+                readable: false,
+                writable: false,
+                read_callback: () => {
+                    republish()
+                    return false
+                },
+            },
+            false,
+        )
     }
 
     /*
@@ -2017,23 +2004,21 @@ export default class Device extends TLVDevice {
         return 'off'
     }
 
-    // 상하 각도: "auto" means vertical swing is on (0x205=1); a number means swing is off and
-    // 0x321 holds that fixed position, ECHO_BASE subtracted first - see TAG_VERTICAL_ANGLE's own
-    // comment. Swing wins if somehow both look set at once - matches the panel, where turning
-    // swing on is what makes the numbered position stop applying.
-    //
-    // undefined (not 'auto') for anything outside 1..6 once the base is off: a value the select
-    // cannot display anyway, and 'auto' would be a specific wrong guess rather than an honest
-    // "don't know yet" - the tag has already been seen echoing something other than a settled
-    // position (a live retest catching it mid-move, or an offset this unit's own firmware
-    // hasn't been checked against - see the correction). Callers publish only when this returns
-    // a string, which is what leaves the select showing its last good position instead.
-    verticalAngleFromState(): string | undefined {
+    // Merged vertical swing state: 'auto' means swing is on (0x205=1); an out-of-range or missing
+    // 0x321 (mid-move, an offset not yet confirmed on this unit, or simply never sent) falls back
+    // to 'off' rather than guessing a specific wrong position - 'off' is never a wrong guess, since
+    // it is already true that this unit is not actively auto-swinging whenever 0x205 is falsy.
+    // Only a cleanly-decoded 1..6 (ECHO_BASE subtracted first - see TAG_VERTICAL_ANGLE's own
+    // comment) gets its own "N단" value. Swing wins if somehow both look set at once - matches the
+    // panel, where turning swing on is what makes the numbered position stop applying.
+    verticalSwingFromState(): string {
         if (this.raw_clip_state[0x205]) return 'auto'
         const raw = this.raw_clip_state[TAG_VERTICAL_ANGLE]
-        if (raw == null) return undefined
-        const angle = raw - VERTICAL_ANGLE_ECHO_BASE
-        return angle >= 1 && angle <= 6 ? String(angle) : undefined
+        if (raw != null) {
+            const angle = raw - VERTICAL_ANGLE_ECHO_BASE
+            if (angle >= 1 && angle <= 6) return `${angle}단`
+        }
+        return 'off'
     }
 
     setProperty(prop: string, mqttValue: string) {
@@ -2045,14 +2030,16 @@ export default class Device extends TLVDevice {
             this.send([1, 1, 2, 1, 1], tlv)
             return
         }
-        if (prop === 'vertical_angle') {
+        if (prop === 'climate-swing_mode') {
             const tlv =
-                mqttValue === 'auto'
-                    ? [{ t: 0x205, v: 1 }]
-                    : [
-                          { t: TAG_VERTICAL_ANGLE, v: Number(mqttValue) },
-                          { t: 0x205, v: 0 },
-                      ]
+                mqttValue === 'off'
+                    ? [{ t: 0x205, v: 0 }]
+                    : mqttValue === 'auto'
+                      ? [{ t: 0x205, v: 1 }]
+                      : [
+                            { t: TAG_VERTICAL_ANGLE, v: Number(mqttValue.replace('단', '')) },
+                            { t: 0x205, v: 0 },
+                        ]
             for (const { t, v } of tlv) this.raw_clip_state[t] = v
             this.send([1, 1, 2, 1, 1], tlv)
             return
