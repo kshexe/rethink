@@ -90,6 +90,19 @@ const TAG_CAPS_EEPROM_CRC = 0x2da
 const TAG_CAPS_TEMP_MIN = 0x2e1
 const TAG_CAPS_TEMP_MAX = 0x2e2
 
+/*
+ * Fallback for when this unit's own caps never carry 0x2E1/0x2E2 at all - not a guess: this is
+ * `airState.tempState.target`'s value_validation straight from LG's own modelJSON for this exact
+ * model (fetched live via GET /bridge/:id/modeljson, 2026-09-16 - min 16, max 30, step 1), and
+ * matches another CST_570004_WW unit's own live 0x2E1/0x2E2 capture exactly (see this file's test,
+ * 32/60 -> 16/30). The one unit seen never sending these tags at all - checked against 8 days /
+ * 26k recorded frames, not one occurrence - otherwise has no way to get a range, so its climate
+ * entity was stuck on HA's own 7-35°C default forever. `lg_thinq` showing 18 as this same unit's
+ * minimum is presumably its own UI choice narrower than the model's declared floor, not evidence
+ * of a different true hardware limit.
+ */
+const FALLBACK_TEMP_RANGE = { min: 16, max: 30 }
+
 /* Bits of the feature bitmap - reported under 0x2cb on this model, not the 0x2cc most units use */
 const CAP_AIR_PURIFY = 0x01
 const CAP_ENERGY_SAVE = 0x02
@@ -795,29 +808,33 @@ export default class Device extends TLVDevice {
 
     /*
      * Setpoint range in degC. Read from the cooling range the unit advertises in its capabilities
-     * (0x2e1 / 0x2e2).
+     * (0x2e1 / 0x2e2) when it sends them at all - falls back to FALLBACK_TEMP_RANGE otherwise (see
+     * its own comment). Never undefined, so callers no longer need a null case.
      * TODO: 0x2e3 - 0x2ec carry the ranges of the other modes
      */
-    temperatureRange(): { min: number; max: number } | undefined {
-        const min = this.raw_clip_state[TAG_CAPS_TEMP_MIN]
-        const max = this.raw_clip_state[TAG_CAPS_TEMP_MAX]
-        if (min == null || max == null) return undefined
-        return { min: min / 2, max: max / 2 }
+    temperatureRange(): { min: number; max: number } {
+        if (!this.hasLiveTemperatureRange()) return FALLBACK_TEMP_RANGE
+        return { min: this.raw_clip_state[TAG_CAPS_TEMP_MIN] / 2, max: this.raw_clip_state[TAG_CAPS_TEMP_MAX] / 2 }
+    }
+
+    hasLiveTemperatureRange(): boolean {
+        return this.raw_clip_state[TAG_CAPS_TEMP_MIN] != null && this.raw_clip_state[TAG_CAPS_TEMP_MAX] != null
     }
 
     /*
      * TAG_CAPS_TEMP_MIN/MAX have no addField() registration (they're not an HA entity, just
      * temperatureRange()'s inputs), so the only way to notice them arriving is here, in the
-     * generic per-tag hook every incoming TLV already goes through. If they show up after
-     * climate discovery already went out without a range (climateRangeKnown false - see its own
-     * comment), rebuild and republish now; HA merges a same-unique_id discovery update into the
-     * existing entity rather than duplicating it, so this just fixes the slider's min/max in
-     * place. A no-op once climateRangeKnown is true, so this never republishes more than once.
+     * generic per-tag hook every incoming TLV already goes through. If they show up after climate
+     * discovery already went out on FALLBACK_TEMP_RANGE (climateRangeKnown false - see its own
+     * comment), rebuild and republish with the unit's real, live-reported range instead; HA merges
+     * a same-unique_id discovery update into the existing entity rather than duplicating it, so
+     * this just fixes the slider's min/max in place. A no-op once climateRangeKnown is true, so
+     * this never republishes more than once.
      */
     processKeyValue(k: number, v: number): void {
         super.processKeyValue(k, v)
         if (!this.climateRangeKnown && (k === TAG_CAPS_TEMP_MIN || k === TAG_CAPS_TEMP_MAX)) {
-            if (this.temperatureRange() != null) {
+            if (this.hasLiveTemperatureRange()) {
                 log('status', this.id, 'cooling range caps arrived after initial discovery - refreshing climate config')
                 this.setConfig(this.rebuildConfig())
             }
@@ -938,7 +955,7 @@ export default class Device extends TLVDevice {
      */
     makeClimateConfig(): ClimateConfig {
         const range = this.temperatureRange()
-        this.climateRangeKnown = range != null
+        this.climateRangeKnown = this.hasLiveTemperatureRange()
         const config: ClimateConfig = allowExtendedType({
             ...HADevice.config(this.meta),
             components: {
@@ -950,7 +967,8 @@ export default class Device extends TLVDevice {
                     temperature_unit: 'C',
                     temp_step: this.tempStep,
                     precision: this.tempStep,
-                    ...(range != null ? { min_temp: range.min, max_temp: range.max } : {}),
+                    min_temp: range.min,
+                    max_temp: range.max,
                     fan_modes: this.haFanModes,
                     modes: this.haModes,
                 } satisfies ClimateComponent,
@@ -1101,7 +1119,7 @@ export default class Device extends TLVDevice {
              */
             write_xform: (val) => {
                 const range = this.temperatureRange()
-                const degC = range == null ? Number(val) : Math.min(Math.max(Number(val), range.min), range.max)
+                const degC = Math.min(Math.max(Number(val), range.min), range.max)
                 return Math.round(degC * 2)
             },
             write_attach: [TAG_MODE, TAG_FAN],
