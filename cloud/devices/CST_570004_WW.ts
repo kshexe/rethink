@@ -91,17 +91,21 @@ const TAG_CAPS_TEMP_MIN = 0x2e1
 const TAG_CAPS_TEMP_MAX = 0x2e2
 
 /*
- * Fallback for when this unit's own caps never carry 0x2E1/0x2E2 at all - not a guess: this is
- * `airState.tempState.target`'s value_validation straight from LG's own modelJSON for this exact
- * model (fetched live via GET /bridge/:id/modeljson, 2026-09-16 - min 16, max 30, step 1), and
- * matches another CST_570004_WW unit's own live 0x2E1/0x2E2 capture exactly (see this file's test,
- * 32/60 -> 16/30). The one unit seen never sending these tags at all - checked against 8 days /
- * 26k recorded frames, not one occurrence - otherwise has no way to get a range, so its climate
- * entity was stuck on HA's own 7-35°C default forever. `lg_thinq` showing 18 as this same unit's
- * minimum is presumably its own UI choice narrower than the model's declared floor, not evidence
- * of a different true hardware limit.
+ * Fallback for when this unit's own caps never carry 0x2E1/0x2E2 at all - checked against 8 days /
+ * 26k recorded frames, not one occurrence, so without this it has no way to get a range and its
+ * climate entity was stuck on HA's own 7-35°C default forever.
+ *
+ * 18, not 16: LG's own modelJSON for this model states value_validation min=16/max=30, and a
+ * different CST_570004_WW unit's own live 0x2E1/0x2E2 capture agrees (32/60 raw -> 16/30) - both
+ * pointed at 16 first. But this specific unit's real firmware floor was then confirmed directly on
+ * the wire, 2026-09-16: sent raw TAG_TEMP_TARGET writes of 12/15/16/17°C straight to the device
+ * (bypassing HA/lg_thinq's own UI, which never even lets a request below 18 form), and every single
+ * one came back from the device itself as 18 (raw 36) in its next state report - reproduced 5
+ * times. So this unit's true hardware minimum is 18, same as what `lg_thinq` already showed; the
+ * model's declared 16 and the sibling unit's capture just don't apply to this particular unit
+ * (different install/variant of the same model name, apparently with a narrower real limit).
  */
-const FALLBACK_TEMP_RANGE = { min: 16, max: 30 }
+const FALLBACK_TEMP_RANGE = { min: 18, max: 30 }
 
 /* Bits of the feature bitmap - reported under 0x2cb on this model, not the 0x2cc most units use */
 const CAP_AIR_PURIFY = 0x01

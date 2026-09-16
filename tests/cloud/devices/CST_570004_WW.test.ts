@@ -143,7 +143,7 @@ describe(MODEL_ID, () => {
         dev.drop()
     })
 
-    test("missing cooling-range caps fall back to the model's own real 16-30 range, and a late live range still overrides it", (t) => {
+    test("missing cooling-range caps fall back to the unit's own real 18-30 range, and a late live range still overrides it", (t) => {
         const { ha, dev } = buildReadyDevice(t)
 
         // The real-world case this covers (seen live 2026-09-16, confirmed against 8 days / 26k
@@ -158,19 +158,23 @@ describe(MODEL_ID, () => {
 
         const before = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
         // FALLBACK_TEMP_RANGE, not HA's own 7-35 default and not left unset - see its comment for
-        // where 16/30 comes from (LG's own modelJSON for this exact model, matches another real
-        // CST_570004_WW unit's own 0x2E1/0x2E2 capture exactly).
-        assert.equal(before.climate.min_temp, 16, 'falls back to the model-spec range, not HA default/undefined')
+        // why 18, not the model's/a sibling unit's 16 (confirmed live: raw writes below 18 sent
+        // straight to this unit always come back from it as 18).
+        assert.equal(
+            before.climate.min_temp,
+            18,
+            "falls back to this unit's real firmware floor, not HA default/undefined",
+        )
         assert.equal(before.climate.max_temp, 30)
 
         // The caps arrive later on some other unit that does send them, e.g. in a subsequent query
         // response - one tag at a time, the way processKeyValue() actually receives them off the
-        // wire. Deliberately a different pair (17/32) from the 16/30 fallback so an assertion
+        // wire. Deliberately a different pair (17/32) from the 18/30 fallback so an assertion
         // passing can't be masked by the fallback already matching by coincidence.
         dev.processKeyValue(0x2e1, 34)
         assert.equal(
             (ha.devices[DEVICE_ID].config!.components as any).climate.min_temp,
-            16,
+            18,
             'still just the fallback with only one of the two tags - must not republish a half-known range',
         )
 
