@@ -15,6 +15,7 @@ import { normalize as normalizeConfig, RawConfig, CA } from './util/config'
 import { createCa } from './util/pki'
 import { CertificateIssuer } from './util/sni'
 import * as Management from './management'
+import { revision } from './util/version'
 
 import log, { setFilter as setLogFilter } from './util/logging'
 import { DeviceManager } from './cloud/devmgr'
@@ -184,4 +185,4 @@ t2setup(manager)
 if (config.management_port)
     Management.app(ha, manager, bridge).listen(config.management_port.bind, config.management_port.address)
 
-console.log('Rethink cloud ready')
+console.log(`Rethink cloud ${revision} ready`)

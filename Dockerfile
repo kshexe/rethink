@@ -11,6 +11,9 @@ COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts
 
 COPY . .
+# .git is excluded from the build context (see .dockerignore), so the revision has to be passed
+# in - not set by this add-on's own Supervisor-driven local build, which falls back to "unknown".
+ARG GIT_REVISION
 RUN npm run build && npm prune --omit=dev
 
 # Runtime stage: the Home Assistant add-on base (Alpine + bashio + s6-overlay).
