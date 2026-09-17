@@ -1,6 +1,7 @@
 import express from 'express'
 import stripJsonComments from 'strip-json-comments'
 import { mkdirSync, readFileSync } from 'node:fs'
+import * as http from 'node:http'
 import * as https from 'node:https'
 import { dirname, resolve } from 'node:path'
 import { Broker } from './cloud/mqtt-broker'
@@ -99,6 +100,10 @@ function t2setup(manager: DeviceManager) {
     })
 
     https.createServer(tlsOptions, app).listen(config.https_port.bind, config.https_port.address)
+
+    // Optional plain HTTP, for running behind a reverse HTTPS/TLS proxy that terminates TLS
+    // itself - not used by real ThinQ2 appliances (upstream anszom/rethink#3ca8efa).
+    if (config.http_port) http.createServer(app).listen(config.http_port.bind, config.http_port.address)
 
     // internal MQTT broker
     const broker = new Broker()

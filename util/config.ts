@@ -4,6 +4,7 @@ export type RawConfig = {
     homeassistant: HAConfig
     ca_key_file: string
     ca_cert_file: string
+    http_port?: Port | number
     https_port: Port | number
     mqtts_port: Port | number
     mqtt_port: Port | number
@@ -24,6 +25,10 @@ export type Config = {
     homeassistant: HAConfig
     ca_key_file: string
     ca_cert_file: string
+    /** Optional plain HTTP listener alongside https_port, for running behind a reverse HTTPS/TLS
+     *  proxy that terminates TLS itself - not used by real ThinQ2 appliances, which always speak
+     *  TLS directly (upstream anszom/rethink#3ca8efa, closes anszom/rethink#174). */
+    http_port?: Port
     https_port: Port
     mqtts_port: Port
     mqtt_port: Port
@@ -80,6 +85,7 @@ export function normalize(config: RawConfig): Config {
         frame_log_days: config.frame_log_days ?? 0,
         frame_log_dir: config.frame_log_dir ?? '/share/rethink/frames',
         advertise_requested_host: config.advertise_requested_host ?? false,
+        http_port: parsePort(config.http_port),
         https_port: parsePort(config.https_port),
         mqtts_port: parsePort(config.mqtts_port),
         mqtt_port: parsePort(config.mqtt_port),
