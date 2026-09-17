@@ -115,9 +115,9 @@ describe(MODEL_ID, () => {
 
         // CST fan scale, Korean labels. swing_horizontal_mode is the plain on/off horizontal vane
         // (0x206) - matching lg_thinq's own pairing for this unit. swing_mode (vertical) is the
-        // merged off/auto/1단..6단 control - see addVerticalSwingField()'s own comment.
+        // merged off/자동/1단..6단 control - see addVerticalSwingField()'s own comment.
         assert.deepEqual(c.climate.fan_modes, ['미약풍', '약풍', '중풍', '강풍', '파워풍', '자동'])
-        assert.deepEqual(c.climate.swing_modes, ['off', 'auto', '1단', '2단', '3단', '4단', '5단', '6단'])
+        assert.deepEqual(c.climate.swing_modes, ['off', '자동', '1단', '2단', '3단', '4단', '5단', '6단'])
         assert.deepEqual(c.climate.swing_horizontal_modes, ['on', 'off'])
 
         // Extra components CST adds.
@@ -464,7 +464,7 @@ describe(MODEL_ID, () => {
         tickMockTimers(t, 600)
 
         const c = ha.devices[DEVICE_ID].config!.components as Record<string, any>
-        assert.deepEqual(c.climate.swing_modes, ['off', 'auto', '1단', '2단', '3단', '4단', '5단', '6단'])
+        assert.deepEqual(c.climate.swing_modes, ['off', '자동', '1단', '2단', '3단', '4단', '5단', '6단'])
 
         thinq.emit('data', buf(QUERY_RESPONSE_WITH_VERTICAL_ANGLE_HEX))
         assert.equal(ha.getProperty(DEVICE_ID, 'climate', 'swing_mode_state'), '3단') // 0x321=8739 = base+3, 0x205=0
@@ -475,7 +475,7 @@ describe(MODEL_ID, () => {
         // for why that is relied on here).
         dev.raw_clip_state[0x205] = 1
         dev.processKeyValue(0x321, 8736 + 3)
-        assert.equal(ha.getProperty(DEVICE_ID, 'climate', 'swing_mode_state'), 'auto')
+        assert.equal(ha.getProperty(DEVICE_ID, 'climate', 'swing_mode_state'), '자동')
 
         dev.drop()
     })
@@ -495,7 +495,7 @@ describe(MODEL_ID, () => {
         // this correction retracted a theory about (a mid-sweep "vStep" reading). Whatever it is,
         // it is not a settled position, so this must fall back to 'off' rather than keeping the
         // stale '3단' (which would be reading intent into a value that no longer means that) or
-        // guessing 'auto'.
+        // guessing '자동'.
         dev.raw_clip_state[0x205] = 0
         dev.processKeyValue(0x321, 12345)
         assert.equal(ha.getProperty(DEVICE_ID, 'climate', 'swing_mode_state'), 'off')
@@ -538,7 +538,7 @@ describe(MODEL_ID, () => {
         dev.raw_clip_state[0x205] = 0
         thinq.resetRecorder()
 
-        ha.setProperty(DEVICE_ID, 'climate', 'swing_mode_command', 'auto')
+        ha.setProperty(DEVICE_ID, 'climate', 'swing_mode_command', '자동')
 
         assert.equal(thinq.outbox.length, 1)
         const frame = thinq.outbox[0]
@@ -582,7 +582,7 @@ describe(MODEL_ID, () => {
 
         dev.processKeyValue(0x205, 1)
         dev.processKeyValue(0x206, 0)
-        assert.equal(ha.getProperty(DEVICE_ID, 'climate', 'swing_mode_state'), 'auto')
+        assert.equal(ha.getProperty(DEVICE_ID, 'climate', 'swing_mode_state'), '자동')
         assert.equal(ha.getProperty(DEVICE_ID, 'climate', 'swing_horizontal_mode_state'), 'off')
 
         thinq.resetRecorder()
@@ -617,7 +617,7 @@ describe(MODEL_ID, () => {
         tickMockTimers(t, 600)
 
         dev.processKeyValue(0x205, 1) // swing on - no 0x321 in this test at all
-        assert.equal(ha.getProperty(DEVICE_ID, 'climate', 'swing_mode_state'), 'auto')
+        assert.equal(ha.getProperty(DEVICE_ID, 'climate', 'swing_mode_state'), '자동')
 
         dev.drop()
     })

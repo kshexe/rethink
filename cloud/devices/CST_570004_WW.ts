@@ -175,7 +175,7 @@ const SWING_ON_OFF: WireLevels = [
 ]
 
 /* Merged vertical swing options - see addVerticalSwingField()'s own comment. */
-const VERTICAL_SWING_OPTIONS = ['off', 'auto', '1단', '2단', '3단', '4단', '5단', '6단']
+const VERTICAL_SWING_OPTIONS = ['off', '자동', '1단', '2단', '3단', '4단', '5단', '6단']
 
 /*
  * A single swing axis: which tag drives it and the values it takes. Only ever the horizontal
@@ -1911,10 +1911,12 @@ export default class Device extends TLVDevice {
 
     /*
      * Vertical swing, merged onto the climate entity's own `swing_mode` attribute: 'off' (stop,
-     * 0x205=0 alone - no explicit position), 'auto' (continuous swing, 0x205=1), or a fixed
-     * '1단'..'6단' position (0x205=0 + TAG_VERTICAL_ANGLE=N). Owner's own request, 2026-09-16,
-     * after using the separate "상하 각도" select (see its own history in TAG_VERTICAL_ANGLE's
-     * comment and the swingAxesOnOff() history above) and preferring one merged control over
+     * 0x205=0 alone - no explicit position), '자동' (continuous swing, 0x205=1), or a fixed
+     * '1단'..'6단' position (0x205=0 + TAG_VERTICAL_ANGLE=N). Korean throughout, not 'auto' -
+     * matches the owner's own naming for this control (2026-09-17), since fan_modes went Korean
+     * too and a lone English value stood out. Owner's own request, 2026-09-16, after using the
+     * separate "상하 각도" select (see its own history in TAG_VERTICAL_ANGLE's own comment and
+     * the swingAxesOnOff() history above) and preferring one merged control over
      * matching `lg_thinq`'s plain on/off pairing exactly.
      *
      * Modelled on addWindModeSelect() just below: mutually exclusive with a tag that already has
@@ -2031,7 +2033,7 @@ export default class Device extends TLVDevice {
         return 'off'
     }
 
-    // Merged vertical swing state: 'auto' means swing is on (0x205=1); an out-of-range or missing
+    // Merged vertical swing state: '자동' means swing is on (0x205=1); an out-of-range or missing
     // 0x321 (mid-move, an offset not yet confirmed on this unit, or simply never sent) falls back
     // to 'off' rather than guessing a specific wrong position - 'off' is never a wrong guess, since
     // it is already true that this unit is not actively auto-swinging whenever 0x205 is falsy.
@@ -2039,7 +2041,7 @@ export default class Device extends TLVDevice {
     // comment) gets its own "N단" value. Swing wins if somehow both look set at once - matches the
     // panel, where turning swing on is what makes the numbered position stop applying.
     verticalSwingFromState(): string {
-        if (this.raw_clip_state[0x205]) return 'auto'
+        if (this.raw_clip_state[0x205]) return '자동'
         const raw = this.raw_clip_state[TAG_VERTICAL_ANGLE]
         if (raw != null) {
             const angle = raw - VERTICAL_ANGLE_ECHO_BASE
@@ -2061,7 +2063,7 @@ export default class Device extends TLVDevice {
             const tlv =
                 mqttValue === 'off'
                     ? [{ t: 0x205, v: 0 }]
-                    : mqttValue === 'auto'
+                    : mqttValue === '자동'
                       ? [{ t: 0x205, v: 1 }]
                       : [
                             { t: TAG_VERTICAL_ANGLE, v: Number(mqttValue.replace('단', '')) },
