@@ -25,7 +25,7 @@ dryer/dehumidifier/hood/styler models) this fork branched from, see upstream
 - Washing Machines:
     - 👍 FX\_\_\_S, LG front-load washer sold in Korea - full command coverage including per-cycle energy reporting; the most complete handler in this fork, used as the reference implementation for the two below.
 - Dryers:
-    - 🫤 RD20*S - power, remaining time, reservation, alarm volume, remote-control/button-lock/drum-light/anti-wrinkle/ironing-alert state, and hour/day/month/total energy all mapped. Speaks the same key-value protocol as FX\_\_\_S (not an AABB fixed-offset-record protocol some other dryers use). Course/option \_selection* (writing a course) is the one gap left - state reading is otherwise thorough.
+    - 🫤 RD20_S - power, remaining time, reservation, alarm volume, remote-control/button-lock/drum-light/anti-wrinkle/ironing-alert state, and hour/day/month/total energy all mapped. Speaks the same key-value protocol as FX\_\_\_S (not an AABB fixed-offset-record protocol some other dryers use). Course/option selection (writing a course) is the one gap left - state reading is otherwise thorough.
 - Stylers:
     - 🫤 ST_R_ETH01Y\_ - power, course-select (23 of the full course list confirmed and named) and course-start all mapped against a real unit. Live running-status/remaining-time/error reading is not yet decoded - `duration_minutes` is the selected course's own length, not a countdown.
 - Mini washers:
