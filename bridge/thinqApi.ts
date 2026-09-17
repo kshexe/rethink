@@ -305,9 +305,13 @@ export type RouteCertResponse = { certificatePem: string }
 /**
  * The CA that signs the real cloud's AWS-IoT endpoint - the trust anchor for any MQTT connection we
  * make to LG, whether as a bridged appliance or as the monitor's own subscription.
+ *
+ * Fetched from the region-correct `apiServer` (from a `/route` call), not the region-agnostic
+ * `IOT_BASE_URL` - the latter returns a root certificate that only matches some regions' servers
+ * (upstream anszom/rethink#980b42e). This more closely follows what the real appliance does.
  */
-export async function fetchIotCaCertificate() {
-    const { certificatePem } = await apiFetch<RouteCertResponse>(`${IOT_BASE_URL}/route/certificate?name=aws-iot`, {
+export async function fetchIotCaCertificate(apiServer: string) {
+    const { certificatePem } = await apiFetch<RouteCertResponse>(`${apiServer}/route/certificate?name=aws-iot`, {
         headers: { accept: 'application/json' },
     })
     return certificatePem
@@ -383,7 +387,7 @@ export class Thinq2Device implements Device {
         }
 
         console.log('Fetching CA cert')
-        const ca = await fetchIotCaCertificate()
+        const ca = await fetchIotCaCertificate(servers.apiServer)
 
         console.log('Trying to generate a certificate with otp', otpResponse.otp)
 

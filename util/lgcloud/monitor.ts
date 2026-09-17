@@ -77,7 +77,7 @@ async function openMQTT(client: Client, subscription: Subscription, opts: Connec
     const route = await apiFetch<RouteResponse>(`${IOT_BASE_URL}/route`, {
         headers: { 'x-country-code': client.env.countryCode, 'x-service-phase': 'OP', accept: 'application/json' },
     })
-    const caCert = await fetchIotCaCertificate()
+    const caCert = await fetchIotCaCertificate(route.apiServer)
 
     const mqttUrl = route.mqttServer.replace(/^ssl:\/\//, 'mqtts://')
     const mqttClient = mqtt.connect(mqttUrl, {
