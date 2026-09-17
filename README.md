@@ -20,14 +20,14 @@ dryer/dehumidifier/hood/styler models) this fork branched from, see upstream
 - Air Conditioners:
     - 👍 CST_570004_WW, LG ceiling-cassette IDU (multi-split) - full command coverage, no known gaps. Setpoint range falls back to the model's real min/max (per-unit, live-confirmed on the wire) when a unit never sends its own capability tags, instead of Home Assistant's generic 7-35°C default. Vertical swing is one merged control (fixed 1-6단 positions plus continuous 자동), matching how the panel actually presents it. Remaining unmodelled telemetry tags are read-only (filter hours, coil temps).
 - Fridges:
-    - 🫤 2REF21EBNSX_3 - temperature/door/express-mode/smart-care mapped. Energy frame decoded and cross-checked against the app's own daily total (real-world ratio is ~1:1 Wh, not the ~2x first assumed), but not yet wired into a proper hour/day/month accumulator - still a bare raw counter. A handful of periodic status frames are still unidentified (read-only telemetry, no command-coverage impact).
+    - 🫤 2REF21EBNSX_3 - temperature/door/express-mode/smart-care and hour/day/month/total energy (1 count = 1 Wh, cross-checked against the app's own daily total) all mapped. A handful of periodic status frames are still unidentified (read-only telemetry, no command-coverage impact).
     - 👍 3REK2G03VI200S_2 (김치냉장고/kimchi fridge) - per-compartment storage mode (3 compartments, every mode live-confirmed against the physical panel, none left as a modelJSON guess), door sensors, one-touch deodorize, and hour/day/month/total energy (cross-validated against the app's own hourly figures) all mapped.
 - Washing Machines:
     - 👍 FX\_\_\_S, LG front-load washer sold in Korea - full command coverage including per-cycle energy reporting; the most complete handler in this fork, used as the reference implementation for the two below.
 - Dryers:
-    - 🫤 RD20_S - power, remaining time, reservation, alarm volume, remote-control/button-lock/drum-light/anti-wrinkle/ironing-alert state, and hour/day/month/total energy all mapped. Speaks the same key-value protocol as FX\_\_\_S (not an AABB fixed-offset-record protocol some other dryers use). Course/option _selection_ (writing a course) is the one gap left - state reading is otherwise thorough.
+    - 🫤 RD20*S - power, remaining time, reservation, alarm volume, remote-control/button-lock/drum-light/anti-wrinkle/ironing-alert state, and hour/day/month/total energy all mapped. Speaks the same key-value protocol as FX\_\_\_S (not an AABB fixed-offset-record protocol some other dryers use). Course/option \_selection* (writing a course) is the one gap left - state reading is otherwise thorough.
 - Stylers:
-    - 🫤 ST*R_ETH01Y* - power, course-select (23 of the full course list confirmed and named) and course-start all mapped against a real unit. Live running-status/remaining-time/error reading is not yet decoded - `duration_minutes` is the selected course's own length, not a countdown.
+    - 🫤 ST_R_ETH01Y\_ - power, course-select (23 of the full course list confirmed and named) and course-start all mapped against a real unit. Live running-status/remaining-time/error reading is not yet decoded - `duration_minutes` is the selected course's own length, not a countdown.
 - Mini washers:
     - 🫤 MI2D7B (미니워시) - power only. This model has no "send to appliance" button in the LG app at all, so its course/option state can't be captured remotely without physically arming remote-start on the unit first.
 - Dishwashers:

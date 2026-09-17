@@ -1,13 +1,33 @@
 import { describe, test } from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import DUT from '@/cloud/devices/2REF21EBNSX_3'
 import type { Metadata } from '@/cloud/thinq'
+import { configure as configureEnergyAccumulator } from '@/cloud/energy-accumulator'
 import { MockHAConnection, MockThinq2Device, buf } from '@/tests/helpers/mocks'
 import { enableMockTimers, tickMockTimers } from '@/tests/helpers/timers'
 
 const DEVICE_ID = 'test-id'
 const MODEL_ID = '2REF21EBNSX_3'
 const META: Metadata = { modelId: MODEL_ID, modelName: MODEL_ID, swVersion: '1.0' }
+
+/** energy-accumulator.ts persists to disk and caches by device id - point it at a fresh scratch
+ *  dir (which also clears its cache) so each energy test starts from nothing, the same way
+ *  RD20_S.test.ts isolates itself, and so these tests never touch the real /share/rethink/energy
+ *  path. */
+function freshEnergyDir() {
+    const dir = mkdtempSync(join(tmpdir(), '2ref21ebnsx3-energy-test-'))
+    configureEnergyAccumulator(dir)
+    process.on('exit', () => rmSync(dir, { recursive: true, force: true }))
+}
+
+/** recordEnergyDelta() is fire-and-forget (`void ...`) from processAABB, so its file I/O has not
+ *  necessarily landed yet the instant `thinq.emit` returns - give it a beat. */
+async function settle() {
+    await new Promise((r) => setTimeout(r, 50))
+}
 
 /*
  * Fixtures. All REAL frames, captured 2026-09-10 against a real unit by sweeping each control
@@ -68,9 +88,9 @@ const PERIODIC_DUMP = buf(
     ),
 )
 
-function makeDevice() {
+function makeDevice(id = DEVICE_ID) {
     const ha = new MockHAConnection()
-    const thinq = new MockThinq2Device(DEVICE_ID, META)
+    const thinq = new MockThinq2Device(id, META)
     const dev = new DUT(ha.asConnection(), thinq, META)
     return { ha, thinq, dev }
 }
@@ -80,7 +100,11 @@ describe(MODEL_ID, () => {
         const { ha } = makeDevice()
         const components = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
         assert.deepEqual(Object.keys(components).sort(), [
+            'energy_day',
+            'energy_hour',
+            'energy_month',
             'energy_raw_counter',
+            'energy_total',
             'express_mode',
             'freezer_door_open',
             'freezer_temp',
@@ -229,6 +253,60 @@ describe(MODEL_ID, () => {
             87,
             'byte 2 differs (0x0f vs 0xfa) between these two real captures but is not read',
         )
+    })
+
+    test('a rise between two real energy-counter reports feeds the accumulator as 1 count = 1 Wh', async () => {
+        freshEnergyDir()
+        // A device id distinct from DEVICE_ID: other tests in this file emit the same real energy
+        // frames too, each with their own fire-and-forget recordEnergyDelta call that could still
+        // land after this test starts - a shared id would let a stray delta bleed in.
+        const { ha, thinq } = makeDevice('energy-test-1')
+        // First frame only establishes the baseline (7) - nothing to diff against yet.
+        thinq.emit('data', ENERGY_COUNTER_7)
+        await settle()
+        assert.equal(ha.devices['energy-test-1'].properties.energy_hour, undefined)
+        // Real second capture, counter 87 - a rise of 80.
+        thinq.emit('data', ENERGY_COUNTER_87)
+        await settle()
+        assert.equal(ha.devices['energy-test-1'].properties.energy_hour, 80)
+        assert.equal(ha.devices['energy-test-1'].properties.energy_total, 80)
+    })
+
+    test('a drop in the counter (its own unpredictable reset) is accepted as a new baseline, not a negative delta', async () => {
+        freshEnergyDir()
+        const { ha, thinq } = makeDevice('energy-test-2')
+        thinq.emit('data', ENERGY_COUNTER_87)
+        await settle()
+        // Synthetic: same shape as the real captures above, counter dropped to 3 - simulating this
+        // counter's own reset (see the file header's ENERGY COUNTER section), not 84 Wh of negative
+        // consumption.
+        thinq.emit('data', buf('aa0b10affa0003040400bb'))
+        await settle()
+        assert.equal(ha.devices['energy-test-2'].properties.energy_hour, undefined, 'no delta recorded for a drop')
+        assert.equal(
+            ha.devices['energy-test-2'].properties.energy_raw_counter,
+            3,
+            'the raw counter still follows it down',
+        )
+
+        // A subsequent rise now diffs against the new, lower baseline (3), not the pre-reset value.
+        thinq.emit('data', buf('aa0b10affa0005040400bb')) // counter 5
+        await settle()
+        assert.equal(ha.devices['energy-test-2'].properties.energy_hour, 2, '5 - 3')
+    })
+
+    test('a single-step rise past the plausible ceiling is discarded, not counted', async () => {
+        freshEnergyDir()
+        const { ha, thinq } = makeDevice('energy-test-3')
+        thinq.emit('data', ENERGY_COUNTER_7)
+        await settle()
+        // Synthetic: counter 700 in one step (delta 693, past ENERGY_MAX_PLAUSIBLE_DELTA) -
+        // simulating a reset that happened to land on a coincidentally higher value, not 693 Wh
+        // used in one 5-minute poll interval.
+        thinq.emit('data', buf('aa0b10affa02bc040400bb'))
+        await settle()
+        assert.equal(ha.devices['energy-test-3'].properties.energy_hour, undefined)
+        assert.equal(ha.devices['energy-test-3'].properties.energy_raw_counter, 700, 'the raw counter still follows it')
     })
 
     test('record[7] (anyDoorOpen) backfills both compartments to OFF once closed, but leaves an already-open one alone since it cannot say which door', () => {

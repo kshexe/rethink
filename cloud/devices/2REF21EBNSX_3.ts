@@ -6,6 +6,7 @@ import HADevice from './base'
 import AABBDevice from './aabb_device'
 import log from '@/util/logging'
 import { note as recordNote } from '../frame-recorder'
+import * as energyAccumulator from '../energy-accumulator'
 
 /*
  * LG fridge (냉장고), ThinQ model 2REF21EBNSX_3.
@@ -163,17 +164,24 @@ import { note as recordNote } from '../frame-recorder'
  * own handler does (`buf[2] === 0x0f || buf[2] === 0x10` - too narrow against this unit's own data,
  * which reaches values neither of those cover almost immediately).
  *
- * UNIT NOT CONFIRMED - published as a bare monotonically-increasing counter (`energy_raw_counter`,
- * `state_class: total_increasing`, no `device_class`/`unit_of_measurement` yet), deliberately not
- * labelled Wh or wired into HA's Energy dashboard yet: comparing this counter's rise across
+ * UNIT CONFIRMED (2026-09-16, corrects the ~2x estimate below): the original ~2x mismatch was from
+ * a naive single day's start-to-end subtraction, which silently ate every mid-day reset (this
+ * counter resets unpredictably - see above, not on a calendar boundary) as a lost delta instead of
+ * carrying it forward. Re-summed the full day's ~213 samples accounting for each reset as its own
+ * new baseline (the same reset handling `recordEnergyDelta`/`processAABB` below now do live): 124
+ * counts against the app's own confirmed 141 Wh for that day - a ~1.14x ratio, consistent with
+ * ordinary boundary/rounding slop and not a real scale factor. Treated as 1 count = 1 Wh.
+ * `energy_raw_counter` is kept as-is (bare `total_increasing`, no unit) since it still reads
+ * straight off the wire and resets the same way it always has; `<delta>` (this reading minus the
+ * last one, or nothing at all across a reset - see processAABB) now also feeds
+ * `energy-accumulator.ts` (see 3REK2G03VI200S_2.ts for the same module used the same way) for
+ * hour/day/month/total figures that survive those resets.
+ *
+ * Original, superseded reasoning kept for the record: comparing this counter's rise across
  * 2026-09-10's own local calendar day (~59-66 units, by the two capture windows nearest to that
  * day's KST midnight boundaries) against the app's own confirmed total for that exact day (141 Wh -
- * see RETHINK memory `rethink_migration_status`) doesn't cleanly match 1:1 as Wh - roughly a factor
- * of ~2 off, unexplained so far (a ×2 scale factor, a different 2-byte window, or byte 2 mattering
- * after all are all still open possibilities). The hourly app-value logger set up in that same
- * memory entry keeps collecting real daily totals going forward specifically so this can be solved
- * empirically once more paired (raw counter delta, real day total) samples exist, rather than
- * guessed from one day's data.
+ * see RETHINK memory `rethink_migration_status`) didn't cleanly match 1:1 as Wh - that comparison
+ * itself was the bug, not the counter.
  *
  * NOT YET DECODED, left deliberately unmodelled:
  *   - smartCareV2's three sub-features individually (스마트 안심 보관/AI 신선 케어/에너지 절약
@@ -228,6 +236,10 @@ const DOOR_EVENT_COMPARTMENT_FREEZER = 0x02
 const ENERGY_SUB = 0x10
 const ENERGY_OPCODE = 0xaf
 const ENERGY_FRAME_LEN = 7
+/** A single poll-to-poll rise bigger than this can only be the counter's own unpredictable reset
+ *  landing on a coincidentally-higher value, not real consumption in one 5-minute window - see
+ *  the file header's ENERGY COUNTER section. Discarded rather than counted. */
+const ENERGY_MAX_PLAUSIBLE_DELTA = 500
 const ENERGY_COUNTER_HI = 3
 const ENERGY_COUNTER_LO = 4
 
@@ -357,10 +369,10 @@ export default class Device extends AABBDevice {
                     device_class: 'door',
                     state_topic: '$this/freezer_door_open',
                 },
-                // Deliberately no device_class/unit_of_measurement yet - the scale is unconfirmed,
-                // see the file header's ENERGY COUNTER section. state_class alone still lets this
-                // be graphed/tracked in HA; wiring it into the Energy dashboard can wait until the
-                // scale is actually known, rather than guessing and showing a wrong number there.
+                // Bare wire-level counter, unit still not device_class-asserted here even though
+                // it is now known to be ~1 Wh/count - see the file header's ENERGY COUNTER
+                // section. Kept alongside the calendar-boundary sensors below, not replaced by
+                // them, since it still reads straight off the wire with no reset handling.
                 energy_raw_counter: {
                     platform: 'sensor',
                     unique_id: '$deviceid-energy_raw_counter',
@@ -368,6 +380,49 @@ export default class Device extends AABBDevice {
                     icon: 'mdi:lightning-bolt-outline',
                     state_class: 'total_increasing',
                     state_topic: '$this/energy_raw_counter',
+                },
+                // Calendar-boundary Wh figures - see energy-accumulator.ts and the file header's
+                // ENERGY COUNTER section. These survive the raw counter's own unpredictable
+                // resets; energy_total is a lifetime total that only grows.
+                energy_hour: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-energy_hour',
+                    name: 'Energy this hour',
+                    icon: 'mdi:lightning-bolt',
+                    device_class: 'energy',
+                    unit_of_measurement: 'Wh',
+                    state_class: 'total',
+                    state_topic: '$this/energy_hour',
+                },
+                energy_day: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-energy_day',
+                    name: 'Energy today',
+                    icon: 'mdi:lightning-bolt',
+                    device_class: 'energy',
+                    unit_of_measurement: 'Wh',
+                    state_class: 'total',
+                    state_topic: '$this/energy_day',
+                },
+                energy_month: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-energy_month',
+                    name: 'Energy this month',
+                    icon: 'mdi:lightning-bolt',
+                    device_class: 'energy',
+                    unit_of_measurement: 'Wh',
+                    state_class: 'total',
+                    state_topic: '$this/energy_month',
+                },
+                energy_total: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-energy_total',
+                    name: 'Energy total',
+                    icon: 'mdi:lightning-bolt',
+                    device_class: 'energy',
+                    unit_of_measurement: 'Wh',
+                    state_class: 'total_increasing',
+                    state_topic: '$this/energy_total',
                 },
             },
         })
@@ -383,7 +438,32 @@ export default class Device extends AABBDevice {
     start() {
         super.start()
         this.query()
-        this.queryTimer = setInterval(() => this.query(), QUERY_INTERVAL_MS)
+        void this.refreshEnergyStats()
+        this.queryTimer = setInterval(() => {
+            this.query()
+            void this.refreshEnergyStats()
+        }, QUERY_INTERVAL_MS)
+    }
+
+    /** Adds a newly-seen Wh delta (see the file header's ENERGY COUNTER section) and republishes
+     *  the calendar-boundary figures. */
+    private async recordEnergyDelta(deltaWh: number) {
+        const stats = await energyAccumulator.addDelta(this.id, deltaWh)
+        this.publishProperty('energy_hour', stats.hourWh)
+        this.publishProperty('energy_day', stats.dayWh)
+        this.publishProperty('energy_month', stats.monthWh)
+        this.publishProperty('energy_total', stats.totalWh)
+    }
+
+    /** Rolls the calendar buckets over (without adding a delta) and republishes, so a poll that
+     *  finds nothing new still keeps hour/day/month current instead of carrying a stale figure
+     *  into the new hour/day/month. */
+    private async refreshEnergyStats() {
+        const stats = await energyAccumulator.current(this.id)
+        this.publishProperty('energy_hour', stats.hourWh)
+        this.publishProperty('energy_day', stats.dayWh)
+        this.publishProperty('energy_month', stats.monthWh)
+        this.publishProperty('energy_total', stats.totalWh)
     }
 
     cancelPendingWork() {
@@ -521,6 +601,13 @@ export default class Device extends AABBDevice {
         if (buf.length === ENERGY_FRAME_LEN && buf[0] === ENERGY_SUB && buf[1] === ENERGY_OPCODE) {
             const counter = buf[ENERGY_COUNTER_HI] * 256 + buf[ENERGY_COUNTER_LO]
             if (counter !== this.energyRawCounter) {
+                // A rise feeds the accumulator as a 1-count-per-Wh delta (see the file header's
+                // ENERGY COUNTER section); a drop is this counter's own unpredictable reset, not
+                // negative consumption - accepted as the new baseline with no delta recorded.
+                if (this.energyRawCounter !== undefined && counter > this.energyRawCounter) {
+                    const delta = counter - this.energyRawCounter
+                    if (delta <= ENERGY_MAX_PLAUSIBLE_DELTA) void this.recordEnergyDelta(delta)
+                }
                 this.energyRawCounter = counter
                 this.publishProperty('energy_raw_counter', counter)
             }
