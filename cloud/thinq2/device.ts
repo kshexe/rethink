@@ -101,10 +101,10 @@ export class DeviceAcceptor extends TypedEmitter<DeviceAcceptorEvents> {
         topic = topic.replace(/^.*\/clip/, 'clip')
 
         if (topic === 'clip/message/devices/' + payload.did) {
-            if (payload.cmd === 'completeProvisioning_ack') {
-                this.completeProvisioning(payload.did, payload, client)
-            }
-
+            // completeProvisioning_ack, previously the trigger for completeProvisioning() below,
+            // is intentionally ignored: some CLIP firmware (e.g. T17A1EFHU_F) never sends it at
+            // all and just starts publishing device_packet - registration now happens as soon as
+            // preDeploy/deploy is seen instead (upstream anszom/rethink#8f6d19e).
             if (payload.cmd === 'device_packet' && payload.did === client.deployMsg?.did) {
                 if (client.deviceObj) {
                     const buf = Buffer.from(payload.data as string, 'hex')
@@ -131,21 +131,14 @@ export class DeviceAcceptor extends TypedEmitter<DeviceAcceptorEvents> {
                     },
                     null,
                 )
+
+                if (!client.deviceObj) this.completeProvisioning(payload.did, client.deployMsg, client)
+                else console.warn(`device ${payload.did} already set up`)
             }
         }
     }
 
-    completeProvisioning(deviceId: string, payload: ClipMessage, client: ClientWithExtra) {
-        if (!client.deployMsg) {
-            console.warn('completeProvisioning_ack received without deploy/preDeploy')
-            return
-        }
-
-        if (client.deviceObj) {
-            console.warn('completeProvisioning_ack received twice?')
-            return
-        }
-
+    completeProvisioning(deviceId: string, deployMsg: ClipDeployMessage, client: ClientWithExtra) {
         if (this.clientsById[deviceId]) {
             console.warn(`device ${deviceId} already connected, dropping the old one`)
             this.clientsById[deviceId].destroy()
@@ -154,15 +147,15 @@ export class DeviceAcceptor extends TypedEmitter<DeviceAcceptorEvents> {
         this.clientsById[deviceId] = client
 
         const meta: Metadata = {
-            modelId: client.deployMsg.kind,
-            modelName: client.deployMsg.data?.appInfo?.modelName,
-            swVersion: client.deployMsg.data?.appInfo?.softVer,
-            deviceType: client.deployMsg.data?.appInfo?.DeviceType,
+            modelId: deployMsg.kind,
+            modelName: deployMsg.data?.appInfo?.modelName,
+            swVersion: deployMsg.data?.appInfo?.softVer,
+            deviceType: deployMsg.data?.appInfo?.DeviceType,
         }
 
         const dev = new Device(this.broker, 'lime/devices/' + deviceId, deviceId, meta)
-        dev.deployAppInfo = client.deployMsg.data?.appInfo as Record<string, unknown> | undefined
-        dev.deployPlatformInfo = client.deployMsg.data?.platformInfo as Record<string, unknown> | undefined
+        dev.deployAppInfo = deployMsg.data?.appInfo as Record<string, unknown> | undefined
+        dev.deployPlatformInfo = deployMsg.data?.platformInfo as Record<string, unknown> | undefined
         client.deviceObj = dev
         this.emit('newDevice', dev)
     }
