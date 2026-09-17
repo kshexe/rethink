@@ -48,7 +48,10 @@ export class Device extends TypedEmitter<DeviceEvents> {
     send_packet(buf: Buffer) {
         recordFrame(this.id, this.meta, 'to-device', buf)
         this.emit('sendData', buf)
-        this.send('packet', 1, buf.toString('hex'))
+        // Uppercase: at least one appliance's firmware (F_C__Y___W.A__QEUK) silently ignores a
+        // lowercase-hex packet payload. Hex is case-insensitive on the wire either way, so this
+        // is safe for every other device too (upstream anszom/rethink#50a033f).
+        this.send('packet', 1, buf.toString('hex').toUpperCase())
     }
 }
 
