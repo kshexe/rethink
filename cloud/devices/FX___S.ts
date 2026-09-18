@@ -871,6 +871,8 @@ export default class Device extends AABBDevice {
     /** Likewise for the wash-level scale; see WASH_KO. */
     readonly washNames: Record<number, string>
 
+    private cancelEnergyRefresh: (() => void) | undefined
+
     constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
         super(HA, thinq)
         // Optional chaining on purpose: nothing else in a profile reads the connection's config, so a
@@ -1402,6 +1404,23 @@ export default class Device extends AABBDevice {
         this.updateButtonAvailability()
     }
 
+    /** Rolls energy-accumulator.ts's calendar buckets over right at every wall-clock hour boundary,
+     *  so hour/day/month reset on time even across a washer's long idle stretches between cycles -
+     *  see energy-accumulator.ts's scheduleHourlyRefresh() and the identical wiring in
+     *  RD20_S.ts/2REF21EBNSX_3.ts/3REK2G03VI200S_2.ts. */
+    start() {
+        super.start()
+        this.cancelEnergyRefresh = energyAccumulator.scheduleHourlyRefresh(this.id, (stats) =>
+            this.publishEnergyStats(stats),
+        )
+    }
+
+    cancelPendingWork() {
+        this.cancelEnergyRefresh?.()
+        this.cancelEnergyRefresh = undefined
+        super.cancelPendingWork()
+    }
+
     /**
      * Switching the appliance off at the panel makes it drop its connection, so rethink drops the
      * device and every entity would go unavailable - which reads as "the washer has fallen off the
@@ -1579,7 +1598,10 @@ export default class Device extends AABBDevice {
      *  republishes them - see the `energy_hour`/`energy_day`/`energy_month`/`energy_total`
      *  components above. */
     private async recordEnergyDelta(deltaWh: number) {
-        const stats = await energyAccumulator.addDelta(this.id, deltaWh)
+        this.publishEnergyStats(await energyAccumulator.addDelta(this.id, deltaWh))
+    }
+
+    private publishEnergyStats(stats: energyAccumulator.EnergyStats) {
         this.publishProperty('energy_hour', stats.hourWh)
         this.publishProperty('energy_day', stats.dayWh)
         this.publishProperty('energy_month', stats.monthWh)
