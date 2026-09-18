@@ -292,6 +292,18 @@ describe('FX___S washer', () => {
         assert.equal(get(HA, 'drum_light'), 'OFF')
     })
 
+    test('drum_light_auto is a writable switch, published optimistically (no live readback - see file header)', () => {
+        const { HA, dut } = setup()
+        const comp = HA.devices[DEVICE_ID].config!.components.drum_light_auto as unknown as Record<string, unknown>
+        assert.equal(comp.platform, 'switch')
+        assert.equal(comp.command_topic, '$this/drum_light_auto/set')
+
+        dut.setProperty('drum_light_auto', 'ON')
+        assert.equal(get(HA, 'drum_light_auto'), 'ON')
+        dut.setProperty('drum_light_auto', 'OFF')
+        assert.equal(get(HA, 'drum_light_auto'), 'OFF')
+    })
+
     test('adds a course it has no name for and makes it selectable', () => {
         const { HA, thinq, dut } = setup()
         // The current record starts at byte 83 of the frame, so its course byte is 87. 0x63 is not one
@@ -455,6 +467,8 @@ describe('FX___S commands', () => {
     const cases: [string, string, string, string][] = [
         ['power', 'OFF', 'aa0df0e5000201ff010200c4bb', 'power off'],
         ['power', 'ON', 'aa0df0e5000201ff010201c7bb', 'power on'],
+        ['drum_light_auto', 'OFF', 'aa0df0e5000201ff011b00ffbb', 'drum_light_auto off'],
+        ['drum_light_auto', 'ON', 'aa0df0e5000201ff011b01febb', 'drum_light_auto on'],
         ['pause', '', 'aa0df0e5000201ff010302c1bb', 'pause'],
         ['course', 'TUB_CLEAN', 'aa0df0e5000201ff010a55bbbb', 'course = Tub Clean'],
         ['course', 'AI_COURSE', 'aa0df0e5000201ff010a725ebb', 'course = AI Wash'],

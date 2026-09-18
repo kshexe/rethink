@@ -217,6 +217,29 @@ const FLAG_CHILD_LOCK = 0x20
  * Two independent transitions, two different capture attempts, one bit both times.
  */
 const FLAG_DRUM_LIGHT = 0x40
+/*
+ * DRUM LIGHT AUTO-ON (captured 2026-09-18, same key as RD20_S.ts's identically-named section):
+ * not the same thing as FLAG_DRUM_LIGHT above (the light's own live on/off state, still read-only
+ * here too). This is a separate persisted setting - "문열림 시 자동 켜짐" in the app, modelJSON
+ * `drumlightOpt`'s sibling attribute, cloud capability `drumLight.setLightOnWhenDoorOpens` -
+ * whether the appliance should turn the light on by itself the next time the door opens, not a
+ * request to turn it on right now. Confirmed with the ThinQ web app's own capabilitySchema
+ * response for this model: the `drumLight` capability's only command is `setLightOnWhenDoorOpens`,
+ * nothing else - so there genuinely is no "turn it on right now" command to find here either.
+ *
+ * Captured both directions this time (RD20_S.ts's capture only got "on"):
+ *
+ *   to-device   aa 0d f0 e5 00 02 01 ff 01 1b 01 <ck> bb   (on)
+ *   to-device   aa 0d f0 e5 00 02 01 ff 01 1b 00 <ck> bb   (off)
+ *   from-device aa 08 20 00 e5 00 <ck> bb                 (ack both times, same shape as power's)
+ *
+ * Unlike `power` (read continuously off the wire below), this is published optimistically from the
+ * command just sent: captured mid-cycle, a before/after diff of the record moved several bytes at
+ * once (a running minute counter among them), with nothing isolated cleanly enough to trust as
+ * this setting's own bit the way FLAG_DRUM_LIGHT etc. were each isolated one control at a time at
+ * standby. Left unread rather than guessed - see RD20_S.ts's identical call for the same reason.
+ */
+const KEY_DRUM_LIGHT_AUTO = 0x1b
 // Set while the drum is actually turning. It clears on pause, but it ALSO clears and re-sets on its
 // own mid-cycle (measured twice, with no command in between and the remaining time still counting down),
 // so it must not be used to mean "paused" - that is PHASE_PAUSED and nothing else.
@@ -1063,6 +1086,17 @@ export default class Device extends AABBDevice {
                     state_topic: '$this/drum_light',
                     name: 'Drum light',
                     icon: 'mdi:lightbulb',
+                },
+                // See the file header's DRUM LIGHT AUTO-ON section - whether the appliance turns
+                // the light on by itself the next time the door opens, not the light's own state.
+                drum_light_auto: {
+                    platform: 'switch',
+                    unique_id: '$deviceid-drum-light-auto',
+                    state_topic: '$this/drum_light_auto',
+                    command_topic: '$this/drum_light_auto/set',
+                    name: 'Drum light auto-on',
+                    icon: 'mdi:lightbulb-auto-outline',
+                    entity_category: 'config',
                 },
                 // The three "is it happening now" sensors, which exist because the switches below
                 // cannot answer that question and be a setting at the same time. A switch has to
@@ -2155,6 +2189,13 @@ export default class Device extends AABBDevice {
         switch (prop) {
             case 'power':
                 return this.setField(KEY_POWER, mqttValue === 'ON' ? 1 : 0)
+            case 'drum_light_auto': {
+                const on = mqttValue === 'ON'
+                this.setField(KEY_DRUM_LIGHT_AUTO, on ? 1 : 0)
+                // Optimistic: see the file header's DRUM LIGHT AUTO-ON section.
+                this.publishProperty('drum_light_auto', on ? 'ON' : 'OFF')
+                return
+            }
             case 'start':
                 this.setField(KEY_OPERATION, OP_START)
                 return this.trigger()
