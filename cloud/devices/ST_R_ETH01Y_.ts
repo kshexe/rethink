@@ -184,9 +184,21 @@ import { note as recordNote } from '../frame-recorder'
  * Both directions captured directly (toggled on, then off again). Optimistic, same reasoning as
  * FINE DUST above.
  *
- * The smart-care screen has one more toggle not yet captured: "조용히" (stylerSmartCareNightCare,
- * a start/end time range rather than a plain switch) - left for a future pass rather than guessed
- * at.
+ * SMART CARE - NIGHT CARE ON/OFF (captured 2026-09-18, same pass): "조용히" - if a course runs
+ * within a set overnight window (default 오후 10:00-오전 6:00), the moving hanger works weaker so
+ * it doesn't disturb sleep, at some cost to dust-removal performance (per the screen's own warning
+ * text) - cloud capability `stylerSmartCareNightCare.setSmartCareNightCare` (the
+ * on/off master switch only; that capability's other two commands, `setStartTime`/`setEndTime`,
+ * set the window itself via a time-picker sub-screen and are NOT captured here):
+ *
+ *   to-device   aa 0d f0 e5 00 02 01 ff 01 1a 01 <ck> bb   (on)
+ *   to-device   aa 0d f0 e5 00 02 01 ff 01 1a 00 <ck> bb   (off)
+ *
+ * Both directions captured directly (toggled on, then off again). Optimistic, same reasoning as
+ * FINE DUST/HUMIDITY above. Note this is a THIRD key in the 0x1a-0x1c range on this one model
+ * alone (0x1a night-care, 0x1b humidity, 0x1c fine-dust) - apparently sequential allocation within
+ * this firmware's own smart-care feature set, distinct from the coincidental 0x1b clash with
+ * RD20_S/FX___S's unrelated KEY_DRUM_LIGHT_AUTO noted above.
  */
 
 const FROM_DEVICE_ACK_OPCODE = 0xe5
@@ -203,6 +215,8 @@ const KEY_UNKNOWN_23 = 0x23
 const KEY_SMART_CARE_FINE_DUST = 0x1c
 /** See the file header's SMART CARE - HUMIDITY section. */
 const KEY_SMART_CARE_HUMIDITY = 0x1b
+/** See the file header's SMART CARE - NIGHT CARE ON/OFF section. */
+const KEY_SMART_CARE_NIGHT_CARE = 0x1a
 
 /** See the file header's STATUS RECORD section - the MSG_TUNNEL envelope FX___S.ts documents,
  *  reused here just for the record split (this handler does not otherwise parse the record). */
@@ -358,6 +372,17 @@ export default class Device extends AABBDevice {
                     icon: 'mdi:water-percent',
                     entity_category: 'config',
                 },
+                // See the file header's SMART CARE - NIGHT CARE ON/OFF section. The window itself
+                // (default 오후 10:00-오전 6:00) is not adjustable here - only this master switch.
+                smart_care_night_care: {
+                    platform: 'switch',
+                    unique_id: '$deviceid-smart_care_night_care',
+                    state_topic: '$this/smart_care_night_care',
+                    command_topic: '$this/smart_care_night_care/set',
+                    name: 'Smart care - night care',
+                    icon: 'mdi:weather-night',
+                    entity_category: 'config',
+                },
             },
         })
 
@@ -366,7 +391,7 @@ export default class Device extends AABBDevice {
         log(
             'status',
             this.id,
-            'ST_R_ETH01Y_ (스타일러) handler started - power, course select, start, smart care fine dust/humidity; see file header',
+            'ST_R_ETH01Y_ (스타일러) handler started - power, course select, start, smart care fine dust/humidity/night care; see file header',
         )
     }
 
@@ -392,6 +417,13 @@ export default class Device extends AABBDevice {
                 this.send(buildSettingsWrite([[KEY_SMART_CARE_HUMIDITY, on ? 1 : 0]]))
                 // Optimistic - see the file header's SMART CARE - HUMIDITY section.
                 this.publishProperty('smart_care_humidity', on ? 'ON' : 'OFF')
+                return
+            }
+            case 'smart_care_night_care': {
+                const on = mqttValue === 'ON'
+                this.send(buildSettingsWrite([[KEY_SMART_CARE_NIGHT_CARE, on ? 1 : 0]]))
+                // Optimistic - see the file header's SMART CARE - NIGHT CARE ON/OFF section.
+                this.publishProperty('smart_care_night_care', on ? 'ON' : 'OFF')
                 return
             }
             case 'course': {

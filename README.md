@@ -27,7 +27,7 @@ dryer/dehumidifier/hood/styler models) this fork branched from, see upstream
 - Dryers:
     - 🫤 RD20_S - power, drum light auto-on (writable), remaining time, reservation, alarm volume, remote-control/button-lock/drum-light/anti-wrinkle/ironing-alert state, and this-cycle/hour/day/month energy all mapped. Speaks the same key-value protocol as FX\_\_\_S (not an AABB fixed-offset-record protocol some other dryers use). Course/option selection (writing a course) is the one gap left - state reading is otherwise thorough.
 - Stylers:
-    - 🫤 ST_R_ETH01Y\_ - power, course-select (23 of the full course list confirmed and named) and course-start all mapped against a real unit. Live running-status/remaining-time/error reading is not yet decoded - `duration_minutes` is the selected course's own length, not a countdown.
+    - 🫤 ST_R_ETH01Y\_ - power, course-select (23 of the full course list confirmed and named), course-start, and the three smart-care toggles (fine dust/humidity/night care - the night-care time window itself is not yet writable) all mapped against a real unit. Live running-status/remaining-time/error reading is not yet decoded - `duration_minutes` is the selected course's own length, not a countdown.
 - Mini washers:
     - 🫤 MI2D7B (미니워시) - power, remaining time (candidate), and this-cycle/hour/day/month energy mapped. This model has no "send to appliance" button in the LG app at all, so its course/option state can't be captured remotely without physically arming remote-start on the unit first.
 - Dishwashers:
