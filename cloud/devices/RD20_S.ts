@@ -301,6 +301,12 @@ function buildSettingsWrite(pairs: [key: number, value: number][]): Buffer {
  *  instead. */
 const QUERY_FRAME = Buffer.from('f0ed1211010000010400', 'hex')
 
+/** How often to re-publish the energy calendar buckets even without a new on-device reading, so
+ *  hour/day/month roll over at the wall-clock boundary instead of sitting on a stale figure until
+ *  this idle appliance next happens to report - see energy-accumulator.ts's own header and the
+ *  identical pattern in 2REF21EBNSX_3.ts/3REK2G03VI200S_2.ts. */
+const ENERGY_REFRESH_INTERVAL_MS = 5 * 60 * 1000
+
 export default class Device extends AABBDevice {
     power: boolean | undefined
     status: string | undefined
@@ -312,6 +318,7 @@ export default class Device extends AABBDevice {
 
     /** (dir:tag) pairs already flagged as unrecognised, so a repeating one is noted once. */
     private seenUnknown = new Set<string>()
+    private energyRefreshTimer: ReturnType<typeof setInterval> | undefined
 
     constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
         super(HA, thinq)
@@ -476,12 +483,33 @@ export default class Device extends AABBDevice {
     start() {
         super.start()
         this.send(QUERY_FRAME)
+        void this.refreshEnergyStats()
+        this.energyRefreshTimer = setInterval(() => {
+            void this.refreshEnergyStats()
+        }, ENERGY_REFRESH_INTERVAL_MS)
+    }
+
+    cancelPendingWork() {
+        clearInterval(this.energyRefreshTimer)
+        this.energyRefreshTimer = undefined
+        super.cancelPendingWork()
     }
 
     /** Adds a newly-seen Wh delta (see the file header's ENERGY section) and republishes the
      *  calendar-boundary figures. */
     private async recordEnergyDelta(deltaWh: number) {
         const stats = await energyAccumulator.addDelta(this.id, deltaWh)
+        this.publishProperty('energy_hour', stats.hourWh)
+        this.publishProperty('energy_day', stats.dayWh)
+        this.publishProperty('energy_month', stats.monthWh)
+        this.publishProperty('energy_total', stats.totalWh)
+    }
+
+    /** Rolls the calendar buckets over (without adding a delta) and republishes, so hour/day/month
+     *  reset right at the wall-clock boundary even while this appliance is idle and sending
+     *  nothing energy-related - see ENERGY_REFRESH_INTERVAL_MS above. */
+    private async refreshEnergyStats() {
+        const stats = await energyAccumulator.current(this.id)
         this.publishProperty('energy_hour', stats.hourWh)
         this.publishProperty('energy_day', stats.dayWh)
         this.publishProperty('energy_month', stats.monthWh)
