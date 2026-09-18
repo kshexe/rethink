@@ -253,6 +253,18 @@ describe(MODEL_ID, () => {
         assert.equal(ha.devices[DEVICE_ID].properties.status, 'complete')
     })
 
+    test('status 0x00 publishes power_off, confirmed live against the cloud snapshot API', () => {
+        const { ha, thinq } = makeDevice()
+        // Same shape as STATUS_RUNNING_18_MIN_LEFT with the status byte (buf[89]) forced to 0 -
+        // see the STATUS_NAMES entry's own comment for how this was confirmed (cloud snapshot's
+        // washerDryer.state read POWEROFF at the exact moment this handler's own status read
+        // unknown_0, with the power switch also off).
+        const frame = Buffer.from(STATUS_RUNNING_18_MIN_LEFT)
+        frame[2 + 89] = 0x00
+        thinq.emit('data', frame)
+        assert.equal(ha.devices[DEVICE_ID].properties.status, 'power_off')
+    })
+
     test('an unrecognised status value publishes as unknown_<value> rather than being guessed', () => {
         const { ha, thinq } = makeDevice()
         // Same shape as STATUS_RUNNING_18_MIN_LEFT with the status byte (buf[89]) forced to a

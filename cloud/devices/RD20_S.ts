@@ -287,6 +287,11 @@ const STATUS_NAMES: Record<number, string> = {
     0x41: 'running',
     0x61: 'cooling',
     0x01: 'complete',
+    // Confirmed live 2026-09-18: cross-referenced against the cloud snapshot API
+    // (`GET /bridge/<id>/snapshot`) at the exact moment this read `unknown_0` - the cloud's own
+    // `washerDryer.state` read `POWEROFF` (preState `END`) and this handler's own `power` switch
+    // was off, all three agreeing at once.
+    0x00: 'power_off',
 }
 
 function decodeStatus(raw: number): string {
