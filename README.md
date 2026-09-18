@@ -31,7 +31,7 @@ dryer/dehumidifier/hood/styler models) this fork branched from, see upstream
 - Mini washers:
     - 🫤 MI2D7B (미니워시) - power, remaining time (candidate), and this-cycle/hour/day/month energy mapped. This model has no "send to appliance" button in the LG app at all, so its course/option state can't be captured remotely without physically arming remote-start on the unit first.
 - Dishwashers:
-    - 🫤 H01 - state reading is thorough (course index, cycle duration, reservation delay, extra rinse/high-temp sterilize/intensive wash per rack/steam/hot-air dry all mapped), but course _selection_ (writing a course) is not yet implemented - the reverse of dryer's gap above.
+    - 🫤 H01 - state reading is thorough (course index, cycle duration, reservation delay, extra rinse/high-temp sterilize/intensive wash per rack/steam/hot-air dry all mapped), and the six settings-screen toggles (end melody, air filter reminder, wash-complete indicator light, front time display, auto select, cool dry) are writable - but course _selection_ (writing a course) is not yet implemented, the reverse of dryer's gap above. Settings writes need the appliance powered on; the app itself greys them out while off.
 - Ovens:
     - 👍 ML32PWFOTA (광파오븐/combi oven) - course select, cook time, target temperature, send/cancel, running status, active course, cleaning-function tracking, remaining time and notifications all mapped. Sending a course only ever queues it ("전송 완료") - a physical button press on the oven itself is required to actually start cooking, and this handler has no wire command that starts it remotely.
 

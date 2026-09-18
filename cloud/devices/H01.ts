@@ -70,6 +70,49 @@ import { note as recordNote } from '../frame-recorder'
  * remotely, and the low bits (0x10/0x02) of record[14] (never observed set - likely options this
  * unit's course/panel combination never exercised, e.g. 조용히 세척).
  *
+ * SETTINGS BITFIELD WRITE (captured 2026-09-18): the 설정 screen's six toggles (제품 알림음/
+ * 세척종료음/필터 교체 알림/세척 완료 알림등/전면 시간 표시/자동 설정/보관 - one more than the
+ * screen's own count since 코스자동최적화-style entries live elsewhere) turned out to need the
+ * appliance powered ON to even be clickable in the app at all - every one of them stayed visibly
+ * greyed out while `power` read off, confirmed by turning the unit on for this capture and back
+ * off again afterward. Unlike the F0E5 key-value opcode MI2D7B/RD20_S/ST_R_ETH01Y_ use, this
+ * model's settings write is a **whole-bitfield resend**, not a single key/value pair - every write
+ * carries all six controls' current values, not just the one being changed:
+ *
+ *   to-device   aa 0e f0 26 00 00 <byte4> <byte5> 00 00 00 00 <ck> bb
+ *   from-device aa 08 32 00 26 00 <ck> bb                                (ack, same shape as power's)
+ *
+ * Both directions of all six controls were captured directly (each toggled on a real unit, then
+ * reverted to restore the appliance's original settings). `byte4`/`byte5` bit layout - see
+ * WRITE_* constants below:
+ *
+ *   byte4: 0x08 세척 완료 알림등 · 0x10 전면 시간 표시 · 0x20 자동 설정 · 0x40 세척 종료음 ·
+ *          0x80 보관 (fully accounted for - baseline 0xb8 is exactly these five bits with only
+ *          세척종료음 off, no leftover unknown bits in this byte)
+ *   byte5: 0x02 필터 교체 알림, bit 0x80 always observed set (baseline 0x82) - meaning
+ *          unconfirmed, carried through unchanged on every write rather than guessed at
+ *
+ * The very next 0xEC status frame after each write showed the SAME six settings at different bit
+ * positions within the already-decoded 26-byte record - a different encoding for read vs write,
+ * the same story RD20_S.ts's F0E5 keys vs its own status bits already tell:
+ *
+ *   record[13]: 0x10 자동 설정 · 0x40 세척 완료 알림등
+ *   record[17]: 0x08 전면 시간 표시 - inside the ALREADY-decoded REC_DRY byte. The "0x0b constant
+ *               base (bits 0/1/3), never seen otherwise" note in the file header's original STATUS
+ *               RECORD section was wrong about bit 3 specifically: baseline reads 0x0b with the
+ *               front-time-display default ON, and toggling it off for real lands exactly on 0x03
+ *               (bits 0/1 only) - bit 3 is this setting, not a constant. extra_rinse (0x04) and the
+ *               dry tier (0x30) are unaffected and still decoded the same way they always were.
+ *   record[18]: 0x01 보관 · 0x04 세척 종료음 · 0x10 필터 교체 알림, bits 0x80/0x02 always observed
+ *               set - two more unconfirmed-meaning bits, distinct from byte5's own unknown bit
+ *               above (different byte, no reason to assume they are the same flag)
+ *
+ * Composing a write therefore means reading the CURRENT value of all six controls off the last
+ * status record seen, changing only the one being set, and re-encoding all six into byte4/byte5 -
+ * see sendSettings(). The same pattern FX___S.ts's setReservation()/setExtendedCourse() already
+ * use for their own multi-field resends. If no status record has been seen yet, the write is
+ * skipped rather than sent with fabricated zeros for the other five controls' current state.
+ *
  * POWER READ-BACK - FIRST ATTEMPT, TRIED AND RETRACTED (2026-09-12), SUPERSEDED ABOVE: `buf[28]`
  * of the 0xEC dual-record status frame looked like power at first - reading `0x00` right after
  * OFF and `0x08` right after ON, both directions, driving the switch myself on my.lgthinq.com.
@@ -105,9 +148,42 @@ const OPT_RESERVATION_ARMED = 0x01
 
 const DRY_EXTRA_RINSE_BIT = 0x04
 const DRY_TIER_MINUTES = [0, 40, 60, 90] as const
+/** See the file header's SETTINGS BITFIELD WRITE section - a bit inside the REC_DRY byte above,
+ *  previously lumped into an assumed-constant base. */
+const DRY_TIME_DISPLAY_BIT = 0x08
+
+/** See the file header's SETTINGS BITFIELD WRITE section. */
+const REC_SETTINGS_A = 13
+const SETTINGS_A_AUTO_SELECT = 0x10
+const SETTINGS_A_WASH_COMPLETE_LIGHT = 0x40
+
+/** See the file header's SETTINGS BITFIELD WRITE section. */
+const REC_SETTINGS_B = 18
+const SETTINGS_B_COOL_DRY = 0x01
+const SETTINGS_B_END_MELODY = 0x04
+const SETTINGS_B_AIR_FILTER_REMINDER = 0x10
+
+/** Write-side bit layout for the settings bitfield write - see the file header. Deliberately not
+ *  the same bit positions (or even the same byte groupings) as the SETTINGS_A/B/DRY read-side
+ *  constants above; this protocol's write and read encodings for one setting are not required to
+ *  match each other. */
+const WRITE_WASH_COMPLETE_LIGHT = 0x08
+const WRITE_TIME_DISPLAY = 0x10
+const WRITE_AUTO_SELECT = 0x20
+const WRITE_END_MELODY = 0x40
+const WRITE_COOL_DRY = 0x80
+const WRITE_AIR_FILTER_REMINDER = 0x02
+/** Always observed as 1 (byte5's baseline is 0x82) - meaning unconfirmed, carried through
+ *  unchanged on every write rather than guessed at. */
+const WRITE_BYTE5_UNKNOWN_BIT = 0x80
 
 function buildPowerWrite(on: boolean): Buffer {
     return Buffer.from([0xf0, 0x26, on ? 0x16 : 0x12])
+}
+
+/** See the file header's SETTINGS BITFIELD WRITE section. */
+function buildSettingsWrite(byte4: number, byte5: number): Buffer {
+    return Buffer.from([0xf0, 0x26, 0x00, 0x00, byte4, byte5, 0x00, 0x00, 0x00, 0x00])
 }
 
 /** ACTIVE QUERY (2026-09-12, see RD20_S.ts's identical constant): this fridge-family query frame
@@ -123,6 +199,10 @@ const QUERY_FRAME = Buffer.from('f0ed1211010000010400', 'hex')
 
 export default class Device extends AABBDevice {
     power: boolean | undefined
+
+    /** The most recently seen 26-byte status record (old or new copy, whichever arrived last) -
+     *  see the file header's SETTINGS BITFIELD WRITE section for why a settings write needs this. */
+    private lastRecord: Buffer | undefined
 
     /** (dir:tag) pairs already flagged as unrecognised, so a repeating one is noted once. */
     private seenUnknown = new Set<string>()
@@ -214,11 +294,72 @@ export default class Device extends AABBDevice {
                     device_class: 'duration',
                     unit_of_measurement: 'min',
                 },
+                // See the file header's SETTINGS BITFIELD WRITE section for all six below. Only
+                // writable while the appliance is powered on - confirmed by the app itself greying
+                // these out while off.
+                end_melody: {
+                    platform: 'switch',
+                    unique_id: '$deviceid-end_melody',
+                    state_topic: '$this/end_melody',
+                    command_topic: '$this/end_melody/set',
+                    name: 'End melody',
+                    icon: 'mdi:bell-ring-outline',
+                    entity_category: 'config',
+                },
+                air_filter_reminder: {
+                    platform: 'switch',
+                    unique_id: '$deviceid-air_filter_reminder',
+                    state_topic: '$this/air_filter_reminder',
+                    command_topic: '$this/air_filter_reminder/set',
+                    name: 'Air filter reminder',
+                    icon: 'mdi:air-filter',
+                    entity_category: 'config',
+                },
+                wash_complete_light: {
+                    platform: 'switch',
+                    unique_id: '$deviceid-wash_complete_light',
+                    state_topic: '$this/wash_complete_light',
+                    command_topic: '$this/wash_complete_light/set',
+                    name: 'Wash complete indicator light',
+                    icon: 'mdi:led-on',
+                    entity_category: 'config',
+                },
+                time_display: {
+                    platform: 'switch',
+                    unique_id: '$deviceid-time_display',
+                    state_topic: '$this/time_display',
+                    command_topic: '$this/time_display/set',
+                    name: 'Front time display',
+                    icon: 'mdi:clock-outline',
+                    entity_category: 'config',
+                },
+                auto_select: {
+                    platform: 'switch',
+                    unique_id: '$deviceid-auto_select',
+                    state_topic: '$this/auto_select',
+                    command_topic: '$this/auto_select/set',
+                    name: 'Auto select',
+                    icon: 'mdi:auto-fix',
+                    entity_category: 'config',
+                },
+                cool_dry: {
+                    platform: 'switch',
+                    unique_id: '$deviceid-cool_dry',
+                    state_topic: '$this/cool_dry',
+                    command_topic: '$this/cool_dry/set',
+                    name: 'Cool dry (storage)',
+                    icon: 'mdi:snowflake-melt',
+                    entity_category: 'config',
+                },
             },
         })
 
         this.setConfig(config)
-        log('status', this.id, 'H01 (식기세척기) handler started - see file header for what is decoded')
+        log(
+            'status',
+            this.id,
+            'H01 (식기세척기) handler started - power, six settings toggles; see file header for what is decoded',
+        )
     }
 
     start() {
@@ -236,14 +377,70 @@ export default class Device extends AABBDevice {
                 this.publishProperty('power', on ? 'ON' : 'OFF')
                 return
             }
+            case 'end_melody':
+                return this.setSetting('end_melody', 'endMelody', mqttValue === 'ON')
+            case 'air_filter_reminder':
+                return this.setSetting('air_filter_reminder', 'airFilterReminder', mqttValue === 'ON')
+            case 'wash_complete_light':
+                return this.setSetting('wash_complete_light', 'washCompleteLight', mqttValue === 'ON')
+            case 'time_display':
+                return this.setSetting('time_display', 'timeDisplay', mqttValue === 'ON')
+            case 'auto_select':
+                return this.setSetting('auto_select', 'autoSelect', mqttValue === 'ON')
+            case 'cool_dry':
+                return this.setSetting('cool_dry', 'coolDry', mqttValue === 'ON')
             default:
                 console.warn(`H01: attempting to set unknown property ${prop}`)
         }
     }
 
+    /** Shared by all six settings-bitfield switches - see the file header's SETTINGS BITFIELD
+     *  WRITE section. Composes a full byte4/byte5 write from the last status record seen plus this
+     *  one changed control, then publishes optimistically (the same status record that would
+     *  confirm it also arrives on its own from the appliance's regular chatter, same as MI2D7B.ts/
+     *  RD20_S.ts's unreadable echoes elsewhere - not treated as the source of truth here either,
+     *  to keep this in step with `power`'s own optimistic publish). */
+    private setSetting(
+        prop: string,
+        field: 'endMelody' | 'airFilterReminder' | 'washCompleteLight' | 'timeDisplay' | 'autoSelect' | 'coolDry',
+        on: boolean,
+    ) {
+        const record = this.lastRecord
+        if (!record) {
+            log('status', `${this.id}: ${prop} set before any status record was seen - not sent`)
+            return
+        }
+        const settingsA = record[REC_SETTINGS_A]
+        const dry = record[REC_DRY]
+        const settingsB = record[REC_SETTINGS_B]
+
+        const current = {
+            autoSelect: (settingsA & SETTINGS_A_AUTO_SELECT) !== 0,
+            washCompleteLight: (settingsA & SETTINGS_A_WASH_COMPLETE_LIGHT) !== 0,
+            timeDisplay: (dry & DRY_TIME_DISPLAY_BIT) !== 0,
+            coolDry: (settingsB & SETTINGS_B_COOL_DRY) !== 0,
+            endMelody: (settingsB & SETTINGS_B_END_MELODY) !== 0,
+            airFilterReminder: (settingsB & SETTINGS_B_AIR_FILTER_REMINDER) !== 0,
+        }
+        current[field] = on
+
+        const byte4 =
+            (current.washCompleteLight ? WRITE_WASH_COMPLETE_LIGHT : 0) |
+            (current.timeDisplay ? WRITE_TIME_DISPLAY : 0) |
+            (current.autoSelect ? WRITE_AUTO_SELECT : 0) |
+            (current.endMelody ? WRITE_END_MELODY : 0) |
+            (current.coolDry ? WRITE_COOL_DRY : 0)
+        const byte5 = (current.airFilterReminder ? WRITE_AIR_FILTER_REMINDER : 0) | WRITE_BYTE5_UNKNOWN_BIT
+
+        this.send(buildSettingsWrite(byte4, byte5))
+        this.publishProperty(prop, on ? 'ON' : 'OFF')
+    }
+
     /** Publishes everything decoded from one 26-byte status record - see the file header's STATUS
      *  RECORD section for what each offset means. */
     private publishRecord(record: Buffer) {
+        this.lastRecord = record
+
         const on = record[REC_POWER] === 0x01
         if (on !== this.power) {
             this.power = on
@@ -263,6 +460,16 @@ export default class Device extends AABBDevice {
         const dry = record[REC_DRY]
         this.publishProperty('extra_rinse', dry & DRY_EXTRA_RINSE_BIT ? 'ON' : 'OFF')
         this.publishProperty('hot_air_dry_minutes', DRY_TIER_MINUTES[(dry >> 4) & 0x03])
+        this.publishProperty('time_display', dry & DRY_TIME_DISPLAY_BIT ? 'ON' : 'OFF')
+
+        const settingsA = record[REC_SETTINGS_A]
+        this.publishProperty('auto_select', settingsA & SETTINGS_A_AUTO_SELECT ? 'ON' : 'OFF')
+        this.publishProperty('wash_complete_light', settingsA & SETTINGS_A_WASH_COMPLETE_LIGHT ? 'ON' : 'OFF')
+
+        const settingsB = record[REC_SETTINGS_B]
+        this.publishProperty('cool_dry', settingsB & SETTINGS_B_COOL_DRY ? 'ON' : 'OFF')
+        this.publishProperty('end_melody', settingsB & SETTINGS_B_END_MELODY ? 'ON' : 'OFF')
+        this.publishProperty('air_filter_reminder', settingsB & SETTINGS_B_AIR_FILTER_REMINDER ? 'ON' : 'OFF')
     }
 
     processAABB(buf: Buffer) {

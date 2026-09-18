@@ -27,6 +27,38 @@ const STATUS_EC_STANDARD_55MIN = buf(
 // "표준" (55분) as its last-used course.
 const STATUS_EB_OFF_55MIN = buf('aa2032eb001804000000370000000100000200000002805f00000000000c7fbb')
 
+/*
+ * Real 0xEC status frames bracketing each of the six settings toggles, captured 2026-09-18
+ * clicking each one in turn on the 설정 screen (appliance powered on first - see H01.ts's file
+ * header SETTINGS BITFIELD WRITE section for why that is required) and reverting it afterward.
+ * Each pair's OLD record is the state right before that one write, the NEW record is right after -
+ * the isolation technique this fork uses throughout, one control at a time.
+ */
+const SETTINGS_END_MELODY_ON = buf(
+    'aa3a32ec00180100000037050000370000500000000b935f00000000000c' +
+        '00180100000037050000370000500000000b975f00000000000c85bb',
+)
+const SETTINGS_AIR_FILTER_OFF = buf(
+    'aa3a32ec00180100000037050000370000500000000b935f00000000000c' +
+        '00180100000037050000370000500000000b835f00000000000ce9bb',
+)
+const SETTINGS_WASH_COMPLETE_LIGHT_OFF = buf(
+    'aa3a32ec00180100000037050000370000500000000b935f00000000000c' +
+        '00180100000037050000370000100000000b935f00000000000cd9bb',
+)
+const SETTINGS_TIME_DISPLAY_OFF = buf(
+    'aa3a32ec00180100000037050000370000500000000b935f00000000000c' +
+        '001801000000370500003700005000000003935f00000000000c91bb',
+)
+const SETTINGS_AUTO_SELECT_OFF = buf(
+    'aa3a32ec00180100000037050000370000500000000b935f00000000000c' +
+        '00180100000037050000370000400000000b935f00000000000ce9bb',
+)
+const SETTINGS_COOL_DRY_OFF = buf(
+    'aa3a32ec00180100000037050000370000500000000b935f00000000000c' +
+        '00180100000037050000370000500000000b925f00000000000c9ebb',
+)
+
 function makeDevice() {
     const ha = new MockHAConnection()
     const thinq = new MockThinq2Device(DEVICE_ID, META)
@@ -35,7 +67,7 @@ function makeDevice() {
 }
 
 describe(MODEL_ID, () => {
-    test('declares power as the only writable component; the rest are read-only sensors', () => {
+    test('declares power and the six settings toggles as writable; the rest are read-only sensors', () => {
         const { ha } = makeDevice()
         const components = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
         assert.deepEqual(Object.keys(components), [
@@ -49,10 +81,27 @@ describe(MODEL_ID, () => {
             'high_temp_sterilize',
             'extra_rinse',
             'hot_air_dry_minutes',
+            'end_melody',
+            'air_filter_reminder',
+            'wash_complete_light',
+            'time_display',
+            'auto_select',
+            'cool_dry',
         ])
-        assert.equal(components.power.command_topic, '$this/power/set')
+        const writable = [
+            'power',
+            'end_melody',
+            'air_filter_reminder',
+            'wash_complete_light',
+            'time_display',
+            'auto_select',
+            'cool_dry',
+        ]
+        for (const key of writable) {
+            assert.equal(components[key].command_topic, `$this/${key}/set`, `${key} has a command_topic`)
+        }
         for (const key of Object.keys(components)) {
-            if (key === 'power') continue
+            if (writable.includes(key)) continue
             assert.equal(components[key].command_topic, undefined, `${key} has no command_topic`)
         }
     })
@@ -98,6 +147,13 @@ describe(MODEL_ID, () => {
         assert.equal(props.high_temp_sterilize, 'OFF')
         assert.equal(props.extra_rinse, 'OFF')
         assert.equal(props.hot_air_dry_minutes, 0)
+        // See the file header's SETTINGS BITFIELD WRITE section - this fixture's baseline state.
+        assert.equal(props.auto_select, 'ON')
+        assert.equal(props.wash_complete_light, 'ON')
+        assert.equal(props.time_display, 'ON')
+        assert.equal(props.cool_dry, 'ON')
+        assert.equal(props.end_melody, 'OFF')
+        assert.equal(props.air_filter_reminder, 'ON')
     })
 
     test('a real 0xEB query response decodes the same way as an 0xEC record', () => {
@@ -107,5 +163,71 @@ describe(MODEL_ID, () => {
         assert.equal(props.power, 'OFF')
         assert.equal(props.duration_minutes, 55)
         assert.equal(props.course_index, 0)
+    })
+
+    describe('the six settings toggles', () => {
+        // Each real capture below is the frame right after turning that one control off, with
+        // every other control left at the STATUS_EC_STANDARD_55MIN baseline (auto_select/
+        // wash_complete_light/time_display/cool_dry/air_filter_reminder all ON, end_melody OFF) -
+        // see H01.ts's file header SETTINGS BITFIELD WRITE section.
+        const cases: [string, ReturnType<typeof buf>, string][] = [
+            ['end_melody', SETTINGS_END_MELODY_ON, 'ON'],
+            ['air_filter_reminder', SETTINGS_AIR_FILTER_OFF, 'OFF'],
+            ['wash_complete_light', SETTINGS_WASH_COMPLETE_LIGHT_OFF, 'OFF'],
+            ['time_display', SETTINGS_TIME_DISPLAY_OFF, 'OFF'],
+            ['auto_select', SETTINGS_AUTO_SELECT_OFF, 'OFF'],
+            ['cool_dry', SETTINGS_COOL_DRY_OFF, 'OFF'],
+        ]
+        for (const [prop, frame, want] of cases) {
+            test(`${prop} reads ${want} off a real captured status frame, siblings unaffected`, () => {
+                const { ha, thinq } = makeDevice()
+                thinq.emit('data', frame)
+                assert.equal(ha.devices[DEVICE_ID].properties[prop], want)
+            })
+        }
+
+        test('a settings write is not sent before any status record has been seen', () => {
+            const { thinq, dev } = makeDevice()
+            thinq.resetRecorder()
+            dev.setProperty('auto_select', 'OFF')
+            assert.equal(thinq.outbox.length, 0)
+        })
+
+        test('each settings write reproduces the captured frame byte for byte, both directions', () => {
+            // All twelve reproduce real captures against the STATUS_EC_STANDARD_55MIN baseline
+            // (byte4=0xb8/byte5=0x82) exactly, whichever one control changes for that write - see
+            // H01.ts's file header.
+            const writeCases: [string, string, string][] = [
+                ['end_melody', 'ON', 'aa0ef0260000f882000000001dbb'],
+                ['end_melody', 'OFF', 'aa0ef0260000b882000000005dbb'],
+                ['air_filter_reminder', 'OFF', 'aa0ef0260000b8800000000053bb'],
+                ['air_filter_reminder', 'ON', 'aa0ef0260000b882000000005dbb'],
+                ['wash_complete_light', 'OFF', 'aa0ef0260000b0820000000055bb'],
+                ['wash_complete_light', 'ON', 'aa0ef0260000b882000000005dbb'],
+                ['time_display', 'OFF', 'aa0ef0260000a88200000000adbb'],
+                ['time_display', 'ON', 'aa0ef0260000b882000000005dbb'],
+                ['auto_select', 'OFF', 'aa0ef0260000988200000000bdbb'],
+                ['auto_select', 'ON', 'aa0ef0260000b882000000005dbb'],
+                ['cool_dry', 'OFF', 'aa0ef0260000388200000000ddbb'],
+                ['cool_dry', 'ON', 'aa0ef0260000b882000000005dbb'],
+            ]
+            for (const [prop, value, want] of writeCases) {
+                const { thinq, dev } = makeDevice()
+                thinq.emit('data', STATUS_EC_STANDARD_55MIN)
+                thinq.resetRecorder()
+                dev.setProperty(prop, value)
+                assert.equal(thinq.outbox.length, 1, `${prop}=${value} sent one frame`)
+                assert.equal(thinq.outbox[0].toString('hex'), want, `${prop}=${value}`)
+            }
+        })
+
+        test('a settings write is published optimistically as soon as it is set', () => {
+            const { ha, thinq, dev } = makeDevice()
+            thinq.emit('data', STATUS_EC_STANDARD_55MIN)
+            dev.setProperty('cool_dry', 'OFF')
+            assert.equal(ha.devices[DEVICE_ID].properties.cool_dry, 'OFF')
+            dev.setProperty('cool_dry', 'ON')
+            assert.equal(ha.devices[DEVICE_ID].properties.cool_dry, 'ON')
+        })
     })
 })
