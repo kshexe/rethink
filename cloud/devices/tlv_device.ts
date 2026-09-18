@@ -279,9 +279,14 @@ export default class TLVDevice extends HADevice {
     }
 
     /** Set while a bridge-relayed command (see inspectOutboundTLV) has a confirmatory query
-     *  outstanding, so a burst of several relayed writes in a row (the real app resending a
-     *  command that hasn't been acked yet, the same retry pattern captured live 2026-09-18 - see
-     *  inspectOutboundTLV's own comment) schedules one query, not one per write. */
+     *  outstanding, so writes landing within the same ~1.5s window collapse into that one query
+     *  rather than each scheduling their own. This does NOT collapse a whole retry burst down to
+     *  one call - the six retries captured live 2026-09-18 were mostly 2-8s apart, well outside
+     *  the window, and still produced four separate queries over the ~15s span. That is fine: a
+     *  query is cheap, and more of them just means more chances to catch the real state sooner.
+     *  The debounce only exists to avoid firing one per write when several land within
+     *  milliseconds of each other (the LG cloud/app double-sending, say), not to throttle a
+     *  spread-out burst down to a single confirmatory read. */
     private pendingBridgeRefresh: ReturnType<typeof setTimeout> | undefined
 
     /** A values-write frame going out to the appliance: `b0 b1 04 00 00 00 65 02 <b3> <b4>
