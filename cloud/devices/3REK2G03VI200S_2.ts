@@ -306,6 +306,7 @@ export default class Device extends AABBDevice {
     /** (dir:tag) pairs already flagged as unrecognised, so a repeating one is noted once. */
     private seenUnknown = new Set<string>()
     private queryTimer: ReturnType<typeof setInterval> | undefined
+    private cancelEnergyRefresh: (() => void) | undefined
 
     constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
         super(HA, thinq)
@@ -440,16 +441,19 @@ export default class Device extends AABBDevice {
     start() {
         super.start()
         this.query()
-        void this.refreshEnergyStats()
         this.queryTimer = setInterval(() => {
             this.query()
-            void this.refreshEnergyStats()
         }, QUERY_INTERVAL_MS)
+        this.cancelEnergyRefresh = energyAccumulator.scheduleHourlyRefresh(this.id, (stats) =>
+            this.publishEnergyStats(stats),
+        )
     }
 
     cancelPendingWork() {
         clearInterval(this.queryTimer)
         this.queryTimer = undefined
+        this.cancelEnergyRefresh?.()
+        this.cancelEnergyRefresh = undefined
         super.cancelPendingWork()
     }
 
@@ -467,18 +471,10 @@ export default class Device extends AABBDevice {
     /** Adds a newly-seen Wh delta (see the file header's ENERGY COUNTER/UNIT CONFIRMED sections)
      *  and republishes the calendar-boundary figures. */
     private async recordEnergyDelta(deltaWh: number) {
-        const stats = await energyAccumulator.addDelta(this.id, deltaWh)
-        this.publishProperty('energy_hour', stats.hourWh)
-        this.publishProperty('energy_day', stats.dayWh)
-        this.publishProperty('energy_month', stats.monthWh)
-        this.publishProperty('energy_total', stats.totalWh)
+        this.publishEnergyStats(await energyAccumulator.addDelta(this.id, deltaWh))
     }
 
-    /** Rolls the calendar buckets over (without adding a delta) and republishes, so a poll that
-     *  finds nothing new still keeps hour/day/month current instead of carrying a stale figure
-     *  into the new hour/day/month. */
-    private async refreshEnergyStats() {
-        const stats = await energyAccumulator.current(this.id)
+    private publishEnergyStats(stats: energyAccumulator.EnergyStats) {
         this.publishProperty('energy_hour', stats.hourWh)
         this.publishProperty('energy_day', stats.dayWh)
         this.publishProperty('energy_month', stats.monthWh)

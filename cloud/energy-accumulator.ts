@@ -150,3 +150,42 @@ export async function addDelta(id: string, deltaWh: number, now = Date.now()): P
 export async function current(id: string, now = Date.now()): Promise<EnergyStats> {
     return roll(id, now)
 }
+
+const HOUR_MS = 60 * 60 * 1000
+
+/** ms from `now` to the next wall-clock hour boundary. Asia/Seoul carries no DST and sits at a
+ *  whole-hour UTC offset (+09:00), so "top of the hour" falls on the same instant in Seoul time
+ *  as in UTC - plain epoch-ms arithmetic is enough, no timezone conversion needed here (`roll()`
+ *  does that part, from the `now` this passes it). */
+function msUntilNextHour(now: number): number {
+    return HOUR_MS - (now % HOUR_MS)
+}
+
+/**
+ * Rolls `id`'s calendar buckets right at every wall-clock hour boundary (not on some fixed
+ * polling cadence that can leave hour/day/month sitting on a stale figure for however long until
+ * the next poll happens to land) and calls `onRoll` with the fresh figures - including once
+ * immediately, so a just-started device publishes current numbers straight away instead of
+ * waiting out its first hour. Every hour boundary is also checked as a possible day/month
+ * boundary (`roll()` tests both independently), so one hourly firing is all three buckets need -
+ * nothing coarser than an hour ever needs its own schedule.
+ *
+ * Returns a canceller; call it from the device's own `cancelPendingWork()`.
+ */
+export function scheduleHourlyRefresh(id: string, onRoll: (stats: EnergyStats) => void): () => void {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let cancelled = false
+
+    async function fire(): Promise<void> {
+        if (cancelled) return
+        onRoll(await current(id))
+        if (cancelled) return
+        timer = setTimeout(() => void fire(), msUntilNextHour(Date.now()))
+    }
+
+    void fire()
+    return () => {
+        cancelled = true
+        clearTimeout(timer)
+    }
+}
