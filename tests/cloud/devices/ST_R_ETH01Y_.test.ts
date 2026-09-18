@@ -67,11 +67,13 @@ describe(MODEL_ID, () => {
             'duration_minutes',
             'notification',
             'power',
+            'smart_care_fine_dust',
             'start',
         ])
         assert.equal(components.power.command_topic, '$this/power/set')
         assert.equal(components.course.command_topic, '$this/course/set')
         assert.equal(components.start.command_topic, '$this/start/set')
+        assert.equal(components.smart_care_fine_dust.command_topic, '$this/smart_care_fine_dust/set')
         assert.equal(components.active_course.command_topic, undefined)
         assert.equal(components.duration_minutes.command_topic, undefined)
     })
@@ -160,6 +162,27 @@ describe(MODEL_ID, () => {
         assert.equal(ha.devices[DEVICE_ID].properties.power, 'OFF')
         thinq.emit('data', POWER_ON_ECHO)
         assert.equal(ha.devices[DEVICE_ID].properties.power, 'OFF')
+    })
+
+    test('smart_care_fine_dust write reproduces the captured frame byte for byte, both directions', () => {
+        for (const [value, want] of [
+            ['ON', 'aa0df0e5000201ff011c01f9bb'],
+            ['OFF', 'aa0df0e5000201ff011c00febb'],
+        ] as [string, string][]) {
+            const { thinq, dev } = makeDevice()
+            thinq.resetRecorder()
+            dev.setProperty('smart_care_fine_dust', value)
+            assert.equal(thinq.outbox.length, 1, `smart_care_fine_dust=${value} sent one frame`)
+            assert.equal(thinq.outbox[0].toString('hex'), want, `smart_care_fine_dust=${value}`)
+        }
+    })
+
+    test('smart_care_fine_dust is published optimistically as soon as it is set, not waiting on a device echo', () => {
+        const { ha, dev } = makeDevice()
+        dev.setProperty('smart_care_fine_dust', 'ON')
+        assert.equal(ha.devices[DEVICE_ID].properties.smart_care_fine_dust, 'ON')
+        dev.setProperty('smart_care_fine_dust', 'OFF')
+        assert.equal(ha.devices[DEVICE_ID].properties.smart_care_fine_dust, 'OFF')
     })
 
     test('the ack frame is accepted and publishes nothing', () => {

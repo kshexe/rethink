@@ -154,6 +154,26 @@ import { note as recordNote } from '../frame-recorder'
  * reasons) could not isolate a specific flag byte - unresolved, needs a live one-variable-at-a-time
  * reproduction (or another real fault) to pin down, the same way the regular fridge's per-fault
  * codes remain unresolved.
+ *
+ * SMART CARE - FINE DUST (captured 2026-09-18): the app's 설정 -> 스마트케어 screen ("미세먼지
+ * 맞춤" - runs the moving hanger harder when today's fine dust/PM2.5 reading is "매우 나쁨" or
+ * worse), cloud capability `stylerSmartCareFineDust.setSmartCareFineDust`. Same F0E5 opcode family
+ * as everything else in this file, a key not seen anywhere else in this file's own captures or
+ * FX___S's/RD20_S's vocabulary:
+ *
+ *   to-device   aa 0d f0 e5 00 02 01 ff 01 1c 01 <ck> bb   (on)
+ *   to-device   aa 0d f0 e5 00 02 01 ff 01 1c 00 <ck> bb   (off)
+ *   from-device aa 08 31 00 e5 00 <ck> bb                 (ack both times, same shape as power's)
+ *
+ * Both directions captured directly (toggled on, then off again to restore the appliance's prior
+ * setting). Published optimistically, matching `power` - the appliance was not run through a full
+ * fine-dust-triggered cycle to look for a live readback bit, and this being a "today's weather"
+ * condition rather than a discrete state change makes one hard to isolate cleanly even if there is
+ * one, the same reasoning FX___S.ts's own drum_light_auto capture gives for not chasing it either.
+ *
+ * The smart-care screen has two more toggles not yet captured: "습도 맞춤" (stylerSmartCareHumidity)
+ * and "조용히" (stylerSmartCareNightCare, a start/end time range rather than a plain switch) - left
+ * for a future pass rather than guessed at.
  */
 
 const FROM_DEVICE_ACK_OPCODE = 0xe5
@@ -166,6 +186,8 @@ const KEY_COURSE = 0x0a
 const KEY_RESERVE = 0x7f
 /** Always 0x00 in every capture so far; meaning unconfirmed, reproduced literally. */
 const KEY_UNKNOWN_23 = 0x23
+/** See the file header's SMART CARE - FINE DUST section. */
+const KEY_SMART_CARE_FINE_DUST = 0x1c
 
 /** See the file header's STATUS RECORD section - the MSG_TUNNEL envelope FX___S.ts documents,
  *  reused here just for the record split (this handler does not otherwise parse the record). */
@@ -301,12 +323,26 @@ export default class Device extends AABBDevice {
                     name: 'Notification',
                     icon: 'mdi:bell-ring-outline',
                 },
+                // See the file header's SMART CARE - FINE DUST section.
+                smart_care_fine_dust: {
+                    platform: 'switch',
+                    unique_id: '$deviceid-smart_care_fine_dust',
+                    state_topic: '$this/smart_care_fine_dust',
+                    command_topic: '$this/smart_care_fine_dust/set',
+                    name: 'Smart care - fine dust',
+                    icon: 'mdi:weather-hazy',
+                    entity_category: 'config',
+                },
             },
         })
 
         this.setConfig(config)
         this.publishProperty('course', COURSE_BY_ID[this.selectedCourse])
-        log('status', this.id, 'ST_R_ETH01Y_ (스타일러) handler started - power, course select, start; see file header')
+        log(
+            'status',
+            this.id,
+            'ST_R_ETH01Y_ (스타일러) handler started - power, course select, start, smart care fine dust; see file header',
+        )
     }
 
     setProperty(prop: string, mqttValue: string) {
@@ -317,6 +353,13 @@ export default class Device extends AABBDevice {
                 // Optimistic - see the file header for why the echo is not read back off the wire.
                 this.power = on
                 this.publishProperty('power', on ? 'ON' : 'OFF')
+                return
+            }
+            case 'smart_care_fine_dust': {
+                const on = mqttValue === 'ON'
+                this.send(buildSettingsWrite([[KEY_SMART_CARE_FINE_DUST, on ? 1 : 0]]))
+                // Optimistic - see the file header's SMART CARE - FINE DUST section.
+                this.publishProperty('smart_care_fine_dust', on ? 'ON' : 'OFF')
                 return
             }
             case 'course': {
