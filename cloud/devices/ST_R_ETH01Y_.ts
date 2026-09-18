@@ -171,9 +171,22 @@ import { note as recordNote } from '../frame-recorder'
  * condition rather than a discrete state change makes one hard to isolate cleanly even if there is
  * one, the same reasoning FX___S.ts's own drum_light_auto capture gives for not chasing it either.
  *
- * The smart-care screen has two more toggles not yet captured: "습도 맞춤" (stylerSmartCareHumidity)
- * and "조용히" (stylerSmartCareNightCare, a start/end time range rather than a plain switch) - left
- * for a future pass rather than guessed at.
+ * SMART CARE - HUMIDITY (captured 2026-09-18, same pass as FINE DUST above): "습도 맞춤" (extends
+ * the drying time on humid days), cloud capability `stylerSmartCareHumidity.setSmartCareHumidity`.
+ * Same opcode, key 0x1b - a coincidental reuse of RD20_S.ts's/FX___S.ts's own KEY_DRUM_LIGHT_AUTO
+ * key number for a completely unrelated setting on this model; this protocol's key numbering is
+ * evidently assigned per model firmware, not from one shared global namespace, so the same byte
+ * value meaning different things on different models is expected rather than a bug to chase:
+ *
+ *   to-device   aa 0d f0 e5 00 02 01 ff 01 1b 01 <ck> bb   (on)
+ *   to-device   aa 0d f0 e5 00 02 01 ff 01 1b 00 <ck> bb   (off)
+ *
+ * Both directions captured directly (toggled on, then off again). Optimistic, same reasoning as
+ * FINE DUST above.
+ *
+ * The smart-care screen has one more toggle not yet captured: "조용히" (stylerSmartCareNightCare,
+ * a start/end time range rather than a plain switch) - left for a future pass rather than guessed
+ * at.
  */
 
 const FROM_DEVICE_ACK_OPCODE = 0xe5
@@ -188,6 +201,8 @@ const KEY_RESERVE = 0x7f
 const KEY_UNKNOWN_23 = 0x23
 /** See the file header's SMART CARE - FINE DUST section. */
 const KEY_SMART_CARE_FINE_DUST = 0x1c
+/** See the file header's SMART CARE - HUMIDITY section. */
+const KEY_SMART_CARE_HUMIDITY = 0x1b
 
 /** See the file header's STATUS RECORD section - the MSG_TUNNEL envelope FX___S.ts documents,
  *  reused here just for the record split (this handler does not otherwise parse the record). */
@@ -333,6 +348,16 @@ export default class Device extends AABBDevice {
                     icon: 'mdi:weather-hazy',
                     entity_category: 'config',
                 },
+                // See the file header's SMART CARE - HUMIDITY section.
+                smart_care_humidity: {
+                    platform: 'switch',
+                    unique_id: '$deviceid-smart_care_humidity',
+                    state_topic: '$this/smart_care_humidity',
+                    command_topic: '$this/smart_care_humidity/set',
+                    name: 'Smart care - humidity',
+                    icon: 'mdi:water-percent',
+                    entity_category: 'config',
+                },
             },
         })
 
@@ -341,7 +366,7 @@ export default class Device extends AABBDevice {
         log(
             'status',
             this.id,
-            'ST_R_ETH01Y_ (스타일러) handler started - power, course select, start, smart care fine dust; see file header',
+            'ST_R_ETH01Y_ (스타일러) handler started - power, course select, start, smart care fine dust/humidity; see file header',
         )
     }
 
@@ -360,6 +385,13 @@ export default class Device extends AABBDevice {
                 this.send(buildSettingsWrite([[KEY_SMART_CARE_FINE_DUST, on ? 1 : 0]]))
                 // Optimistic - see the file header's SMART CARE - FINE DUST section.
                 this.publishProperty('smart_care_fine_dust', on ? 'ON' : 'OFF')
+                return
+            }
+            case 'smart_care_humidity': {
+                const on = mqttValue === 'ON'
+                this.send(buildSettingsWrite([[KEY_SMART_CARE_HUMIDITY, on ? 1 : 0]]))
+                // Optimistic - see the file header's SMART CARE - HUMIDITY section.
+                this.publishProperty('smart_care_humidity', on ? 'ON' : 'OFF')
                 return
             }
             case 'course': {
