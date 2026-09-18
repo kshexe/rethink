@@ -158,6 +158,12 @@ import * as energyAccumulator from '../energy-accumulator'
  * large for a ~5-10s report interval (`ENERGY_MAX_PLAUSIBLE_DELTA`) rather than trying to detect the
  * gap directly. Feeds `energy-accumulator.ts` the same way 3REK2G03VI200S_2.ts/FX___S.ts do.
  *
+ * `energy` (added later, same decode): the same confirmed 1058 Wh cycle above is also exactly what
+ * summing every plausible delta since the last reset reconstructs, so that running sum is
+ * published as its own "Energy this cycle" entity - the dryer's equivalent of FX___S.ts's `energy`
+ * component, which this was modelled on directly. See `cycleEnergyWh`'s own comment for exactly
+ * how it is kept in step with the same delta computation the calendar buckets already use.
+ *
  * ALARM VOLUME, FEATURE FLAGS, RESERVATION MINUTES, AND `STATUS`'S OWN SECOND JOB (decoded
  * 2026-09-14, live one-control-at-a-time testing while idle, each confirmed by an on/off/value
  * round trip unless noted - and see the CORRECTION note right below, an offset bug in the
@@ -310,6 +316,14 @@ export default class Device extends AABBDevice {
      *  header's ENERGY section. `undefined` until the first status frame arrives. */
     private lastEnergyRaw: number | undefined
 
+    /** Unwrapped running total for the cycle in progress - see the file header's ENERGY section
+     *  for why summing the same wrap-safe delta this already computes for the calendar buckets
+     *  reconstructs it exactly (confirmed against the app's own 1058 Wh for one real cycle).
+     *  Reset to the raw byte's own value whenever a delta reads as a cycle-boundary reset rather
+     *  than real consumption - which also seeds it correctly for a device just joining mid-cycle,
+     *  since the raw byte already reads as Wh-so-far on its own below 256. */
+    private cycleEnergyWh: number | undefined
+
     /** (dir:tag) pairs already flagged as unrecognised, so a repeating one is noted once. */
     private seenUnknown = new Set<string>()
     private energy: energyAccumulator.EnergyTracker | undefined
@@ -345,6 +359,19 @@ export default class Device extends AABBDevice {
                     state_topic: '$this/status',
                     name: 'Status',
                     icon: 'mdi:tumble-dryer',
+                },
+                // The unwrapped raw byte, reconstructed across its mod-256 rolls - see the file
+                // header's ENERGY section and cycleEnergyWh's own comment. Mirrors FX___S.ts's
+                // "Energy this cycle" - same shape, same name, same idea, different appliance.
+                energy: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-energy',
+                    name: 'Energy this cycle',
+                    icon: 'mdi:lightning-bolt',
+                    device_class: 'energy',
+                    unit_of_measurement: 'Wh',
+                    state_class: 'total_increasing',
+                    state_topic: '$this/energy',
                 },
                 // Calendar-boundary Wh figures fed by the file header's ENERGY byte, via
                 // energy-accumulator.ts - survive the raw counter's own per-cycle resets.
@@ -541,13 +568,23 @@ export default class Device extends AABBDevice {
 
             // See the file header's ENERGY section - a mod-256 rolling Wh counter, so the delta
             // since the last reading wraps safely; a delta this large in one step can only be a
-            // cycle-boundary reset, not real consumption, and is discarded rather than counted.
+            // cycle-boundary reset, not real consumption, and is discarded rather than counted
+            // toward the calendar buckets - but it does mean a new cycle just started, so
+            // cycleEnergyWh restarts from the raw byte's own value rather than adding onto it.
             const energyRaw = buf[ENERGY_OFFSET]
-            if (this.lastEnergyRaw !== undefined) {
+            if (this.lastEnergyRaw === undefined) {
+                this.cycleEnergyWh = energyRaw
+            } else {
                 const delta = (energyRaw - this.lastEnergyRaw + 256) % 256
-                if (delta > 0 && delta <= ENERGY_MAX_PLAUSIBLE_DELTA) void this.energy?.recordDelta(delta)
+                if (delta > 0 && delta <= ENERGY_MAX_PLAUSIBLE_DELTA) {
+                    void this.energy?.recordDelta(delta)
+                    this.cycleEnergyWh = (this.cycleEnergyWh ?? 0) + delta
+                } else if (delta > ENERGY_MAX_PLAUSIBLE_DELTA) {
+                    this.cycleEnergyWh = energyRaw
+                }
             }
             this.lastEnergyRaw = energyRaw
+            this.publishProperty('energy', this.cycleEnergyWh)
 
             // See the file header's decoded-2026-09-14 section - only meaningful while idle
             // (STATUS is not one of the three running-family values); not published otherwise,

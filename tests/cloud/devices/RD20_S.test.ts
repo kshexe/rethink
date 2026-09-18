@@ -165,6 +165,7 @@ describe(MODEL_ID, () => {
             'power',
             'remaining_minutes',
             'status',
+            'energy',
             'energy_hour',
             'energy_day',
             'energy_month',
@@ -268,10 +269,14 @@ describe(MODEL_ID, () => {
         thinq.emit('data', ENERGY_0WH)
         await settle()
         assert.equal(ha.devices['energy-test-1'].properties.energy_hour, 0)
+        // The raw byte itself (0) seeds cycleEnergyWh on this first frame - see the file header's
+        // ENERGY section and cycleEnergyWh's own comment.
+        assert.equal(ha.devices['energy-test-1'].properties.energy, 0)
         // The second frame's buf[81] reads 1 - a plausible +1 Wh step - so this one publishes.
         thinq.emit('data', ENERGY_1WH)
         await settle()
         assert.equal(ha.devices['energy-test-1'].properties.energy_hour, 1)
+        assert.equal(ha.devices['energy-test-1'].properties.energy, 1, 'this-cycle total tracks the same step')
     })
 
     test('a large jump in the energy byte (cycle-boundary reset) is discarded, not counted', async () => {
@@ -290,6 +295,10 @@ describe(MODEL_ID, () => {
         // above) rather than jumping to 200 - proving the implausible delta was discarded, not
         // that nothing was ever published.
         assert.equal(ha.devices['energy-test-2'].properties.energy_hour, 0)
+        // But the this-cycle total DOES follow it - a jump this large means a new cycle started,
+        // not that 200 Wh landed in one report, so cycleEnergyWh restarts from the raw byte's own
+        // (now-reset) value rather than being discarded like the calendar-bucket delta was.
+        assert.equal(ha.devices['energy-test-2'].properties.energy, 200)
     })
 
     test('notification code 0 publishes drying_is_complete', () => {
