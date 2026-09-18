@@ -146,7 +146,7 @@ import * as energyAccumulator from '../energy-accumulator'
  * 2026-09-12: 02:00 matched exactly (41 computed, 41 shown), 03:00 was 42 vs 40, other hours ±2 -
  * consistent with Wh and with the small mismatch being the ~15-minute sample cadence not lining up
  * with the clock-hour boundary, not a wrong scale. `<delta>` now feeds `energy-accumulator.ts` (see
- * FX___S.ts for the same module used the same way) for hour/day/month/total figures that survive
+ * FX___S.ts for the same module used the same way) for hour/day/month figures that survive
  * the running total's own unpredictable resets; the raw counter above is kept as-is alongside it.
  *
  * NOT YET DECODED, left deliberately unmodelled:
@@ -386,7 +386,7 @@ export default class Device extends AABBDevice {
                 },
                 // Calendar-boundary Wh figures - see energy-accumulator.ts and the file header's
                 // ENERGY COUNTER/UNIT CONFIRMED sections. These survive the raw counter's own
-                // unpredictable resets; energy_total is a lifetime total that only grows.
+                // unpredictable resets.
                 energy_hour: {
                     platform: 'sensor',
                     unique_id: '$deviceid-energy_hour',
@@ -416,16 +416,6 @@ export default class Device extends AABBDevice {
                     unit_of_measurement: 'Wh',
                     state_class: 'total',
                     state_topic: '$this/energy_month',
-                },
-                energy_total: {
-                    platform: 'sensor',
-                    unique_id: '$deviceid-energy_total',
-                    name: 'Energy total',
-                    icon: 'mdi:lightning-bolt',
-                    device_class: 'energy',
-                    unit_of_measurement: 'Wh',
-                    state_class: 'total_increasing',
-                    state_topic: '$this/energy_total',
                 },
             },
         })

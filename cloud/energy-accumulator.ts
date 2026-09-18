@@ -1,16 +1,18 @@
 /*
- * Persistent hour/day/month/total energy (Wh) accounting for appliances whose local protocol only
- * gives us the appliance's own reset-prone figure: a rethink restart or a cloud-bridge reconnect
- * zeroes a fridge's running counter (2REF21EBNSX_3.ts's `energy_raw_counter`,
- * 3REK2G03VI200S_2.ts's energy total both do this - see their own file headers), and a washer's own
- * counter (FX___S.ts) legitimately restarts every cycle by design. None of that is the calendar
- * boundary a "today"/"this month" figure needs.
+ * Persistent hour/day/month energy (Wh) accounting for appliances whose local protocol only gives
+ * us the appliance's own reset-prone figure: a rethink restart or a cloud-bridge reconnect zeroes
+ * a fridge's running counter (2REF21EBNSX_3.ts's `energy_raw_counter`, 3REK2G03VI200S_2.ts's own
+ * counter both do this - see their own file headers), and a washer's own counter (FX___S.ts)
+ * legitimately restarts every cycle by design. None of that is the calendar boundary a
+ * "today"/"this month" figure needs.
  *
  * Callers report each newly-seen Wh delta as it is decoded (deduping repeats of the same on-device
  * report themselves - a report number, an interval key, whatever fits that protocol); this module
- * turns the delta stream into four always-accurate buckets that survive all of the above, one JSON
- * file per device id under /share/rethink/energy/ (browsable the same way frame-recorder's captures
- * are - see cloud/frame-recorder.ts, which this deliberately mirrors the style of).
+ * turns the delta stream into three always-accurate buckets that survive all of the above, one
+ * JSON file per device id under /share/rethink/energy/ (browsable the same way frame-recorder's
+ * captures are - see cloud/frame-recorder.ts, which this deliberately mirrors the style of). No
+ * lifetime total is kept - none of the four callers' own energy_raw_counter-style sensors needed
+ * one badly enough to ask for it back once hour/day/month covered the real need.
  *
  * Calendar boundaries are Asia/Seoul, matching the appliance's own locale for "today"/"this month".
  * Modelled on github.com/plplaaa2/rethink's 2RES2VE300UA2.ts, which solves this exact
@@ -38,7 +40,6 @@ export type EnergyStats = {
     hourWh: number
     dayWh: number
     monthWh: number
-    totalWh: number
 }
 
 const cache = new Map<string, EnergyStats>()
@@ -77,8 +78,11 @@ async function load(id: string): Promise<EnergyStats> {
     if (cached) return cached
 
     const { date, month, hour } = localParts()
-    let stats: EnergyStats = { date, month, hour, hourWh: 0, dayWh: 0, monthWh: 0, totalWh: 0 }
+    let stats: EnergyStats = { date, month, hour, hourWh: 0, dayWh: 0, monthWh: 0 }
     try {
+        // Partial<EnergyStats> rather than the on-disk shape verbatim: an older file may still
+        // carry a totalWh field from before that bucket was dropped, and that's fine to just not
+        // read back - JSON.parse doesn't care, and this type only names what's used again.
         const raw = JSON.parse(await readFile(pathFor(id), 'utf-8')) as Partial<EnergyStats>
         stats = {
             date,
@@ -87,7 +91,6 @@ async function load(id: string): Promise<EnergyStats> {
             hourWh: raw.hour === hour ? Number(raw.hourWh) || 0 : 0,
             dayWh: raw.date === date ? Number(raw.dayWh) || 0 : 0,
             monthWh: raw.month === month ? Number(raw.monthWh) || 0 : 0,
-            totalWh: Number.isFinite(raw.totalWh) ? Number(raw.totalWh) : 0,
         }
     } catch {
         /* first run for this id, or the file is missing/corrupt - start from zero */
@@ -133,13 +136,12 @@ export async function roll(id: string, now = Date.now()): Promise<EnergyStats> {
     return stats
 }
 
-/** Add a newly-seen Wh delta to all four buckets and persist immediately. */
+/** Add a newly-seen Wh delta to all three buckets and persist immediately. */
 export async function addDelta(id: string, deltaWh: number, now = Date.now()): Promise<EnergyStats> {
     const stats = await roll(id, now)
     stats.hourWh += deltaWh
     stats.dayWh += deltaWh
     stats.monthWh += deltaWh
-    stats.totalWh += deltaWh
     cache.set(id, stats)
     await save(id, stats)
     return stats
@@ -195,7 +197,7 @@ export function scheduleHourlyRefresh(id: string, onRoll: (stats: EnergyStats) =
 
 export type EnergyTracker = {
     /** Adds a newly-seen Wh delta (from the appliance's own on-device report) and republishes all
-     *  four buckets immediately. */
+     *  three buckets immediately. */
     recordDelta(deltaWh: number): Promise<void>
     /** Stops the hourly boundary refresh. Call from the device's own `cancelPendingWork()`. */
     cancel: () => void
@@ -203,19 +205,18 @@ export type EnergyTracker = {
 
 /**
  * Every device that tracks energy (RD20_S.ts, FX___S.ts, 2REF21EBNSX_3.ts, 3REK2G03VI200S_2.ts)
- * wired up the same four `energy_hour`/`energy_day`/`energy_month`/`energy_total` components
- * against this module by hand, four times over - the same field, the same `start()`/
- * `cancelPendingWork()` timer plumbing, the same four-line publish block. `attach()` is that
- * wiring written once: call it from `start()` with the device's own `publishProperty`, keep the
- * `EnergyTracker` it returns, call `.recordDelta(wh)` wherever the device decodes a new on-device
- * reading, and call `.cancel()` from `cancelPendingWork()`.
+ * wired up the same three `energy_hour`/`energy_day`/`energy_month` components against this
+ * module by hand, four times over - the same field, the same `start()`/`cancelPendingWork()`
+ * timer plumbing, the same publish block. `attach()` is that wiring written once: call it from
+ * `start()` with the device's own `publishProperty`, keep the `EnergyTracker` it returns, call
+ * `.recordDelta(wh)` wherever the device decodes a new on-device reading, and call `.cancel()`
+ * from `cancelPendingWork()`.
  */
 export function attach(id: string, publish: (property: string, value: number) => void): EnergyTracker {
     function publishAll(stats: EnergyStats) {
         publish('energy_hour', stats.hourWh)
         publish('energy_day', stats.dayWh)
         publish('energy_month', stats.monthWh)
-        publish('energy_total', stats.totalWh)
     }
 
     const cancelRefresh = scheduleHourlyRefresh(id, publishAll)

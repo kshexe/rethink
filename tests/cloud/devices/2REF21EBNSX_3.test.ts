@@ -104,7 +104,6 @@ describe(MODEL_ID, () => {
             'energy_hour',
             'energy_month',
             'energy_raw_counter',
-            'energy_total',
             'express_mode',
             'freezer_door_open',
             'freezer_temp',
@@ -272,7 +271,6 @@ describe(MODEL_ID, () => {
         thinq.emit('data', ENERGY_COUNTER_87)
         await settle()
         assert.equal(ha.devices['energy-test-1'].properties.energy_hour, 80)
-        assert.equal(ha.devices['energy-test-1'].properties.energy_total, 80)
     })
 
     test('a drop in the counter (its own unpredictable reset) is accepted as a new baseline, not a negative delta', async () => {

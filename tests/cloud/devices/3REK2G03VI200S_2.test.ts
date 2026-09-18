@@ -107,7 +107,6 @@ describe(MODEL_ID, () => {
             'energy_day',
             'energy_hour',
             'energy_month',
-            'energy_total',
             'energy_total_counter',
             'middle_compartment',
             'notification',

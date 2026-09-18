@@ -175,7 +175,7 @@ import * as energyAccumulator from '../energy-accumulator'
  * straight off the wire and resets the same way it always has; `<delta>` (this reading minus the
  * last one, or nothing at all across a reset - see processAABB) now also feeds
  * `energy-accumulator.ts` (see 3REK2G03VI200S_2.ts for the same module used the same way) for
- * hour/day/month/total figures that survive those resets.
+ * hour/day/month figures that survive those resets.
  *
  * Original, superseded reasoning kept for the record: comparing this counter's rise across
  * 2026-09-10's own local calendar day (~59-66 units, by the two capture windows nearest to that
@@ -383,8 +383,7 @@ export default class Device extends AABBDevice {
                     state_topic: '$this/energy_raw_counter',
                 },
                 // Calendar-boundary Wh figures - see energy-accumulator.ts and the file header's
-                // ENERGY COUNTER section. These survive the raw counter's own unpredictable
-                // resets; energy_total is a lifetime total that only grows.
+                // ENERGY COUNTER section. These survive the raw counter's own unpredictable resets.
                 energy_hour: {
                     platform: 'sensor',
                     unique_id: '$deviceid-energy_hour',
@@ -414,16 +413,6 @@ export default class Device extends AABBDevice {
                     unit_of_measurement: 'Wh',
                     state_class: 'total',
                     state_topic: '$this/energy_month',
-                },
-                energy_total: {
-                    platform: 'sensor',
-                    unique_id: '$deviceid-energy_total',
-                    name: 'Energy total',
-                    icon: 'mdi:lightning-bolt',
-                    device_class: 'energy',
-                    unit_of_measurement: 'Wh',
-                    state_class: 'total_increasing',
-                    state_topic: '$this/energy_total',
                 },
             },
         })

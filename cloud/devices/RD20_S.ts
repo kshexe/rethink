@@ -378,16 +378,6 @@ export default class Device extends AABBDevice {
                     state_class: 'total_increasing',
                     state_topic: '$this/energy_month',
                 },
-                energy_total: {
-                    platform: 'sensor',
-                    unique_id: '$deviceid-energy_total',
-                    name: 'Energy total',
-                    icon: 'mdi:lightning-bolt',
-                    device_class: 'energy',
-                    unit_of_measurement: 'Wh',
-                    state_class: 'total_increasing',
-                    state_topic: '$this/energy_total',
-                },
                 // See the file header's NOTIFICATION section.
                 notification: {
                     platform: 'event',

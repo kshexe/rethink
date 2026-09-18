@@ -168,7 +168,6 @@ describe(MODEL_ID, () => {
             'energy_hour',
             'energy_day',
             'energy_month',
-            'energy_total',
             'notification',
             'remote_control',
             'drum_light',
@@ -273,7 +272,6 @@ describe(MODEL_ID, () => {
         thinq.emit('data', ENERGY_1WH)
         await settle()
         assert.equal(ha.devices['energy-test-1'].properties.energy_hour, 1)
-        assert.equal(ha.devices['energy-test-1'].properties.energy_total, 1)
     })
 
     test('a large jump in the energy byte (cycle-boundary reset) is discarded, not counted', async () => {

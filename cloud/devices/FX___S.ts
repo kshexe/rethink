@@ -1001,16 +1001,6 @@ export default class Device extends AABBDevice {
                     state_class: 'total',
                     state_topic: '$this/energy_month',
                 },
-                energy_total: {
-                    platform: 'sensor',
-                    unique_id: '$deviceid-energy_total',
-                    name: 'Energy total',
-                    icon: 'mdi:lightning-bolt',
-                    device_class: 'energy',
-                    unit_of_measurement: 'Wh',
-                    state_class: 'total_increasing',
-                    state_topic: '$this/energy_total',
-                },
                 // LOCAL ONLY - not for upstream, by the owner's decision (2026-08-07). Every other
                 // entity here reports something the appliance sends; this one is a set of phase
                 // numbers this handler decided to call "running", and which phases belong in it is a
