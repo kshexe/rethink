@@ -1,13 +1,33 @@
 import { describe, test } from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import DUT from '@/cloud/devices/3REK2G03VI200S_2'
 import type { Metadata } from '@/cloud/thinq'
+import { configure as configureEnergyAccumulator } from '@/cloud/energy-accumulator'
 import { MockHAConnection, MockThinq2Device, buf } from '@/tests/helpers/mocks'
 import { enableMockTimers, tickMockTimers } from '@/tests/helpers/timers'
 
 const DEVICE_ID = 'test-id'
 const MODEL_ID = '3REK2G03VI200S_2'
 const META: Metadata = { modelId: MODEL_ID, modelName: MODEL_ID, swVersion: '1.0' }
+
+/** energy-accumulator.ts persists to disk and caches by device id - point it at a fresh scratch
+ *  dir (which also clears its cache) so this test starts from nothing, the same way
+ *  RD20_S.test.ts/2REF21EBNSX_3.test.ts isolate themselves, and so it never touches the real
+ *  /share/rethink/energy path. */
+function freshEnergyDir() {
+    const dir = mkdtempSync(join(tmpdir(), '3rek2g03vi200s2-energy-test-'))
+    configureEnergyAccumulator(dir)
+    process.on('exit', () => rmSync(dir, { recursive: true, force: true }))
+}
+
+/** recordDelta() is fire-and-forget (`void ...`) from processAABB, so its file I/O has not
+ *  necessarily landed yet the instant `thinq.emit` returns - give it a beat. */
+async function settle() {
+    await new Promise((r) => setTimeout(r, 50))
+}
 
 /*
  * Fixtures. All REAL frames, captured 2026-09-10 by driving my.lgthinq.com directly (Playwright)
@@ -71,9 +91,9 @@ const ENERGY_REPORT_DELTA_16_TOTAL_262 = buf('aa0b113e001001060f7fbb')
 // notification type per the official integration's own declared event_types.
 const NOTIFICATION_DOOR_IS_OPEN = buf('aa13117200170a0000000000000000000034bb')
 
-function makeDevice() {
+function makeDevice(id = DEVICE_ID) {
     const ha = new MockHAConnection()
-    const thinq = new MockThinq2Device(DEVICE_ID, META)
+    const thinq = new MockThinq2Device(id, META)
     const dev = new DUT(ha.asConnection(), thinq, META)
     return { ha, thinq, dev }
 }
@@ -107,7 +127,6 @@ describe(MODEL_ID, () => {
             'energy_day',
             'energy_hour',
             'energy_month',
-            'energy_total_counter',
             'middle_compartment',
             'notification',
             'one_touch_deodorize',
@@ -308,16 +327,24 @@ describe(MODEL_ID, () => {
         assert.equal(thinq.outbox.length, 0)
     })
 
-    test('the energy report publishes the running total, matching the additive relationship confirmed across 130 real samples', () => {
-        const { ha, thinq } = makeDevice()
+    test("the energy report's own delta feeds the calendar-boundary buckets - real samples from the additive 246->262 pair", async () => {
+        freshEnergyDir()
+        // A device id distinct from DEVICE_ID: other tests in this file emit real frames too,
+        // each with their own fire-and-forget recordDelta call that could still land after this
+        // test starts - a shared id would let a stray delta bleed in, same reasoning as
+        // RD20_S.test.ts/2REF21EBNSX_3.test.ts's own energy tests.
+        const { ha, thinq } = makeDevice('energy-test-1')
+        // <delta>=16 in both real captures (each report's delta is read straight off the wire,
+        // not diffed against a stored previous value like the fridge/kimchi-fridge's own raw
+        // counter is), so each frame adds its own 16 - the running total 246->262 they also carry
+        // is confirmed additive in the file header's ENERGY COUNTER section, but not read here
+        // anymore.
         thinq.emit('data', ENERGY_REPORT_TOTAL_246)
-        assert.equal(ha.devices[DEVICE_ID].properties.energy_total_counter, 246)
+        await settle()
+        assert.equal(ha.devices['energy-test-1'].properties.energy_hour, 16)
         thinq.emit('data', ENERGY_REPORT_DELTA_16_TOTAL_262)
-        assert.equal(
-            ha.devices[DEVICE_ID].properties.energy_total_counter,
-            262,
-            "previous total (246) + this report's delta (16)",
-        )
+        await settle()
+        assert.equal(ha.devices['energy-test-1'].properties.energy_hour, 32, '16 + 16')
     })
 
     test('a real notification-channel frame publishes door_is_open', () => {

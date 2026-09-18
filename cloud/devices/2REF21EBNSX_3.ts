@@ -171,11 +171,12 @@ import * as energyAccumulator from '../energy-accumulator'
  * new baseline (the same reset handling `recordEnergyDelta`/`processAABB` below now do live): 124
  * counts against the app's own confirmed 141 Wh for that day - a ~1.14x ratio, consistent with
  * ordinary boundary/rounding slop and not a real scale factor. Treated as 1 count = 1 Wh.
- * `energy_raw_counter` is kept as-is (bare `total_increasing`, no unit) since it still reads
- * straight off the wire and resets the same way it always has; `<delta>` (this reading minus the
- * last one, or nothing at all across a reset - see processAABB) now also feeds
- * `energy-accumulator.ts` (see 3REK2G03VI200S_2.ts for the same module used the same way) for
- * hour/day/month figures that survive those resets.
+ * `<delta>` (this reading minus the last one, or nothing at all across a reset - see processAABB)
+ * feeds `energy-accumulator.ts` (see 3REK2G03VI200S_2.ts for the same module used the same way)
+ * for hour/day/month figures that survive those resets. The raw counter itself (`energyRawCounter`)
+ * is kept only as internal state to compute that delta against, not published on its own anymore -
+ * removed 2026-09-18, once hour/day/month covered the real need and left an unlabelled,
+ * unit-unconfirmed number sitting in the main dashboard for no reason.
  *
  * Original, superseded reasoning kept for the record: comparing this counter's rise across
  * 2026-09-10's own local calendar day (~59-66 units, by the two capture windows nearest to that
@@ -369,18 +370,6 @@ export default class Device extends AABBDevice {
                     icon: 'mdi:fridge-industrial-outline',
                     device_class: 'door',
                     state_topic: '$this/freezer_door_open',
-                },
-                // Bare wire-level counter, unit still not device_class-asserted here even though
-                // it is now known to be ~1 Wh/count - see the file header's ENERGY COUNTER
-                // section. Kept alongside the calendar-boundary sensors below, not replaced by
-                // them, since it still reads straight off the wire with no reset handling.
-                energy_raw_counter: {
-                    platform: 'sensor',
-                    unique_id: '$deviceid-energy_raw_counter',
-                    name: 'Energy raw counter (unit unconfirmed)',
-                    icon: 'mdi:lightning-bolt-outline',
-                    state_class: 'total_increasing',
-                    state_topic: '$this/energy_raw_counter',
                 },
                 // Calendar-boundary Wh figures - see energy-accumulator.ts and the file header's
                 // ENERGY COUNTER section. These survive the raw counter's own unpredictable resets.
@@ -582,7 +571,6 @@ export default class Device extends AABBDevice {
                     if (delta <= ENERGY_MAX_PLAUSIBLE_DELTA) void this.energy?.recordDelta(delta)
                 }
                 this.energyRawCounter = counter
-                this.publishProperty('energy_raw_counter', counter)
             }
             return
         }

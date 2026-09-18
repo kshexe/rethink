@@ -133,11 +133,10 @@ import * as energyAccumulator from '../energy-accumulator'
  * straight through the KST day boundary in the log) but does reset somewhere else in the day
  * (330 late on 2026-09-10 down to 134 the next afternoon, outside any midnight the log covers) -
  * almost certainly the same "resets whenever the bridge's cloud session is refreshed, not on a
- * calendar boundary" behaviour 2REF21EBNSX_3.ts's own `10 af` counter has, not a daily meter.
- * Published as a bare `total_increasing` counter for exactly that reason - see 2REF21EBNSX_3.ts's
- * own `energy_raw_counter` for the identical caveat and why the unit (presumably Wh, not
- * independently calibrated against the app's own kWh figure to the same precision the fridge's
- * counter was) is left off rather than asserted.
+ * calendar boundary" behaviour 2REF21EBNSX_3.ts's own `10 af` counter has, not a daily meter - not
+ * published on its own for exactly that reason (removed 2026-09-18 along with 2REF21EBNSX_3.ts's
+ * own `energy_raw_counter`, once hour/day/month covered the real need); `<total_hi>/<total_lo>` is
+ * not even read here anymore, since nothing needs it once it isn't published.
  *
  * UNIT CONFIRMED (2026-09-12): this model's own app screen exposes an hourly Wh breakdown (most
  * models this fork has seen so far only get a monthly total), so `<delta>` could be checked
@@ -147,7 +146,7 @@ import * as energyAccumulator from '../energy-accumulator'
  * consistent with Wh and with the small mismatch being the ~15-minute sample cadence not lining up
  * with the clock-hour boundary, not a wrong scale. `<delta>` now feeds `energy-accumulator.ts` (see
  * FX___S.ts for the same module used the same way) for hour/day/month figures that survive
- * the running total's own unpredictable resets; the raw counter above is kept as-is alongside it.
+ * the running total's own unpredictable resets.
  *
  * NOT YET DECODED, left deliberately unmodelled:
  *   - `11 31` (51 bytes): fires rarely, contains two readable ASCII part/serial-number-looking
@@ -213,7 +212,6 @@ const ENERGY_SUB = 0x11
 const ENERGY_OPCODE = 0x3e
 const ENERGY_FRAME_LEN = 7
 const ENERGY_DELTA_OFFSET = 3
-const ENERGY_TOTAL_OFFSET = 4
 /** `f0 e5 00 02 01 ff 01 00` - constant across every write captured; only the selector (= the
  *  target's own record byte index) and the value after it ever change. */
 const WRITE_HEADER = Buffer.from('f0e5000201ff0100', 'hex')
@@ -301,7 +299,6 @@ export default class Device extends AABBDevice {
     oneTouchDeodorize: boolean | undefined
     topDoorOpen: boolean | undefined
     anyDoorOpen: boolean | undefined
-    energyTotal: number | undefined
 
     /** (dir:tag) pairs already flagged as unrecognised, so a repeating one is noted once. */
     private seenUnknown = new Set<string>()
@@ -364,16 +361,6 @@ export default class Device extends AABBDevice {
                     icon: 'mdi:fridge-alert-outline',
                     device_class: 'door',
                     state_topic: '$this/any_door_open',
-                },
-                // Deliberately no device_class/unit_of_measurement - see the file header's ENERGY
-                // COUNTER section for why the scale isn't asserted yet.
-                energy_total_counter: {
-                    platform: 'sensor',
-                    unique_id: '$deviceid-energy_total_counter',
-                    name: 'Energy total counter (unit unconfirmed)',
-                    icon: 'mdi:lightning-bolt-outline',
-                    state_class: 'total_increasing',
-                    state_topic: '$this/energy_total_counter',
                 },
                 // See the file header's NOTIFICATION section.
                 notification: {
@@ -567,13 +554,9 @@ export default class Device extends AABBDevice {
         if (buf.length === 2 + 8 + STATE_RECORD_LEN && buf[0] === WRITE_ECHO_SUB && buf[1] === WRITE_ECHO_OPCODE) return
 
         // energy counter: <sub=0x11> 3e 00 <delta> <total_hi> <total_lo> <tick> - see the file
-        // header's ENERGY COUNTER section.
+        // header's ENERGY COUNTER section. The running total at <total_hi>/<total_lo> is not read
+        // - <delta> is all `energy-accumulator.ts` needs, and nothing else here used the total.
         if (buf.length === ENERGY_FRAME_LEN && buf[0] === ENERGY_SUB && buf[1] === ENERGY_OPCODE) {
-            const total = buf.readUInt16BE(ENERGY_TOTAL_OFFSET)
-            if (total !== this.energyTotal) {
-                this.energyTotal = total
-                this.publishProperty('energy_total_counter', total)
-            }
             const delta = buf[ENERGY_DELTA_OFFSET]
             if (delta > 0) void this.energy?.recordDelta(delta)
             return

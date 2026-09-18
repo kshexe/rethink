@@ -103,7 +103,6 @@ describe(MODEL_ID, () => {
             'energy_day',
             'energy_hour',
             'energy_month',
-            'energy_raw_counter',
             'express_mode',
             'freezer_door_open',
             'freezer_temp',
@@ -111,14 +110,6 @@ describe(MODEL_ID, () => {
             'fridge_temp',
             'smart_care_v2',
         ])
-        assert.equal(components.energy_raw_counter.platform, 'sensor')
-        assert.equal(components.energy_raw_counter.state_class, 'total_increasing')
-        assert.equal(components.energy_raw_counter.device_class, undefined, 'scale unconfirmed - see file header')
-        assert.equal(
-            components.energy_raw_counter.unit_of_measurement,
-            undefined,
-            'scale unconfirmed - see file header',
-        )
         assert.equal(components.fridge_temp.min, 1)
         assert.equal(components.fridge_temp.max, 7)
         assert.equal(components.freezer_temp.min, -23)
@@ -237,18 +228,18 @@ describe(MODEL_ID, () => {
         assert.equal(dev.seenUnknown.has('250:10:cf'), false)
     })
 
-    test('the energy counter frame is recognised by shape (not gated on byte 2) and publishes the raw big-endian value', () => {
-        const { ha, thinq, dev } = makeDevice()
+    test('the energy counter frame is recognised by shape (not gated on byte 2) and tracks the raw big-endian value internally', () => {
+        const { thinq, dev } = makeDevice()
 
         thinq.emit('data', ENERGY_COUNTER_7)
-        assert.equal(ha.devices[DEVICE_ID].properties.energy_raw_counter, 7)
+        assert.equal(dev.energyRawCounter, 7)
         // @ts-expect-error seenUnknown is private - only reached by the generic unmodelled-frame
         // fallthrough, so its absence here proves the dedicated `10 af` branch caught it first.
         assert.equal(dev.seenUnknown.has('7:10:af'), false)
 
         thinq.emit('data', ENERGY_COUNTER_87)
         assert.equal(
-            ha.devices[DEVICE_ID].properties.energy_raw_counter,
+            dev.energyRawCounter,
             87,
             'byte 2 differs (0x0f vs 0xfa) between these two real captures but is not read',
         )
@@ -275,7 +266,7 @@ describe(MODEL_ID, () => {
 
     test('a drop in the counter (its own unpredictable reset) is accepted as a new baseline, not a negative delta', async () => {
         freshEnergyDir()
-        const { ha, thinq } = makeDevice('energy-test-2')
+        const { ha, thinq, dev } = makeDevice('energy-test-2')
         thinq.emit('data', ENERGY_COUNTER_87)
         await settle()
         // Synthetic: same shape as the real captures above, counter dropped to 3 - simulating this
@@ -286,11 +277,7 @@ describe(MODEL_ID, () => {
         // Stays at attach()'s construction-time baseline (0) rather than a negative figure -
         // proving the drop was treated as a new baseline, not that nothing was ever published.
         assert.equal(ha.devices['energy-test-2'].properties.energy_hour, 0, 'no delta recorded for a drop')
-        assert.equal(
-            ha.devices['energy-test-2'].properties.energy_raw_counter,
-            3,
-            'the raw counter still follows it down',
-        )
+        assert.equal(dev.energyRawCounter, 3, 'the raw counter still follows it down')
 
         // A subsequent rise now diffs against the new, lower baseline (3), not the pre-reset value.
         thinq.emit('data', buf('aa0b10affa0005040400bb')) // counter 5
@@ -300,7 +287,7 @@ describe(MODEL_ID, () => {
 
     test('a single-step rise past the plausible ceiling is discarded, not counted', async () => {
         freshEnergyDir()
-        const { ha, thinq } = makeDevice('energy-test-3')
+        const { ha, thinq, dev } = makeDevice('energy-test-3')
         thinq.emit('data', ENERGY_COUNTER_7)
         await settle()
         // Synthetic: counter 700 in one step (delta 693, past ENERGY_MAX_PLAUSIBLE_DELTA) -
@@ -311,7 +298,7 @@ describe(MODEL_ID, () => {
         // Stays at attach()'s construction-time baseline (0) - proving the implausible delta was
         // discarded, not that nothing was ever published.
         assert.equal(ha.devices['energy-test-3'].properties.energy_hour, 0)
-        assert.equal(ha.devices['energy-test-3'].properties.energy_raw_counter, 700, 'the raw counter still follows it')
+        assert.equal(dev.energyRawCounter, 700, 'the raw counter still follows it')
     })
 
     test('record[7] (anyDoorOpen) backfills both compartments to OFF once closed, but leaves an already-open one alone since it cannot say which door', () => {
