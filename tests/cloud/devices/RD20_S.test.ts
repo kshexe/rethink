@@ -172,11 +172,11 @@ describe(MODEL_ID, () => {
             'notification',
             'remote_control',
             'drum_light',
-            'anti_wrinkle',
+            'wrinkle_care',
             'ironing_alert',
-            'button_lock',
+            'child_lock',
             'reservation_minutes',
-            'alarm_volume',
+            'buzzer',
         ])
         assert.equal(components.power.command_topic, '$this/power/set')
         assert.equal(components.remaining_minutes.platform, 'sensor')
@@ -335,20 +335,20 @@ describe(MODEL_ID, () => {
         assert.equal(ha.devices[DEVICE_ID].properties.ironing_alert, 'OFF')
     })
 
-    test('anti_wrinkle reads buf[87] 0x08, confirmed by a real on/off reversal', () => {
+    test('wrinkle_care reads buf[87] 0x08, confirmed by a real on/off reversal', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', ANTI_WRINKLE_ON)
-        assert.equal(ha.devices[DEVICE_ID].properties.anti_wrinkle, 'ON')
+        assert.equal(ha.devices[DEVICE_ID].properties.wrinkle_care, 'ON')
         thinq.emit('data', ANTI_WRINKLE_OFF)
-        assert.equal(ha.devices[DEVICE_ID].properties.anti_wrinkle, 'OFF')
+        assert.equal(ha.devices[DEVICE_ID].properties.wrinkle_care, 'OFF')
     })
 
-    test('button_lock reads buf[89] (STATUS_OFFSET) bit 0x10, confirmed by a real on/off reversal', () => {
+    test('child_lock reads buf[89] (STATUS_OFFSET) bit 0x10, confirmed by a real on/off reversal', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', BUTTON_LOCK_ON)
-        assert.equal(ha.devices[DEVICE_ID].properties.button_lock, 'ON')
+        assert.equal(ha.devices[DEVICE_ID].properties.child_lock, 'ON')
         thinq.emit('data', BUTTON_LOCK_OFF)
-        assert.equal(ha.devices[DEVICE_ID].properties.button_lock, 'OFF')
+        assert.equal(ha.devices[DEVICE_ID].properties.child_lock, 'OFF')
     })
 
     test('reservation_minutes reads buf[70..71] as 16-bit minutes, confirmed by a real arm/cancel', () => {
@@ -359,15 +359,15 @@ describe(MODEL_ID, () => {
         assert.equal(ha.devices[DEVICE_ID].properties.reservation_minutes, 0)
     })
 
-    test('alarm_volume reads buf[82] while idle, matching the on-screen 보통(medium) setting', () => {
+    test('buzzer reads buf[82] while idle, matching the on-screen 보통(medium) setting', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', ALARM_VOLUME_MEDIUM)
-        assert.equal(ha.devices[DEVICE_ID].properties.alarm_volume, 'medium')
+        assert.equal(ha.devices[DEVICE_ID].properties.buzzer, 'medium')
     })
 
-    test('alarm_volume is not published while a real cycle is running (STATUS is running/cooling/complete)', () => {
+    test('buzzer is not published while a real cycle is running (STATUS is running/cooling/complete)', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', STATUS_RUNNING_18_MIN_LEFT)
-        assert.equal(ha.devices[DEVICE_ID].properties.alarm_volume, undefined)
+        assert.equal(ha.devices[DEVICE_ID].properties.buzzer, undefined)
     })
 })

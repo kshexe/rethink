@@ -114,7 +114,7 @@ describe('FX___S washer', () => {
         assert.equal(get(HA, 'water_temp'), '40')
         assert.equal(get(HA, 'rinse'), '2')
         assert.equal(get(HA, 'spin'), 'high')
-        assert.equal(get(HA, 'beep'), 'very_high')
+        assert.equal(get(HA, 'buzzer'), 'very_high')
         assert.equal(get(HA, 'cycles'), '15') // the LG cloud reported 15 the same morning
         assert.equal(get(HA, 'total_time'), 36) // the course estimate, useful before pressing start
     })
@@ -197,7 +197,7 @@ describe('FX___S washer', () => {
         // they stay correct and must keep being published (a 16 -> 0 -> 16 cycle count would read as a
         // counter reset to Home Assistant's statistics).
         assert.equal(get(HA, 'cycles'), '16')
-        assert.equal(get(HA, 'beep'), 'very_high')
+        assert.equal(get(HA, 'buzzer'), 'very_high')
         // The course byte survives being powered off, and this record was captured after a Rinse + Spin
         // had been selected, so it correctly overrides the AI Wash published from the standby frame.
         assert.equal(get(HA, 'course'), 'RINSE_SPIN')
@@ -235,7 +235,7 @@ describe('FX___S washer', () => {
         assert.equal(get(HA, 'remaining_time'), 2)
         assert.equal(get(HA, 'total_time'), 25)
         assert.equal(get(HA, 'cycles'), '16')
-        assert.equal(get(HA, 'beep'), 'very_high')
+        assert.equal(get(HA, 'buzzer'), 'very_high')
     })
 
     test('reports which controls the current course actually lets you change', () => {
@@ -267,7 +267,7 @@ describe('FX___S washer', () => {
         // Nothing was done to the door - switching remote control on locks it a few seconds later.
         assert.equal(get(HA, 'door_lock'), 'OFF') // device_class lock: off means locked
         assert.equal(get(HA, 'child_lock'), 'OFF')
-        assert.equal(get(HA, 'wrinkle_care'), 'OFF')
+        assert.equal(get(HA, 'crease_care'), 'OFF')
         assert.equal(get(HA, 'turbowash'), 'ON')
         assert.equal(get(HA, 'drum_light'), 'OFF')
         // The same bit was read as "a cycle is loaded" before this was isolated on the panel.
@@ -517,7 +517,7 @@ describe('FX___S commands', () => {
         assert.equal(hex(thinq.outbox[1]), hex(buf('aa0df0e5000201ff015700b3bb')))
     })
 
-    test('beep volume covers all five captured steps', () => {
+    test('buzzer volume covers all five captured steps', () => {
         const { thinq, dut } = setup()
         const expected = [
             'aa0df0e5000201ff011300f7bb',
@@ -527,7 +527,7 @@ describe('FX___S commands', () => {
             'aa0df0e5000201ff011304f3bb',
         ]
         for (const name of ['mute', 'low', 'medium', 'high', 'very_high']) {
-            dut.setProperty('beep', name)
+            dut.setProperty('buzzer', name)
         }
         assert.deepEqual(
             thinq.outbox.map((b) => hex(b)),
@@ -1490,7 +1490,7 @@ describe('FX___S publish order', () => {
             'current_course',
             'course',
             'laundry_care',
-            'wrinkle_care',
+            'crease_care',
             'steam_active',
             'turbowash_active',
             'steam',
@@ -1719,7 +1719,7 @@ describe('FX___S course names in the configured language', () => {
         // state that automations may compare against.
         assert.equal(get(ko, 'spin'), 'high')
         assert.equal(get(ko, 'water_temp'), '40')
-        assert.equal(get(ko, 'beep'), 'very_high')
+        assert.equal(get(ko, 'buzzer'), 'very_high')
     })
 
     test('a wash write takes either vocabulary, so an automation setting the old name survives', () => {

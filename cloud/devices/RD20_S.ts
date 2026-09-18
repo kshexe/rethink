@@ -170,6 +170,12 @@ import * as energyAccumulator from '../energy-accumulator'
  * scratch tooling used for this pass, not in this file, that is worth recording so a future
  * session does not repeat it).
  *
+ * RENAMED 2026-09-18: this section's three entities were published as `alarm_volume`,
+ * `anti_wrinkle`, and `button_lock` - all three are now `buzzer`/`wrinkle_care`/`child_lock`, to
+ * match this model's own modelJSON field names (`buzzer`, `wrinkleCare`, `childLock`) rather than
+ * names invented for this handler - see the naming-audit note in FX___S.ts's own file header.
+ * Nothing below changed byte offsets or meaning, only the published property names.
+ *
  *   buf[82] (ALARM_VOLUME_OFFSET, right after ENERGY_OFFSET but a distinct byte - not dual-
  *     purpose with it): the appliance's currently configured alarm volume, a plain 0-4 level, but
  *     ONLY while idle (see below) - confirmed both by predicting the value from the on-screen
@@ -434,11 +440,15 @@ export default class Device extends AABBDevice {
                     icon: 'mdi:lightbulb-outline',
                     entity_category: 'diagnostic',
                 },
-                anti_wrinkle: {
+                // Named to match this model's own modelJSON field (`wrinkleCare`) - FX___S.ts's
+                // sibling entity is named for ITS OWN modelJSON field instead (`creaseCare`), a
+                // genuinely different name LG itself uses for the two models, not something this
+                // fork introduced - see the naming-audit note in cloud/devices/FX___S.ts's header.
+                wrinkle_care: {
                     platform: 'binary_sensor',
-                    unique_id: '$deviceid-anti_wrinkle',
-                    state_topic: '$this/anti_wrinkle',
-                    name: 'Anti-wrinkle',
+                    unique_id: '$deviceid-wrinkle_care',
+                    state_topic: '$this/wrinkle_care',
+                    name: 'Wrinkle care',
                     icon: 'mdi:tshirt-crew-outline',
                     entity_category: 'diagnostic',
                 },
@@ -450,11 +460,14 @@ export default class Device extends AABBDevice {
                     icon: 'mdi:iron-outline',
                     entity_category: 'diagnostic',
                 },
-                button_lock: {
+                // Named to match this model's own modelJSON field (`childLock`), same name
+                // FX___S.ts's own child_lock uses - LG happens to use the identical name on both
+                // models for this one, unlike wrinkle/crease care above.
+                child_lock: {
                     platform: 'binary_sensor',
-                    unique_id: '$deviceid-button_lock',
-                    state_topic: '$this/button_lock',
-                    name: 'Button lock',
+                    unique_id: '$deviceid-child_lock',
+                    state_topic: '$this/child_lock',
+                    name: 'Child lock',
                     icon: 'mdi:lock-outline',
                     entity_category: 'diagnostic',
                 },
@@ -470,13 +483,15 @@ export default class Device extends AABBDevice {
                     unit_of_measurement: 'min',
                     entity_category: 'diagnostic',
                 },
-                // See the file header's "ENERGY BYTE IS DUAL-PURPOSE" section - only published
-                // while STATUS reads 'idle'; not touched at all while running.
-                alarm_volume: {
+                // Named to match this model's own modelJSON field (`buzzer`) - FX___S.ts's own
+                // writable equivalent is named the same way. See the file header's "ENERGY BYTE IS
+                // DUAL-PURPOSE" section - only published while STATUS reads 'idle'; not touched at
+                // all while running.
+                buzzer: {
                     platform: 'sensor',
-                    unique_id: '$deviceid-alarm_volume',
-                    state_topic: '$this/alarm_volume',
-                    name: 'Alarm volume',
+                    unique_id: '$deviceid-buzzer',
+                    state_topic: '$this/buzzer',
+                    name: 'Buzzer volume',
                     icon: 'mdi:volume-high',
                     entity_category: 'diagnostic',
                 },
@@ -487,7 +502,7 @@ export default class Device extends AABBDevice {
         log(
             'status',
             this.id,
-            'RD20_S (건조기) handler started - power, remaining_minutes, status, energy, alarm_volume, feature flags, reservation, notification, remote_control, see file header',
+            'RD20_S (건조기) handler started - power, remaining_minutes, status, energy, buzzer, feature flags, reservation, notification, remote_control, see file header',
         )
         // Wired here, not in start(), so a delta reaching processAABB works from construction
         // onward regardless of whether/when start() runs - matches this always having worked
@@ -591,19 +606,19 @@ export default class Device extends AABBDevice {
             // rather than publishing a number that has no relation to alarm volume mid-cycle.
             if (!(buf[STATUS_OFFSET] in STATUS_NAMES)) {
                 const raw = buf[ALARM_VOLUME_OFFSET]
-                this.publishProperty('alarm_volume', ALARM_VOLUME_NAMES[raw] ?? `unknown_${raw}`)
+                this.publishProperty('buzzer', ALARM_VOLUME_NAMES[raw] ?? `unknown_${raw}`)
             }
 
             // See the file header's decoded-2026-09-14 section.
             const features = buf[FEATURE_FLAGS_OFFSET]
             this.publishProperty('drum_light', features & FEATURE_DRUM_LIGHT ? 'ON' : 'OFF')
-            this.publishProperty('anti_wrinkle', features & FEATURE_ANTI_WRINKLE ? 'ON' : 'OFF')
+            this.publishProperty('wrinkle_care', features & FEATURE_ANTI_WRINKLE ? 'ON' : 'OFF')
             this.publishProperty('ironing_alert', features & FEATURE_IRONING_ALERT ? 'ON' : 'OFF')
 
             // OPTION_RESERVATION_ACTIVE (0x08, also on STATUS_OFFSET) is not separately exposed -
             // reservation_minutes already carries the same information (0 = none armed) without
             // needing a second entity.
-            this.publishProperty('button_lock', buf[STATUS_OFFSET] & OPTION_BUTTON_LOCK ? 'ON' : 'OFF')
+            this.publishProperty('child_lock', buf[STATUS_OFFSET] & OPTION_BUTTON_LOCK ? 'ON' : 'OFF')
 
             this.publishProperty('reservation_minutes', buf.readUInt16BE(RESERVATION_MINUTES_OFFSET))
             return

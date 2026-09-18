@@ -880,6 +880,20 @@ export default class Device extends AABBDevice {
         this.courseExtNames = korean ? COURSE_EXT_KO : COURSE_EXT
         this.washNames = korean ? WASH_KO : WASH
         this.courseOptions = [...Object.values(this.courseNames), ...Object.values(this.courseExtNames)]
+        // NAMING AUDIT (2026-09-18): compared this file's and RD20_S.ts's published property
+        // names against both models' own modelJSON (`GET /bridge/<id>/modeljson`), rather than
+        // assuming a name shared between the two handlers was invented consistently. Two kinds of
+        // finding:
+        //   - `buzzer` (was `beep` here, `alarm_volume` on RD20_S.ts): both models' modelJSON use
+        //     the identical field name `buzzer` - renamed both to match, and each other.
+        //   - `crease_care` (was `wrinkle_care` here; RD20_S.ts's own analogous entity is
+        //     `wrinkle_care`, unchanged): LG's own modelJSON genuinely disagrees between the two
+        //     models here - this one's field is `creaseCare`, RD20_S.ts's is `wrinkleCare` - so
+        //     the two handlers now name the same real-world feature differently ON PURPOSE,
+        //     matching each model's own schema rather than forcing a shared name LG itself does
+        //     not use.
+        // `child_lock` was already right (`childLock` in both models' schemas).
+        //
         // Annotated because allowExtendedType infers its result from the assignment target: with
         // nothing to infer from it would come out `unknown`.
         const config: DeviceDiscovery = allowExtendedType({
@@ -1024,11 +1038,15 @@ export default class Device extends AABBDevice {
                     name: 'Child lock',
                     icon: 'mdi:account-lock',
                 },
-                wrinkle_care: {
+                // Named to match this model's own modelJSON field (`creaseCare`), not RD20_S.ts's
+                // `wrinkleCare` - see the naming-audit note below and RD20_S.ts's own sibling
+                // entity, wrinkle_care. Genuinely different names LG itself uses on the two
+                // models, not something this fork introduced.
+                crease_care: {
                     platform: 'binary_sensor',
-                    unique_id: '$deviceid-wrinkle-care',
-                    state_topic: '$this/wrinkle_care',
-                    name: 'Wrinkle care',
+                    unique_id: '$deviceid-crease-care',
+                    state_topic: '$this/crease_care',
+                    name: 'Crease care',
                     icon: 'mdi:tshirt-crew',
                 },
                 drum_light: {
@@ -1239,12 +1257,14 @@ export default class Device extends AABBDevice {
                     name: 'Course - Steam',
                     icon: 'mdi:kettle-steam',
                 },
-                beep: {
+                // Named to match this model's own modelJSON field (`buzzer`) - RD20_S.ts's own
+                // read-only equivalent is named the same way. See the naming-audit note below.
+                buzzer: {
                     platform: 'select',
-                    unique_id: '$deviceid-beep',
-                    state_topic: '$this/beep',
-                    command_topic: '$this/beep/set',
-                    name: 'Beep volume',
+                    unique_id: '$deviceid-buzzer',
+                    state_topic: '$this/buzzer',
+                    command_topic: '$this/buzzer/set',
+                    name: 'Buzzer volume',
                     icon: 'mdi:volume-high',
                     options: Object.values(BEEP),
                     entity_category: 'config',
@@ -1666,7 +1686,7 @@ export default class Device extends AABBDevice {
         this.publishProperty('child_lock', flags & FLAG_CHILD_LOCK ? 'ON' : 'OFF')
         // device_class 'lock' is inverted by Home Assistant's convention: on means unlocked.
         this.publishProperty('door_lock', rec[OFF_DOOR_LOCK] ? 'OFF' : 'ON')
-        this.publishProperty('wrinkle_care', rec[OFF_WRINKLE_CARE] & WRINKLE_CARE_ON ? 'ON' : 'OFF')
+        this.publishProperty('crease_care', rec[OFF_WRINKLE_CARE] & WRINKLE_CARE_ON ? 'ON' : 'OFF')
         this.publishProperty('drum_light', flags & FLAG_DRUM_LIGHT ? 'ON' : 'OFF')
 
         /*
@@ -1732,7 +1752,7 @@ export default class Device extends AABBDevice {
             rec[OFF_RESERVE_FLAG] & RESERVE_SET ? Math.round((reserveMinutes / 60) * 2) / 2 : 0,
         )
         this.publishProperty('cycles', String(rec[OFF_CYCLES]))
-        this.publishProperty('beep', BEEP[rec[OFF_BEEP]] ?? 'unknown')
+        this.publishProperty('buzzer', BEEP[rec[OFF_BEEP]] ?? 'unknown')
 
         /*
          * Energy comes from the record rather than from the 0x3E report - see OFF_ENERGY_HI - so it
@@ -2201,7 +2221,7 @@ export default class Device extends AABBDevice {
             wash: [KEY_WASH, WASH_BY_NAME],
             water_temp: [KEY_WATER_TEMP, WATER_TEMP_BY_NAME],
             spin: [KEY_SPIN, SPIN_BY_NAME],
-            beep: [KEY_BEEP, BEEP_BY_NAME],
+            buzzer: [KEY_BEEP, BEEP_BY_NAME],
         }
         const select = selects[prop]
         if (!select) return
