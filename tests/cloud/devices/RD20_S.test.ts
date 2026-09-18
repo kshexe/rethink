@@ -180,6 +180,7 @@ describe(MODEL_ID, () => {
             'notification',
             'remote_control',
             'drum_light',
+            'drum_light_auto',
             'wrinkle_care',
             'ironing_alert',
             'child_lock',
@@ -187,6 +188,7 @@ describe(MODEL_ID, () => {
             'buzzer',
         ])
         assert.equal(components.power.command_topic, '$this/power/set')
+        assert.equal(components.drum_light_auto.command_topic, '$this/drum_light_auto/set')
         assert.equal(components.remaining_minutes.platform, 'sensor')
         assert.equal(components.remaining_minutes.unit_of_measurement, 'min')
     })
@@ -210,6 +212,25 @@ describe(MODEL_ID, () => {
         assert.equal(ha.devices[DEVICE_ID].properties.power, 'ON')
         dev.setProperty('power', 'OFF')
         assert.equal(ha.devices[DEVICE_ID].properties.power, 'OFF')
+    })
+
+    test('drum_light_auto write reproduces the captured frame byte for byte (ON only - see file header)', () => {
+        // Only the "on" direction was actually captured against a real unit - see RD20_S.ts's
+        // DRUM LIGHT AUTO-ON section. Not paired with an "OFF" case the way the power test above
+        // is, since that value has not been independently confirmed, just assumed symmetric.
+        const { thinq, dev } = makeDevice()
+        thinq.resetRecorder()
+        dev.setProperty('drum_light_auto', 'ON')
+        assert.equal(thinq.outbox.length, 1)
+        assert.equal(thinq.outbox[0].toString('hex'), 'aa0df0e5000201ff011b01febb')
+    })
+
+    test('drum_light_auto is published optimistically as soon as it is set, not waiting on a device echo', () => {
+        const { ha, dev } = makeDevice()
+        dev.setProperty('drum_light_auto', 'ON')
+        assert.equal(ha.devices[DEVICE_ID].properties.drum_light_auto, 'ON')
+        dev.setProperty('drum_light_auto', 'OFF')
+        assert.equal(ha.devices[DEVICE_ID].properties.drum_light_auto, 'OFF')
     })
 
     test('the ack frame is accepted and publishes nothing', () => {

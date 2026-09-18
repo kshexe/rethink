@@ -212,12 +212,32 @@ import * as energyAccumulator from '../energy-accumulator'
  * energy delta logic itself needed no gating fix in the end (the original always-record-every-
  * frame behavior was already correct) - it only looked buggy because the earlier pass of this same
  * mistake made a volume-level change look like it was landing in the energy byte.
+ *
+ * DRUM LIGHT AUTO-ON (captured 2026-09-18): not the same thing as the `drum_light` binary_sensor
+ * below (that one is the light's own live on/off state, `FEATURE_FLAGS_OFFSET` bit 0x20, still
+ * read-only). This is a separate persisted *setting* - "문 열림시 드럼라이트 켜짐" in the app,
+ * modelJSON field `drumlightAutoOn` (`MonitoringValue.drumlightAutoOn`, enum
+ * DRUMLIGHT_AUTO_ON_OFF/_ON) - whether the appliance should turn the light on by itself the next
+ * time the door opens, not a request to turn it on right now. Captured with remote control on,
+ * toggling that one option in the app and reading the resulting frame off the on-box log:
+ *
+ *   to-device   aa 0d f0 e5 00 02 01 ff 01 1b 01 <ck> bb   (n=1, key=0x1b, value=1=on)
+ *   from-device aa 08 30 00 e5 00 <ck> bb                 (ack, same shape as the power ack)
+ *
+ * Only the "on" direction was captured (the app session ended there); "off" is assumed to be the
+ * same shape with value 0x00, following every other boolean key on this opcode (KEY_POWER
+ * included) - not yet independently confirmed. The appliance was powered off for this capture, so
+ * there is no live readback to cross-check the persisted value against (the 114-byte status frame
+ * was all-zero throughout, matching STATUS_NAMES[0x00]='power_off') - published optimistically
+ * from the command just sent, the same as `power` above, not read back off the wire.
  */
 
 const FROM_DEVICE_ACK_OPCODE = 0xe5
 
 /** Shared with FX___S.ts's vocabulary for the same F0E5 protocol family. */
 const KEY_POWER = 0x02
+/** See the file header's DRUM LIGHT AUTO-ON section. */
+const KEY_DRUM_LIGHT_AUTO = 0x1b
 
 /** The `00 01 00 ec` marker (see file header's REMAINING_MINUTES section) that opens the 114-byte
  *  status body AABBDevice.processData hands to processAABB, and where the remaining-minutes byte
@@ -322,6 +342,7 @@ export default class Device extends AABBDevice {
     power: boolean | undefined
     status: string | undefined
     remoteControl: boolean | undefined
+    drumLightAuto: boolean | undefined
 
     /** The last raw (mod-256) energy byte seen, to compute the next delta against - see the file
      *  header's ENERGY section. `undefined` until the first status frame arrives. */
@@ -455,14 +476,26 @@ export default class Device extends AABBDevice {
                     name: 'Remote control',
                     icon: 'mdi:remote',
                 },
-                // See the file header's "FEATURE/OPTION FLAG BYTES" section - all four read-only,
-                // the write side for any of them has not been captured/confirmed yet.
+                // See the file header's "FEATURE/OPTION FLAG BYTES" section - this is the light's
+                // own live on/off state; still read-only, unlike drum_light_auto below which is a
+                // different, separate setting.
                 drum_light: {
                     platform: 'binary_sensor',
                     unique_id: '$deviceid-drum_light',
                     state_topic: '$this/drum_light',
                     name: 'Drum light',
                     icon: 'mdi:lightbulb-outline',
+                },
+                // See the file header's DRUM LIGHT AUTO-ON section - modelJSON `drumlightAutoOn`,
+                // whether the appliance turns the light on by itself the next time the door opens.
+                drum_light_auto: {
+                    platform: 'switch',
+                    unique_id: '$deviceid-drum_light_auto',
+                    state_topic: '$this/drum_light_auto',
+                    command_topic: '$this/drum_light_auto/set',
+                    name: 'Drum light auto-on',
+                    icon: 'mdi:lightbulb-auto-outline',
+                    entity_category: 'config',
                 },
                 // Named to match this model's own modelJSON field (`wrinkleCare`) - FX___S.ts's
                 // sibling entity is named for ITS OWN modelJSON field instead (`creaseCare`), a
@@ -523,7 +556,7 @@ export default class Device extends AABBDevice {
         log(
             'status',
             this.id,
-            'RD20_S (건조기) handler started - power, remaining_minutes, status, energy, buzzer, feature flags, reservation, notification, remote_control, see file header',
+            'RD20_S (건조기) handler started - power, remaining_minutes, status, energy, buzzer, feature flags, drum light auto-on, reservation, notification, remote_control, see file header',
         )
         // Wired here, not in start(), so a delta reaching processAABB works from construction
         // onward regardless of whether/when start() runs - matches this always having worked
@@ -550,6 +583,15 @@ export default class Device extends AABBDevice {
                 // Optimistic: see the file header for why this is not read back off the wire.
                 this.power = on
                 this.publishProperty('power', on ? 'ON' : 'OFF')
+                return
+            }
+            case 'drum_light_auto': {
+                const on = mqttValue === 'ON'
+                this.send(buildSettingsWrite([[KEY_DRUM_LIGHT_AUTO, on ? 1 : 0]]))
+                // Optimistic: see the file header's DRUM LIGHT AUTO-ON section for why this is not
+                // read back off the wire.
+                this.drumLightAuto = on
+                this.publishProperty('drum_light_auto', on ? 'ON' : 'OFF')
                 return
             }
             default:
