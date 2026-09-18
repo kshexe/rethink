@@ -263,10 +263,12 @@ describe(MODEL_ID, () => {
         // - a shared id would let a stray delta from one of those bleed into this test's total.
         const { ha, thinq } = makeDevice('energy-test-1')
         // First frame only establishes lastEnergyRaw (0) - nothing to diff against yet, so no
-        // energy_* publish happens here.
+        // recordDelta call happens here. energy_hour already reads 0 regardless, from
+        // energyAccumulator.attach()'s own immediate baseline publish at construction (see
+        // energy-accumulator.ts's scheduleHourlyRefresh) - this is not this frame's doing.
         thinq.emit('data', ENERGY_0WH)
         await settle()
-        assert.equal(ha.devices['energy-test-1'].properties.energy_hour, undefined)
+        assert.equal(ha.devices['energy-test-1'].properties.energy_hour, 0)
         // The second frame's buf[81] reads 1 - a plausible +1 Wh step - so this one publishes.
         thinq.emit('data', ENERGY_1WH)
         await settle()
@@ -286,7 +288,10 @@ describe(MODEL_ID, () => {
         frame[2 + 81] = 200
         thinq.emit('data', frame)
         await settle()
-        assert.equal(ha.devices['energy-test-2'].properties.energy_hour, undefined)
+        // Stays at energyAccumulator.attach()'s construction-time baseline (see the sibling test
+        // above) rather than jumping to 200 - proving the implausible delta was discarded, not
+        // that nothing was ever published.
+        assert.equal(ha.devices['energy-test-2'].properties.energy_hour, 0)
     })
 
     test('notification code 0 publishes drying_is_complete', () => {

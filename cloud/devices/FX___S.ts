@@ -871,7 +871,7 @@ export default class Device extends AABBDevice {
     /** Likewise for the wash-level scale; see WASH_KO. */
     readonly washNames: Record<number, string>
 
-    private cancelEnergyRefresh: (() => void) | undefined
+    private energy: energyAccumulator.EnergyTracker | undefined
 
     constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
         super(HA, thinq)
@@ -1402,22 +1402,18 @@ export default class Device extends AABBDevice {
          * as available - the honest default, since the appliance has not said otherwise.
          */
         this.updateButtonAvailability()
-    }
 
-    /** Rolls energy-accumulator.ts's calendar buckets over right at every wall-clock hour boundary,
-     *  so hour/day/month reset on time even across a washer's long idle stretches between cycles -
-     *  see energy-accumulator.ts's scheduleHourlyRefresh() and the identical wiring in
-     *  RD20_S.ts/2REF21EBNSX_3.ts/3REK2G03VI200S_2.ts. */
-    start() {
-        super.start()
-        this.cancelEnergyRefresh = energyAccumulator.scheduleHourlyRefresh(this.id, (stats) =>
-            this.publishEnergyStats(stats),
-        )
+        // Wired here, not in start(), so a delta reaching processAABB works from construction
+        // onward regardless of whether/when start() runs - matches this always having worked
+        // that way back when recordEnergyDelta called energyAccumulator.addDelta() directly. See
+        // energy-accumulator.ts's own `attach()` and the identical wiring in
+        // RD20_S.ts/2REF21EBNSX_3.ts/3REK2G03VI200S_2.ts.
+        this.energy = energyAccumulator.attach(this.id, (property, value) => this.publishProperty(property, value))
     }
 
     cancelPendingWork() {
-        this.cancelEnergyRefresh?.()
-        this.cancelEnergyRefresh = undefined
+        this.energy?.cancel()
+        this.energy = undefined
         super.cancelPendingWork()
     }
 
@@ -1562,7 +1558,7 @@ export default class Device extends AABBDevice {
         if (report === 1) this.energyReports = []
         this.energyReports[report - 1] = delta
         this.energyTotal = total
-        if (delta > 0) void this.recordEnergyDelta(delta)
+        if (delta > 0) void this.energy?.recordDelta(delta)
 
         // `energy` is NOT published from here any more. The state record carries the same running
         // total once a minute (OFF_ENERGY_HI), so this frame would only ever restate it fifteen
@@ -1592,20 +1588,6 @@ export default class Device extends AABBDevice {
                 interval_minutes: 15,
             }),
         )
-    }
-
-    /** Adds a newly-seen Wh delta to energy-accumulator.ts's calendar-boundary buckets and
-     *  republishes them - see the `energy_hour`/`energy_day`/`energy_month`/`energy_total`
-     *  components above. */
-    private async recordEnergyDelta(deltaWh: number) {
-        this.publishEnergyStats(await energyAccumulator.addDelta(this.id, deltaWh))
-    }
-
-    private publishEnergyStats(stats: energyAccumulator.EnergyStats) {
-        this.publishProperty('energy_hour', stats.hourWh)
-        this.publishProperty('energy_day', stats.dayWh)
-        this.publishProperty('energy_month', stats.monthWh)
-        this.publishProperty('energy_total', stats.totalWh)
     }
 
     /**

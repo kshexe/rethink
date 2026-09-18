@@ -261,10 +261,13 @@ describe(MODEL_ID, () => {
         // frames too, each with their own fire-and-forget recordEnergyDelta call that could still
         // land after this test starts - a shared id would let a stray delta bleed in.
         const { ha, thinq } = makeDevice('energy-test-1')
-        // First frame only establishes the baseline (7) - nothing to diff against yet.
+        // First frame only establishes the baseline (7) - nothing to diff against yet. energy_hour
+        // already reads 0 regardless, from energyAccumulator.attach()'s own immediate baseline
+        // publish at construction (see energy-accumulator.ts's scheduleHourlyRefresh) - not this
+        // frame's doing.
         thinq.emit('data', ENERGY_COUNTER_7)
         await settle()
-        assert.equal(ha.devices['energy-test-1'].properties.energy_hour, undefined)
+        assert.equal(ha.devices['energy-test-1'].properties.energy_hour, 0)
         // Real second capture, counter 87 - a rise of 80.
         thinq.emit('data', ENERGY_COUNTER_87)
         await settle()
@@ -282,7 +285,9 @@ describe(MODEL_ID, () => {
         // consumption.
         thinq.emit('data', buf('aa0b10affa0003040400bb'))
         await settle()
-        assert.equal(ha.devices['energy-test-2'].properties.energy_hour, undefined, 'no delta recorded for a drop')
+        // Stays at attach()'s construction-time baseline (0) rather than a negative figure -
+        // proving the drop was treated as a new baseline, not that nothing was ever published.
+        assert.equal(ha.devices['energy-test-2'].properties.energy_hour, 0, 'no delta recorded for a drop')
         assert.equal(
             ha.devices['energy-test-2'].properties.energy_raw_counter,
             3,
@@ -305,7 +310,9 @@ describe(MODEL_ID, () => {
         // used in one 5-minute poll interval.
         thinq.emit('data', buf('aa0b10affa02bc040400bb'))
         await settle()
-        assert.equal(ha.devices['energy-test-3'].properties.energy_hour, undefined)
+        // Stays at attach()'s construction-time baseline (0) - proving the implausible delta was
+        // discarded, not that nothing was ever published.
+        assert.equal(ha.devices['energy-test-3'].properties.energy_hour, 0)
         assert.equal(ha.devices['energy-test-3'].properties.energy_raw_counter, 700, 'the raw counter still follows it')
     })
 

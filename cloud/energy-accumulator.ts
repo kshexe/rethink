@@ -181,11 +181,49 @@ export function scheduleHourlyRefresh(id: string, onRoll: (stats: EnergyStats) =
         onRoll(await current(id))
         if (cancelled) return
         timer = setTimeout(() => void fire(), msUntilNextHour(Date.now()))
+        // Never hold the process open on its own - a caller that forgets to cancel (or a test that
+        // never tears down) should not keep rethink-cloud, or `node --test`, waiting on this.
+        timer.unref?.()
     }
 
     void fire()
     return () => {
         cancelled = true
         clearTimeout(timer)
+    }
+}
+
+export type EnergyTracker = {
+    /** Adds a newly-seen Wh delta (from the appliance's own on-device report) and republishes all
+     *  four buckets immediately. */
+    recordDelta(deltaWh: number): Promise<void>
+    /** Stops the hourly boundary refresh. Call from the device's own `cancelPendingWork()`. */
+    cancel: () => void
+}
+
+/**
+ * Every device that tracks energy (RD20_S.ts, FX___S.ts, 2REF21EBNSX_3.ts, 3REK2G03VI200S_2.ts)
+ * wired up the same four `energy_hour`/`energy_day`/`energy_month`/`energy_total` components
+ * against this module by hand, four times over - the same field, the same `start()`/
+ * `cancelPendingWork()` timer plumbing, the same four-line publish block. `attach()` is that
+ * wiring written once: call it from `start()` with the device's own `publishProperty`, keep the
+ * `EnergyTracker` it returns, call `.recordDelta(wh)` wherever the device decodes a new on-device
+ * reading, and call `.cancel()` from `cancelPendingWork()`.
+ */
+export function attach(id: string, publish: (property: string, value: number) => void): EnergyTracker {
+    function publishAll(stats: EnergyStats) {
+        publish('energy_hour', stats.hourWh)
+        publish('energy_day', stats.dayWh)
+        publish('energy_month', stats.monthWh)
+        publish('energy_total', stats.totalWh)
+    }
+
+    const cancelRefresh = scheduleHourlyRefresh(id, publishAll)
+
+    return {
+        async recordDelta(deltaWh: number) {
+            publishAll(await addDelta(id, deltaWh))
+        },
+        cancel: cancelRefresh,
     }
 }

@@ -312,7 +312,7 @@ export default class Device extends AABBDevice {
 
     /** (dir:tag) pairs already flagged as unrecognised, so a repeating one is noted once. */
     private seenUnknown = new Set<string>()
-    private cancelEnergyRefresh: (() => void) | undefined
+    private energy: energyAccumulator.EnergyTracker | undefined
 
     constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
         super(HA, thinq)
@@ -472,33 +472,21 @@ export default class Device extends AABBDevice {
             this.id,
             'RD20_S (건조기) handler started - power, remaining_minutes, status, energy, alarm_volume, feature flags, reservation, notification, remote_control, see file header',
         )
+        // Wired here, not in start(), so a delta reaching processAABB works from construction
+        // onward regardless of whether/when start() runs - matches this always having worked
+        // that way back when recordEnergyDelta called energyAccumulator.addDelta() directly.
+        this.energy = energyAccumulator.attach(this.id, (property, value) => this.publishProperty(property, value))
     }
 
     start() {
         super.start()
         this.send(QUERY_FRAME)
-        this.cancelEnergyRefresh = energyAccumulator.scheduleHourlyRefresh(this.id, (stats) =>
-            this.publishEnergyStats(stats),
-        )
     }
 
     cancelPendingWork() {
-        this.cancelEnergyRefresh?.()
-        this.cancelEnergyRefresh = undefined
+        this.energy?.cancel()
+        this.energy = undefined
         super.cancelPendingWork()
-    }
-
-    /** Adds a newly-seen Wh delta (see the file header's ENERGY section) and republishes the
-     *  calendar-boundary figures. */
-    private async recordEnergyDelta(deltaWh: number) {
-        this.publishEnergyStats(await energyAccumulator.addDelta(this.id, deltaWh))
-    }
-
-    private publishEnergyStats(stats: energyAccumulator.EnergyStats) {
-        this.publishProperty('energy_hour', stats.hourWh)
-        this.publishProperty('energy_day', stats.dayWh)
-        this.publishProperty('energy_month', stats.monthWh)
-        this.publishProperty('energy_total', stats.totalWh)
     }
 
     setProperty(prop: string, mqttValue: string) {
@@ -567,7 +555,7 @@ export default class Device extends AABBDevice {
             const energyRaw = buf[ENERGY_OFFSET]
             if (this.lastEnergyRaw !== undefined) {
                 const delta = (energyRaw - this.lastEnergyRaw + 256) % 256
-                if (delta > 0 && delta <= ENERGY_MAX_PLAUSIBLE_DELTA) void this.recordEnergyDelta(delta)
+                if (delta > 0 && delta <= ENERGY_MAX_PLAUSIBLE_DELTA) void this.energy?.recordDelta(delta)
             }
             this.lastEnergyRaw = energyRaw
 

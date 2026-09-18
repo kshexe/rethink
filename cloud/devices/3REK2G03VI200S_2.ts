@@ -306,7 +306,7 @@ export default class Device extends AABBDevice {
     /** (dir:tag) pairs already flagged as unrecognised, so a repeating one is noted once. */
     private seenUnknown = new Set<string>()
     private queryTimer: ReturnType<typeof setInterval> | undefined
-    private cancelEnergyRefresh: (() => void) | undefined
+    private energy: energyAccumulator.EnergyTracker | undefined
 
     constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
         super(HA, thinq)
@@ -436,6 +436,10 @@ export default class Device extends AABBDevice {
             this.id,
             '3REK2G03VI200S_2 (김치냉장고) handler started - per-compartment storage mode + one-touch deodorize + door sensors, see file header',
         )
+        // Wired here, not in start(), so a delta reaching processAABB works from construction
+        // onward regardless of whether/when start() runs - matches this always having worked
+        // that way back when recordEnergyDelta called energyAccumulator.addDelta() directly.
+        this.energy = energyAccumulator.attach(this.id, (property, value) => this.publishProperty(property, value))
     }
 
     start() {
@@ -444,16 +448,13 @@ export default class Device extends AABBDevice {
         this.queryTimer = setInterval(() => {
             this.query()
         }, QUERY_INTERVAL_MS)
-        this.cancelEnergyRefresh = energyAccumulator.scheduleHourlyRefresh(this.id, (stats) =>
-            this.publishEnergyStats(stats),
-        )
     }
 
     cancelPendingWork() {
         clearInterval(this.queryTimer)
         this.queryTimer = undefined
-        this.cancelEnergyRefresh?.()
-        this.cancelEnergyRefresh = undefined
+        this.energy?.cancel()
+        this.energy = undefined
         super.cancelPendingWork()
     }
 
@@ -466,19 +467,6 @@ export default class Device extends AABBDevice {
      *  every reconnect) - see FX___S.ts's identical method for the full reasoning. */
     publishEvent(topic: string, eventType: string) {
         this.HA.publishProperty(this.id, topic, JSON.stringify({ event_type: eventType }), { retain: false })
-    }
-
-    /** Adds a newly-seen Wh delta (see the file header's ENERGY COUNTER/UNIT CONFIRMED sections)
-     *  and republishes the calendar-boundary figures. */
-    private async recordEnergyDelta(deltaWh: number) {
-        this.publishEnergyStats(await energyAccumulator.addDelta(this.id, deltaWh))
-    }
-
-    private publishEnergyStats(stats: energyAccumulator.EnergyStats) {
-        this.publishProperty('energy_hour', stats.hourWh)
-        this.publishProperty('energy_day', stats.dayWh)
-        this.publishProperty('energy_month', stats.monthWh)
-        this.publishProperty('energy_total', stats.totalWh)
     }
 
     /** Applies a state record (10 bytes) - shared between the `ec` state frame's current half and
@@ -597,7 +585,7 @@ export default class Device extends AABBDevice {
                 this.publishProperty('energy_total_counter', total)
             }
             const delta = buf[ENERGY_DELTA_OFFSET]
-            if (delta > 0) void this.recordEnergyDelta(delta)
+            if (delta > 0) void this.energy?.recordDelta(delta)
             return
         }
 

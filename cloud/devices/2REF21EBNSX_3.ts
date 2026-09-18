@@ -302,7 +302,7 @@ export default class Device extends AABBDevice {
     /** (dir:tag) pairs already flagged as unrecognised, so a repeating one is noted once. */
     private seenUnknown = new Set<string>()
     private queryTimer: ReturnType<typeof setInterval> | undefined
-    private cancelEnergyRefresh: (() => void) | undefined
+    private energy: energyAccumulator.EnergyTracker | undefined
 
     constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
         super(HA, thinq)
@@ -434,6 +434,10 @@ export default class Device extends AABBDevice {
             this.id,
             '2REF21EBNSX_3 (냉장고) handler started - fridge/freezer temp + express mode + Smart Care+ only, see file header',
         )
+        // Wired here, not in start(), so a delta reaching processAABB works from construction
+        // onward regardless of whether/when start() runs - matches this always having worked
+        // that way back when recordEnergyDelta called energyAccumulator.addDelta() directly.
+        this.energy = energyAccumulator.attach(this.id, (property, value) => this.publishProperty(property, value))
     }
 
     start() {
@@ -442,29 +446,13 @@ export default class Device extends AABBDevice {
         this.queryTimer = setInterval(() => {
             this.query()
         }, QUERY_INTERVAL_MS)
-        this.cancelEnergyRefresh = energyAccumulator.scheduleHourlyRefresh(this.id, (stats) =>
-            this.publishEnergyStats(stats),
-        )
-    }
-
-    /** Adds a newly-seen Wh delta (see the file header's ENERGY COUNTER section) and republishes
-     *  the calendar-boundary figures. */
-    private async recordEnergyDelta(deltaWh: number) {
-        this.publishEnergyStats(await energyAccumulator.addDelta(this.id, deltaWh))
-    }
-
-    private publishEnergyStats(stats: energyAccumulator.EnergyStats) {
-        this.publishProperty('energy_hour', stats.hourWh)
-        this.publishProperty('energy_day', stats.dayWh)
-        this.publishProperty('energy_month', stats.monthWh)
-        this.publishProperty('energy_total', stats.totalWh)
     }
 
     cancelPendingWork() {
         clearInterval(this.queryTimer)
         this.queryTimer = undefined
-        this.cancelEnergyRefresh?.()
-        this.cancelEnergyRefresh = undefined
+        this.energy?.cancel()
+        this.energy = undefined
         super.cancelPendingWork()
     }
 
@@ -602,7 +590,7 @@ export default class Device extends AABBDevice {
                 // negative consumption - accepted as the new baseline with no delta recorded.
                 if (this.energyRawCounter !== undefined && counter > this.energyRawCounter) {
                     const delta = counter - this.energyRawCounter
-                    if (delta <= ENERGY_MAX_PLAUSIBLE_DELTA) void this.recordEnergyDelta(delta)
+                    if (delta <= ENERGY_MAX_PLAUSIBLE_DELTA) void this.energy?.recordDelta(delta)
                 }
                 this.energyRawCounter = counter
                 this.publishProperty('energy_raw_counter', counter)
