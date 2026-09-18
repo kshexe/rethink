@@ -392,7 +392,7 @@ describe('FX___S washer', () => {
     })
 
     test('the appliance reports its own energy every fifteen minutes', () => {
-        const { HA, thinq } = setup()
+        const { HA, thinq, dut } = setup()
 
         /*
          * Real 0x3E frames from washer-cycle-20260730.jsonl - the whole set that capture contains.
@@ -405,60 +405,31 @@ describe('FX___S washer', () => {
             'aa0b203e00030003014fbb',
             'aa0b203e005e00610281bb',
             'aa0b203e0016007703f6bb',
-            'aa0b203e000b008204f1bb',
+            'aa0b203e000b008204f1bb', // an 11 Wh report - reads as an extended frame if the length is not checked
             'aa0b203e0003008505f5bb',
             'aa0b203e0003008806f1bb',
         ])
             feed(thinq, Buffer.from(f, 'hex'))
 
-        assert.equal(get(HA, 'energy_reports'), '3 / 94 / 22 / 11 / 3 / 3')
         // `energy` no longer comes from this frame - the state record carries the same running
         // total once a minute instead of once a quarter hour. See OFF_ENERGY_HI.
         assert.equal(get(HA, 'energy'), undefined)
-
-        /* An 11 Wh report reads as an extended frame if the length is not checked; this is that one. */
-        assert.equal(get(HA, 'energy_reports')?.toString().split(' / ')[3], '11')
-
-        /* Report 1 starts a new cycle's count rather than extending the old one. */
-        feed(thinq, Buffer.from('aa0b203e001600160115bb', 'hex'))
-        feed(thinq, Buffer.from('aa0b203e000d00230210bb', 'hex'))
-        assert.equal(get(HA, 'energy_reports'), '22 / 13')
+        // `energyTotal` (internal state feeding energy_reports_attrs's old cycle_total, and the
+        // state record's own fallback) still tracks each report's own total field regardless.
+        assert.equal(dut.energyTotal, 136, "this capture's last report's own total")
     })
 
-    test('the 2026-08-04 Normal cycle, which is what settled the unit', () => {
-        const { HA, thinq } = setup()
+    test('the 2026-08-04 Normal cycle - what settled the Wh unit against a smart plug on the outlet', () => {
+        const { thinq, dut } = setup()
 
         // The three reports of that cycle, byte for byte from washer-normal-20260804.jsonl. The
         // appliance ran 13:56:44 - 14:25:27, so a "167 minute" total was never possible; the plug
         // measured +0.18 kWh over the same cycle against the 164 reported here.
         feed(thinq, Buffer.from('aa0b203e008c008c01f4bb', 'hex')) // 14:10:08  140 / 140 / 1
         feed(thinq, Buffer.from('aa0b203e001800a40284bb', 'hex')) // 14:25:28   24 / 164 / 2
-
         feed(thinq, Buffer.from('aa0b203e000300a70395bb', 'hex')) // 14:40:06    3 / 167 / 3
-        assert.equal(get(HA, 'energy_reports'), '140 / 24 / 3')
 
-        const attrs = JSON.parse(String(get(HA, 'energy_reports_attrs')))
-        assert.deepEqual(attrs.reports, [140, 24, 3])
-        assert.equal(attrs.latest, 3)
-        assert.equal(attrs.cycle_total, 167)
-        assert.equal(attrs.unit, 'Wh')
-    })
-
-    test('a cycle already under way when we connect shows the gap instead of swallowing it', () => {
-        const { HA, thinq } = setup()
-
-        // Report 6 with nothing before it, which is what connecting mid-cycle looks like. The first
-        // five slots are HOLES in the array, and Array.prototype.map skips holes rather than
-        // visiting them - so the placeholder never ran and this published `/////3` on the appliance
-        // on 2026-08-09 at 17:34.
-        feed(thinq, Buffer.from('aa0b203e0003008806f1bb', 'hex'))
-
-        assert.equal(get(HA, 'energy_reports'), '? / ? / ? / ? / ? / 3')
-        const attrs = JSON.parse(String(get(HA, 'energy_reports_attrs')))
-        assert.deepEqual(attrs.reports, [null, null, null, null, null, 3])
-        // The appliance's own cumulative figure, which is right even though our per-report list
-        // cannot be - that is the whole reason it is not a sum of `reports`.
-        assert.equal(attrs.cycle_total, 136)
+        assert.equal(dut.energyTotal, 167)
     })
 
     test('0xE2 carries the same cycle total at @22, from a different frame family', () => {
@@ -839,8 +810,18 @@ describe('FX___S entity names', () => {
         // These report what the appliance is doing rather than setting it, so grouping them with the
         // controls would say they are adjustable.
         assert.equal(nameOf(HA, 'current_course'), 'Current course')
-        assert.equal(nameOf(HA, 'energy_reports'), 'Energy per 15 min report (Wh)')
         assert.equal(nameOf(HA, 'remaining_time'), 'Remaining time')
+    })
+
+    test('energy_reports is withdrawn, not just left undeclared - existing installs get it removed', () => {
+        const { HA } = setup()
+
+        // The removal stub: the key stays, carrying `platform` and nothing else, which is what
+        // deletes the entity - see the component's own comment. Anything more turns the removal
+        // back into a registration. Same mechanism as cycle_plan/cycle_plan_total just above it,
+        // and laundry_care_active elsewhere in this file.
+        const stub = HA.devices[DEVICE_ID].config!.components.energy_reports as unknown as Record<string, unknown>
+        assert.deepEqual(Object.keys(stub), ['platform'])
     })
 })
 

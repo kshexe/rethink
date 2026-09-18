@@ -797,8 +797,6 @@ const COURSE_BY_NAME = { ...invert(COURSE), ...invert(COURSE_KO), ...LEGACY_COUR
 const COURSE_EXT_BY_NAME = { ...invert(COURSE_EXT), ...invert(COURSE_EXT_KO), ...LEGACY_COURSE_EXT_NAMES }
 
 export default class Device extends AABBDevice {
-    /** Wh reported by each of the appliance's ~15-minute energy reports, index 0 = report 1. */
-    energyReports: number[] = []
     /** Wh since the current cycle started, as the appliance last reported it. */
     energyTotal: number | undefined
     /** The finish time last published while a cycle runs, so a re-anchored one under a minute away is not. */
@@ -952,20 +950,12 @@ export default class Device extends AABBDevice {
                     unit_of_measurement: 'Wh',
                     state_class: 'total_increasing',
                 },
-                // The same meter's individual reports, which is a list and therefore cannot be a
-                // number entity. The owner's complaint about it was fair: `19/31/2` on its own does
-                // not say what the numbers are, how far apart they were, or which one is current.
-                // The name now carries the unit and the cadence, and the attributes carry the parts
-                // separately so a template or a card can use them without parsing the state.
-                energy_reports: {
-                    platform: 'sensor',
-                    unique_id: '$deviceid-energy-reports',
-                    state_topic: '$this/energy_reports',
-                    json_attributes_topic: '$this/energy_reports_attrs',
-                    name: 'Energy per 15 min report (Wh)',
-                    icon: 'mdi:chart-histogram',
-                    entity_category: 'diagnostic',
-                },
+                // Withdrawn 2026-09-18, once "Energy this cycle" existed for both washer and
+                // dryer: with a real per-cycle total on screen, the per-15-min breakdown this
+                // entity gave stopped earning its keep. Publishing the key with nothing but
+                // `platform` is what withdraws it - see cycle_plan/cycle_plan_total just above
+                // for the full reasoning (same mechanism, same cast).
+                energy_reports: { platform: 'sensor' } as ComponentInfo,
                 // Calendar-boundary Wh figures fed by the same 0x3E delta, via energy-accumulator.ts
                 // (see 3REK2G03VI200S_2.ts for the same module used the same way). These survive
                 // both this counter's per-cycle reset (by design - a new wash starts it back at 0)
@@ -1543,41 +1533,15 @@ export default class Device extends AABBDevice {
     processEnergyReport(payload: Buffer) {
         const delta = payload.readUInt16BE(0)
         const total = payload.readUInt16BE(2)
-        const report = payload[4]
 
-        if (report === 1) this.energyReports = []
-        this.energyReports[report - 1] = delta
         this.energyTotal = total
         if (delta > 0) void this.energy?.recordDelta(delta)
 
-        // `energy` is NOT published from here any more. The state record carries the same running
-        // total once a minute (OFF_ENERGY_HI), so this frame would only ever restate it fifteen
-        // minutes late - and having two sources publish one entity made them take turns, since the
-        // record is a minute fresher than the report that follows it. What is left here is the
-        // per-report breakdown, which only this frame has.
-
-        /*
-         * Array.from, NOT map. Connecting mid-cycle means the first report seen can be number 6,
-         * and `energyReports[5] = 2` on an empty array leaves five HOLES - which Array.prototype.map
-         * skips rather than visiting, so the `?? '?'` never ran on them and the sensor published
-         * `/////2`. It really did, on 2026-08-09 at 17:34. Array.from iterates by index and hands
-         * a hole to the callback as undefined, which is what the placeholder was always for.
-         */
-        const reports = Array.from(this.energyReports, (wh) => wh ?? null)
-        this.publishProperty('energy_reports', reports.map((wh) => wh ?? '?').join(' / '))
-        this.publishProperty(
-            'energy_reports_attrs',
-            JSON.stringify({
-                reports,
-                latest: reports[reports.length - 1],
-                // Not the sum of `reports`: a mid-cycle connect misses the reports before it, and
-                // the appliance's own cumulative figure does not.
-                cycle_total: total,
-                unit: 'Wh',
-                // Measured at 14:46 to 15:20 apart across the captures - see above.
-                interval_minutes: 15,
-            }),
-        )
+        // Nothing else published from here - `energy` (this cycle) comes from the state record's
+        // own running total once a minute (OFF_ENERGY_HI) instead, a minute fresher than this
+        // report; the per-report breakdown this frame used to also publish (`energy_reports`) was
+        // withdrawn once "Energy this cycle" existed for both this and RD20_S.ts, see the
+        // component's own withdrawal comment above.
     }
 
     /**
