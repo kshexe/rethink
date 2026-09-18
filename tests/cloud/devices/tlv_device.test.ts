@@ -4,6 +4,7 @@ import TLVDevice from '@/cloud/devices/tlv_device'
 import * as TLV from '@/util/tlv'
 import type { DeviceDiscovery } from '@/cloud/homeassistant'
 import { MockHAConnection, MockThinq2Device, buf } from '@/tests/helpers/mocks'
+import { enableMockTimers, tickMockTimers } from '@/tests/helpers/timers'
 
 const DEVICE_ID = 'test-id'
 function makeDevice() {
@@ -155,7 +156,13 @@ import { join } from 'node:path'
 async function recorderLines(dir: string) {
     await new Promise((r) => setTimeout(r, 40))
     const f = readdirSync(dir)[0]
-    return f ? readFileSync(join(dir, f), 'utf-8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []
+    return f
+        ? readFileSync(join(dir, f), 'utf-8')
+              .trim()
+              .split('\n')
+              .filter(Boolean)
+              .map((l) => JSON.parse(l))
+        : []
 }
 
 test('processTLV notes a from-device tag with no FieldDefinition, once', async () => {
@@ -182,12 +189,84 @@ test('a known field id and a structural tag are not noted', async () => {
         configureRecorder({ dir, days: 3 })
         const { dev, config } = makeDevice()
         dev.addField(config, { id: 0x300, name: 'f', comp: 'sensor' })
-        dev.processTLV([{ t: 0x300, v: 1 }, { t: 0x1f5, v: 2 }])
+        dev.processTLV([
+            { t: 0x300, v: 1 },
+            { t: 0x1f5, v: 2 },
+        ])
         assert.equal((await recorderLines(dir)).filter((l) => l.kind === 'unmodelled-tlv-tag').length, 0)
     } finally {
         configureRecorder({ days: 0 })
         rmSync(dir, { recursive: true, force: true })
     }
+})
+
+/** Builds the same `sendData`-shaped frame the tests above use, carrying one TLV. */
+function outboundValuesFrame(t: number, v: number) {
+    const body = [0x04, 0x00, 0x00, 0x00, 0x65, 0x02, 0x01, 0x00, 0x02]
+    const tlv = TLV.build([{ t, v }])
+    return Buffer.from([0x01, 0x01, ...body, ...tlv, 0x00, 0x00])
+}
+
+test('a relayed write carrying a known field schedules a confirmatory query, not an immediate one', (t) => {
+    enableMockTimers(t)
+    const { thinq, dev, config } = makeDevice()
+    dev.addField(config, { id: 0x1f7, name: 'power', comp: 'c' })
+
+    thinq.emit('sendData', outboundValuesFrame(0x1f7, 1))
+    assert.equal(thinq.outbox.length, 0, 'not sent synchronously - see the file header')
+
+    tickMockTimers(t, 1500)
+    assert.equal(thinq.outbox.length, 1)
+    const tlv = TLV.parse(thinq.outbox[0].subarray(11, thinq.outbox[0].length - 2))
+    assert.deepEqual(tlv, [{ t: 0x1f5, l: 0, v: 2 }]) // the same body query() itself sends
+})
+
+test('a relayed write with no known field does not schedule a query', (t) => {
+    enableMockTimers(t)
+    const { thinq } = makeDevice()
+
+    thinq.emit('sendData', outboundValuesFrame(0x2fe, 0))
+    tickMockTimers(t, 5000)
+    assert.equal(thinq.outbox.length, 0)
+})
+
+test('several relayed writes within the debounce window schedule one query, not one each', (t) => {
+    enableMockTimers(t)
+    const { thinq, dev, config } = makeDevice()
+    dev.addField(config, { id: 0x1f7, name: 'power', comp: 'c' })
+
+    // Two of the six real retries captured live 2026-09-18 landed just 479ms apart - well inside
+    // the debounce window - which is exactly what this collapses to one query.
+    thinq.emit('sendData', outboundValuesFrame(0x1f7, 1))
+    tickMockTimers(t, 480)
+    thinq.emit('sendData', outboundValuesFrame(0x1f7, 1))
+    assert.equal(thinq.outbox.length, 0, 'still debounced, no query yet')
+
+    tickMockTimers(t, 1500)
+    assert.equal(thinq.outbox.length, 1, 'one query for both writes, not two')
+})
+
+test('a query fired from a normal read still works after a relayed write already scheduled one', (t) => {
+    enableMockTimers(t)
+    const { thinq, dev, config } = makeDevice()
+    dev.addField(config, { id: 0x1f7, name: 'power', comp: 'c' })
+
+    thinq.emit('sendData', outboundValuesFrame(0x1f7, 1))
+    tickMockTimers(t, 1500)
+    assert.equal(thinq.outbox.length, 1)
+
+    thinq.resetRecorder()
+    dev.query()
+    assert.equal(thinq.outbox.length, 1, 'a later manual query is unaffected')
+})
+
+test('the self-sent 0x1f5 caps/values poll never schedules its own confirmatory query', (t) => {
+    enableMockTimers(t)
+    const { thinq } = makeDevice()
+
+    thinq.emit('sendData', outboundValuesFrame(0x1f5, 2))
+    tickMockTimers(t, 5000)
+    assert.equal(thinq.outbox.length, 0)
 })
 
 test('inspectOutboundTLV notes an unknown tag in a frame pushed to the appliance', async () => {

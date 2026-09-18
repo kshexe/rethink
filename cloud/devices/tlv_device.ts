@@ -139,6 +139,11 @@ export default class TLVDevice extends HADevice {
             this.query_values_timeout = undefined
         }
 
+        if (this.pendingBridgeRefresh != undefined) {
+            clearTimeout(this.pendingBridgeRefresh)
+            this.pendingBridgeRefresh = undefined
+        }
+
         super.drop()
     }
 
@@ -273,6 +278,12 @@ export default class TLVDevice extends HADevice {
         }
     }
 
+    /** Set while a bridge-relayed command (see inspectOutboundTLV) has a confirmatory query
+     *  outstanding, so a burst of several relayed writes in a row (the real app resending a
+     *  command that hasn't been acked yet, the same retry pattern captured live 2026-09-18 - see
+     *  inspectOutboundTLV's own comment) schedules one query, not one per write. */
+    private pendingBridgeRefresh: ReturnType<typeof setTimeout> | undefined
+
     /** A values-write frame going out to the appliance: `b0 b1 04 00 00 00 65 02 <b3> <b4>
      *  <tlvLen> <tlv> <crc16>`. buf[7]==0x02 is the values channel - buf[7]==0xFD is the
      *  priv-data command channel, whose body is not a TLV list and must not be parsed as one. */
@@ -284,6 +295,32 @@ export default class TLVDevice extends HADevice {
         // The caps/values poll this class sends itself - one tag, 0x1f5 - is not a command.
         if (tlv.length === 1 && tlv[0].t === 0x1f5) return
         this.noteUnknownTags('to-device', tlv)
+
+        /*
+         * A command reaching the appliance is not necessarily one this handler itself sent -
+         * bridge mode also relays the real app's own commands straight through untouched (see the
+         * class comment on the thinq.on('sendData', ...) hook above). setProperty() already
+         * updates raw_clip_state synchronously for a write THIS handler issues, which is what lets
+         * updateQueryInterval() switch to fast polling immediately; a relayed write from the real
+         * app never goes through setProperty at all, so raw_clip_state (and therefore HA's
+         * displayed state) does not catch up until whatever status push the appliance happens to
+         * send next - normally seconds away while the fast/30s poll is already running, but up to
+         * the full 15-minute default interval if the unit had been idle. Measured live 2026-09-18:
+         * a real power-on relayed through the bridge left HA showing "off" for close to 2 minutes
+         * because the only pushes in between were temperature-only notifies that do not carry the
+         * power tag at all.
+         *
+         * Rather than trusting the relayed value outright (the appliance might still reject it),
+         * just pull a fresh confirmed read shortly after - this is the same query() the periodic
+         * timer already sends, so it goes through the ordinary processTLV()/read_callback path
+         * and publishes for real once the appliance answers, typically in well under a second.
+         */
+        if (tlv.some(({ t }) => t in this.fields_by_id) && this.pendingBridgeRefresh === undefined) {
+            this.pendingBridgeRefresh = setTimeout(() => {
+                this.pendingBridgeRefresh = undefined
+                this.query()
+            }, 1500)
+        }
     }
 
     processTLV(tlvArray: TLV.TLV[]) {
