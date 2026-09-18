@@ -394,7 +394,7 @@ describe(MODEL_ID, () => {
         assert.equal(ha.devices[DEVICE_ID].properties.express_mode, 'ON')
     })
 
-    test('start() sends the query frame immediately, byte for byte, and again on a timer', (t) => {
+    test("start() sends the query frame once, byte for byte, and never again - see the file header's SENT ONCE ONLY note", (t) => {
         enableMockTimers(t)
         const { thinq, dev } = makeDevice()
         thinq.resetRecorder()
@@ -403,22 +403,12 @@ describe(MODEL_ID, () => {
         assert.equal(thinq.outbox.length, 1, 'queried once on start')
         assert.equal(thinq.outbox[0].toString('hex'), QUERY_FRAME_HEX)
 
-        tickMockTimers(t, 5 * 60 * 1000)
-        assert.equal(thinq.outbox.length, 2, 'queried again after the interval')
-        assert.equal(thinq.outbox[1].toString('hex'), QUERY_FRAME_HEX)
-
-        dev.drop()
-    })
-
-    test('drop() stops the query timer - no further queries after that', (t) => {
-        enableMockTimers(t)
-        const { thinq, dev } = makeDevice()
-        dev.start()
-        thinq.resetRecorder()
-
-        dev.drop()
+        // No periodic re-query any more - a real state change (app, HA, or the appliance's own
+        // physical panel) reaches this handler reactively regardless, see the file header.
         tickMockTimers(t, 60 * 60 * 1000)
-        assert.equal(thinq.outbox.length, 0, 'no query fired after drop()')
+        assert.equal(thinq.outbox.length, 1, 'no further query fired, even an hour later')
+
+        dev.drop()
     })
 
     test('the query response (a single record, not a before/after pair) publishes the real reading', () => {

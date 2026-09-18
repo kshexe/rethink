@@ -57,6 +57,16 @@ import * as energyAccumulator from '../energy-accumulator'
  * replay verbatim), and its response's record decodes with the exact same offsets as the `ec`
  * state frame's current record.
  *
+ * SENT ONCE ONLY (2026-09-18, corrects the "on a repeating 5-minute timer" choice above): the
+ * repeat was meant to cover a change this unit never bridges and never reports on its own - but
+ * 3REK2G03VI200S_2.ts's own real capture (`STATE_TOP_TO_PROBIOTIC` in its tests - a compartment
+ * mode changed at the physical panel, no write and no query in flight either) already proved the
+ * opposite for this whole fridge-family protocol: the appliance pushes a fresh `ec` state frame
+ * on its own the moment anything changes, panel-driven included, the same way door-open events
+ * already do. A periodic re-query never had anything left to catch that a reactive push, the
+ * initial connect-time query above, or bridge mode's own relay would not already have surfaced -
+ * see RD20_S.ts/MI2D7B.ts for the identical connect-once-only choice.
+ *
  * Write-side offsets confirmed by sweeping each control through its real range and diffing the
  * frames (offsets counted from the start of the 43-byte body, i.e. byte 0 is the 0xf0 of the
  * opcode):
@@ -224,7 +234,6 @@ const QUERY_SUB = 0x10
 const QUERY_OPCODE = 0xeb
 /** Fixed, parameterless - see the file header. */
 const QUERY_FRAME = Buffer.from('f0ed1211010000010400', 'hex')
-const QUERY_INTERVAL_MS = 5 * 60 * 1000
 
 /** Per-door-open event: `aa 08 10 a8 <compartment> <state> <ck> bb` - see the file header's DOOR
  *  OPEN BY COMPARTMENT section. `buf` here is the 4-byte body AABBDevice hands to processAABB. */
@@ -302,7 +311,6 @@ export default class Device extends AABBDevice {
 
     /** (dir:tag) pairs already flagged as unrecognised, so a repeating one is noted once. */
     private seenUnknown = new Set<string>()
-    private queryTimer: ReturnType<typeof setInterval> | undefined
     private energy: energyAccumulator.EnergyTracker | undefined
 
     constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
@@ -428,14 +436,9 @@ export default class Device extends AABBDevice {
     start() {
         super.start()
         this.query()
-        this.queryTimer = setInterval(() => {
-            this.query()
-        }, QUERY_INTERVAL_MS)
     }
 
     cancelPendingWork() {
-        clearInterval(this.queryTimer)
-        this.queryTimer = undefined
         this.energy?.cancel()
         this.energy = undefined
         super.cancelPendingWork()

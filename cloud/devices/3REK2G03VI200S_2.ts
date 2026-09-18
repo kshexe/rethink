@@ -188,9 +188,13 @@ const STATE_RECORD_LEN = 10
 
 const QUERY_SUB = 0x11
 const QUERY_OPCODE = 0xeb
-/** Fixed, parameterless - byte-for-byte the same frame 2REF21EBNSX_3.ts uses for its own query. */
+/** Fixed, parameterless - byte-for-byte the same frame 2REF21EBNSX_3.ts uses for its own query.
+ *  Sent once at connect only, not on a repeating timer - see 2REF21EBNSX_3.ts's own "SENT ONCE
+ *  ONLY" file-header note (added 2026-09-18) for why: this file's own `STATE_TOP_TO_PROBIOTIC`
+ *  fixture below is the actual proof, a real capture of a compartment mode changed at the
+ *  physical panel with no write or query in flight, which the appliance pushed a fresh `ec` state
+ *  frame for entirely on its own. */
 const QUERY_FRAME = Buffer.from('f0ed1211010000010400', 'hex')
-const QUERY_INTERVAL_MS = 5 * 60 * 1000
 
 const WRITE_ECHO_SUB = 0x11
 const WRITE_ECHO_OPCODE = 0xe6
@@ -302,7 +306,6 @@ export default class Device extends AABBDevice {
 
     /** (dir:tag) pairs already flagged as unrecognised, so a repeating one is noted once. */
     private seenUnknown = new Set<string>()
-    private queryTimer: ReturnType<typeof setInterval> | undefined
     private energy: energyAccumulator.EnergyTracker | undefined
 
     constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
@@ -429,14 +432,9 @@ export default class Device extends AABBDevice {
     start() {
         super.start()
         this.query()
-        this.queryTimer = setInterval(() => {
-            this.query()
-        }, QUERY_INTERVAL_MS)
     }
 
     cancelPendingWork() {
-        clearInterval(this.queryTimer)
-        this.queryTimer = undefined
         this.energy?.cancel()
         this.energy = undefined
         super.cancelPendingWork()

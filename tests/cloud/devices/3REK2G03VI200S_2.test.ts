@@ -190,7 +190,7 @@ describe(MODEL_ID, () => {
         assert.equal(ha.devices[DEVICE_ID].properties.any_door_open, 'OFF')
     })
 
-    test('start() sends the query frame immediately, byte for byte, and again on a timer', (t) => {
+    test("start() sends the query frame once, byte for byte, and never again - see the file header's note on QUERY_FRAME", (t) => {
         enableMockTimers(t)
         const { thinq, dev } = makeDevice()
         thinq.resetRecorder()
@@ -199,9 +199,10 @@ describe(MODEL_ID, () => {
         assert.equal(thinq.outbox.length, 1, 'queried once on start')
         assert.equal(thinq.outbox[0].toString('hex'), 'aa0ef0ed1211010000010400ebbb')
 
-        tickMockTimers(t, 5 * 60 * 1000)
-        assert.equal(thinq.outbox.length, 2, 'queried again after the interval')
-        assert.equal(thinq.outbox[1].toString('hex'), thinq.outbox[0].toString('hex'))
+        // No periodic re-query any more - STATE_TOP_TO_PROBIOTIC below is the proof a real state
+        // change (physical panel included) reaches this handler reactively regardless.
+        tickMockTimers(t, 60 * 60 * 1000)
+        assert.equal(thinq.outbox.length, 1, 'no further query fired, even an hour later')
 
         dev.drop()
     })
