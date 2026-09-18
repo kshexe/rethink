@@ -278,14 +278,20 @@ export default class TLVDevice extends HADevice {
         }
     }
 
+    /** How long to wait after a bridge-relayed command before pulling a confirmatory read - see
+     *  inspectOutboundTLV. Grounded in the three write-to-reflected-read gaps measured live
+     *  2026-09-18 (0.573s/0.618s/0.854s, all under a second), with roughly 150-400ms of margin
+     *  over the slowest of those rather than a round-number guess. */
+    private static readonly BRIDGE_REFRESH_DELAY_MS = 1000
+
     /** Set while a bridge-relayed command (see inspectOutboundTLV) has a confirmatory query
-     *  outstanding, so writes landing within the same ~1.5s window collapse into that one query
-     *  rather than each scheduling their own. This does NOT collapse a whole retry burst down to
-     *  one call - the six retries captured live 2026-09-18 were mostly 2-8s apart, well outside
-     *  the window, and still produced four separate queries over the ~15s span. That is fine: a
-     *  query is cheap, and more of them just means more chances to catch the real state sooner.
-     *  The debounce only exists to avoid firing one per write when several land within
-     *  milliseconds of each other (the LG cloud/app double-sending, say), not to throttle a
+     *  outstanding, so writes landing within the same BRIDGE_REFRESH_DELAY_MS window collapse
+     *  into that one query rather than each scheduling their own. This does NOT collapse a whole
+     *  retry burst down to one call - the six retries captured live 2026-09-18 were mostly 2-8s
+     *  apart, well outside the window, and still produced four separate queries over the ~15s
+     *  span. That is fine: a query is cheap, and more of them just means more chances to catch the
+     *  real state sooner. The debounce only exists to avoid firing one per write when several land
+     *  within milliseconds of each other (the LG cloud/app double-sending, say), not to throttle a
      *  spread-out burst down to a single confirmatory read. */
     private pendingBridgeRefresh: ReturnType<typeof setTimeout> | undefined
 
@@ -324,7 +330,7 @@ export default class TLVDevice extends HADevice {
             this.pendingBridgeRefresh = setTimeout(() => {
                 this.pendingBridgeRefresh = undefined
                 this.query()
-            }, 1500)
+            }, TLVDevice.BRIDGE_REFRESH_DELAY_MS)
         }
     }
 
