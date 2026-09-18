@@ -420,6 +420,16 @@ export default class Device extends AABBDevice {
                     name: 'Notification',
                     icon: 'mdi:bell-ring-outline',
                 },
+                // CATEGORY (2026-09-18): none of the five entities below carry entity_category
+                // any more - they used to all be 'diagnostic'. FX___S.ts (this fork's reference
+                // implementation - see README) keeps its own equivalents (drum_light,
+                // remote_control, door_lock, child_lock, crease_care) in the main dashboard on
+                // purpose; this file's blanket 'diagnostic' tagging predates that choice and was
+                // never itself a deliberate call, just every read-only sensor's default. Aligned
+                // to match. reservation_minutes/buzzer below are unchanged - FX___S.ts has no
+                // read-only sibling of the same entity type for either to align against (its own
+                // reservation/buzzer are writable, a genuinely different case).
+                //
                 // See the file header's NOTIFICATION CORRECTION section - 0xc8/0xc9 on the same
                 // channel as `notification` above, split out since it is a state, not an event.
                 remote_control: {
@@ -428,7 +438,6 @@ export default class Device extends AABBDevice {
                     state_topic: '$this/remote_control',
                     name: 'Remote control',
                     icon: 'mdi:remote',
-                    entity_category: 'diagnostic',
                 },
                 // See the file header's "FEATURE/OPTION FLAG BYTES" section - all four read-only,
                 // the write side for any of them has not been captured/confirmed yet.
@@ -438,7 +447,6 @@ export default class Device extends AABBDevice {
                     state_topic: '$this/drum_light',
                     name: 'Drum light',
                     icon: 'mdi:lightbulb-outline',
-                    entity_category: 'diagnostic',
                 },
                 // Named to match this model's own modelJSON field (`wrinkleCare`) - FX___S.ts's
                 // sibling entity is named for ITS OWN modelJSON field instead (`creaseCare`), a
@@ -450,7 +458,6 @@ export default class Device extends AABBDevice {
                     state_topic: '$this/wrinkle_care',
                     name: 'Wrinkle care',
                     icon: 'mdi:tshirt-crew-outline',
-                    entity_category: 'diagnostic',
                 },
                 ironing_alert: {
                     platform: 'binary_sensor',
@@ -458,7 +465,6 @@ export default class Device extends AABBDevice {
                     state_topic: '$this/ironing_alert',
                     name: 'Ironing alert',
                     icon: 'mdi:iron-outline',
-                    entity_category: 'diagnostic',
                 },
                 // Named to match this model's own modelJSON field (`childLock`), same name
                 // FX___S.ts's own child_lock uses - LG happens to use the identical name on both
@@ -469,7 +475,6 @@ export default class Device extends AABBDevice {
                     state_topic: '$this/child_lock',
                     name: 'Child lock',
                     icon: 'mdi:lock-outline',
-                    entity_category: 'diagnostic',
                 },
                 // See the file header's "FEATURE/OPTION FLAG BYTES" section. 0 when no
                 // reservation is armed.
