@@ -127,6 +127,11 @@ describe(MODEL_ID, () => {
             'energy_day',
             'energy_hour',
             'energy_month',
+            // energy_total/energy_total_counter: withdrawal stubs (platform-only, see the config
+            // itself), not real entities - removed 2026-09-18 once energy_hour/day/month covered
+            // the need.
+            'energy_total',
+            'energy_total_counter',
             'middle_compartment',
             'notification',
             'one_touch_deodorize',

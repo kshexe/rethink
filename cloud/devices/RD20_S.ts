@@ -1,5 +1,5 @@
 import { Device as Thinq2Device } from '../thinq2/device'
-import { type Connection, type DeviceDiscovery } from '../homeassistant'
+import { type ComponentInfo, type Connection, type DeviceDiscovery } from '../homeassistant'
 import { type Metadata } from '../thinq'
 import { allowExtendedType } from '@/util/casting'
 import HADevice from './base'
@@ -411,6 +411,17 @@ export default class Device extends AABBDevice {
                     state_class: 'total_increasing',
                     state_topic: '$this/energy_month',
                 },
+                // Withdrawn 2026-09-18 (hour/day/month above cover the real need) - publishing the
+                // key with nothing but `platform` is what removes the entity from existing
+                // installs; see FX___S.ts's cycle_plan/energy_reports for the same mechanism and
+                // its full reasoning.
+                energy_total: { platform: 'sensor' } as ComponentInfo,
+                // Renamed 2026-09-18 (see the RENAMED note in this file's header) - withdrawn under
+                // their old names the same way, so existing installs lose the stale entity instead
+                // of keeping it alongside the new one forever.
+                alarm_volume: { platform: 'sensor' } as ComponentInfo,
+                anti_wrinkle: { platform: 'binary_sensor' } as ComponentInfo,
+                button_lock: { platform: 'binary_sensor' } as ComponentInfo,
                 // See the file header's NOTIFICATION section.
                 notification: {
                     platform: 'event',

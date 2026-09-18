@@ -100,9 +100,14 @@ describe(MODEL_ID, () => {
         const { ha } = makeDevice()
         const components = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
         assert.deepEqual(Object.keys(components).sort(), [
+            // energy_raw_counter/energy_total: withdrawal stubs (platform-only, see the config
+            // itself), not real entities - removed 2026-09-18 once energy_hour/day/month covered
+            // the need.
             'energy_day',
             'energy_hour',
             'energy_month',
+            'energy_raw_counter',
+            'energy_total',
             'express_mode',
             'freezer_door_open',
             'freezer_temp',

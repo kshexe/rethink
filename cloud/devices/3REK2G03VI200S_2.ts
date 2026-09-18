@@ -1,5 +1,5 @@
 import { Device as Thinq2Device } from '../thinq2/device'
-import { type Connection, type DeviceDiscovery } from '../homeassistant'
+import { type ComponentInfo, type Connection, type DeviceDiscovery } from '../homeassistant'
 import { type Metadata } from '../thinq'
 import { allowExtendedType } from '@/util/casting'
 import HADevice from './base'
@@ -404,6 +404,13 @@ export default class Device extends AABBDevice {
                     state_class: 'total',
                     state_topic: '$this/energy_month',
                 },
+                // Withdrawn 2026-09-18 (hour/day/month above cover the real need) - publishing the
+                // key with nothing but `platform` is what removes the entity from existing
+                // installs; see FX___S.ts's cycle_plan/energy_reports for the same mechanism and
+                // its full reasoning. Leaving the key out entirely would only stop a fresh install
+                // creating one and leave it live forever on every install that already has it.
+                energy_total: { platform: 'sensor' } as ComponentInfo,
+                energy_total_counter: { platform: 'sensor' } as ComponentInfo,
             },
         })
 

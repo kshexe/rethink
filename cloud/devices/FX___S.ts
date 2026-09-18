@@ -1005,6 +1005,14 @@ export default class Device extends AABBDevice {
                     state_class: 'total',
                     state_topic: '$this/energy_month',
                 },
+                // Withdrawn 2026-09-18 (hour/day/month above cover the real need) - same mechanism
+                // as cycle_plan/energy_reports above.
+                energy_total: { platform: 'sensor' } as ComponentInfo,
+                // Renamed 2026-09-18 (see the NAMING AUDIT note above) - withdrawn under their old
+                // names the same way, so existing installs lose the stale entity instead of keeping
+                // it alongside the new one forever.
+                beep: { platform: 'select' } as ComponentInfo,
+                wrinkle_care: { platform: 'binary_sensor' } as ComponentInfo,
                 // LOCAL ONLY - not for upstream, by the owner's decision (2026-08-07). Every other
                 // entity here reports something the appliance sends; this one is a set of phase
                 // numbers this handler decided to call "running", and which phases belong in it is a

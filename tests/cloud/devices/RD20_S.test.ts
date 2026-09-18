@@ -169,6 +169,14 @@ describe(MODEL_ID, () => {
             'energy_hour',
             'energy_day',
             'energy_month',
+            // energy_total/alarm_volume/anti_wrinkle/button_lock: withdrawal stubs (platform-only,
+            // see the config itself) - energy_total was removed once hour/day/month covered the
+            // need, the other three are the pre-rename names for buzzer/wrinkle_care/child_lock
+            // below (see the RENAMED note in RD20_S.ts's own header), all withdrawn 2026-09-18.
+            'energy_total',
+            'alarm_volume',
+            'anti_wrinkle',
+            'button_lock',
             'notification',
             'remote_control',
             'drum_light',
