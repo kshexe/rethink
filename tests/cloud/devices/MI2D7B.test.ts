@@ -1,12 +1,32 @@
 import { describe, test } from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import DUT from '@/cloud/devices/MI2D7B'
 import type { Metadata } from '@/cloud/thinq'
+import { configure as configureEnergyAccumulator } from '@/cloud/energy-accumulator'
 import { MockHAConnection, MockThinq2Device, buf } from '@/tests/helpers/mocks'
 
 const DEVICE_ID = 'test-id'
 const MODEL_ID = 'MI2D7B'
 const META: Metadata = { modelId: MODEL_ID, modelName: MODEL_ID, swVersion: '1.0' }
+
+/** energy-accumulator.ts persists to disk and caches by device id - point it at a fresh scratch
+ *  dir (which also clears its cache) so each energy test starts from nothing, the same way
+ *  RD20_S.test.ts/2REF21EBNSX_3.test.ts/3REK2G03VI200S_2.test.ts isolate themselves, and so these
+ *  tests never touch the real /share/rethink/energy path. */
+function freshEnergyDir() {
+    const dir = mkdtempSync(join(tmpdir(), 'mi2d7b-energy-test-'))
+    configureEnergyAccumulator(dir)
+    process.on('exit', () => rmSync(dir, { recursive: true, force: true }))
+}
+
+/** recordDelta() is fire-and-forget (`void ...`) from processAABB, so its file I/O has not
+ *  necessarily landed yet the instant `thinq.emit` returns - give it a beat. */
+async function settle() {
+    await new Promise((r) => setTimeout(r, 50))
+}
 
 /*
  * Fixtures. All REAL frames, captured 2026-09-09 against a real unit by clicking the power
@@ -31,18 +51,32 @@ const STATUS_EC_28_MIN_LEFT = buf(
 const NOTIFICATION_CODE_00 = buf('aa09207200000010bb')
 const NOTIFICATION_CODE_C8 = buf('aa09207200c80058bb')
 
-function makeDevice() {
+// Real energy-report frames - see the file header's ENERGY section. Both are real captures
+// (2026-09-13T01:13:38Z and 2026-09-13T08:35:43Z), each report #1 of its own cycle (delta ===
+// total, since the running total resets to 0 at cycle start).
+const ENERGY_REPORT_1_156WH = buf('aa0b203e009c009c0119bb')
+const ENERGY_REPORT_1_21WH = buf('aa0b203e00150015016bbb')
+
+function makeDevice(id = DEVICE_ID) {
     const ha = new MockHAConnection()
-    const thinq = new MockThinq2Device(DEVICE_ID, META)
+    const thinq = new MockThinq2Device(id, META)
     const dev = new DUT(ha.asConnection(), thinq, META)
     return { ha, thinq, dev }
 }
 
 describe(MODEL_ID, () => {
-    test('declares power as the only writable component, plus remaining_minutes/notification read-only', () => {
+    test('declares power as the only writable component, plus remaining_minutes/energy*/notification read-only', () => {
         const { ha } = makeDevice()
         const components = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
-        assert.deepEqual(Object.keys(components), ['power', 'remaining_minutes', 'notification'])
+        assert.deepEqual(Object.keys(components), [
+            'power',
+            'remaining_minutes',
+            'energy',
+            'energy_hour',
+            'energy_day',
+            'energy_month',
+            'notification',
+        ])
         assert.equal(components.power.command_topic, '$this/power/set')
         assert.equal(components.remaining_minutes.command_topic, undefined)
     })
@@ -106,5 +140,34 @@ describe(MODEL_ID, () => {
                 'washing_is_complete',
             )
         }
+    })
+
+    test('a real energy report publishes the running total as energy (this cycle)', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', ENERGY_REPORT_1_156WH)
+        assert.equal(ha.devices[DEVICE_ID].properties.energy, 156)
+    })
+
+    test("a real energy report's delta feeds the calendar-boundary buckets", async () => {
+        freshEnergyDir()
+        // A device id distinct from DEVICE_ID: other tests in this file emit real frames too,
+        // each with their own fire-and-forget recordDelta call that could still land after this
+        // test starts - a shared id would let a stray delta bleed in, same reasoning as this
+        // fork's other energy tests.
+        const { ha, thinq } = makeDevice('energy-test-1')
+        thinq.emit('data', ENERGY_REPORT_1_156WH)
+        await settle()
+        assert.equal(ha.devices['energy-test-1'].properties.energy_hour, 156)
+        // Second real capture, a different cycle's own report #1 (delta=21) - each report's delta
+        // is read straight off the wire, not diffed against a stored previous value, so this adds
+        // onto the first rather than replacing it.
+        thinq.emit('data', ENERGY_REPORT_1_21WH)
+        await settle()
+        assert.equal(ha.devices['energy-test-1'].properties.energy_hour, 177, '156 + 21')
+        assert.equal(
+            ha.devices['energy-test-1'].properties.energy,
+            21,
+            "this cycle now reads the second report's own total",
+        )
     })
 })

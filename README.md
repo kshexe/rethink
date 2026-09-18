@@ -29,7 +29,7 @@ dryer/dehumidifier/hood/styler models) this fork branched from, see upstream
 - Stylers:
     - 🫤 ST_R_ETH01Y\_ - power, course-select (23 of the full course list confirmed and named) and course-start all mapped against a real unit. Live running-status/remaining-time/error reading is not yet decoded - `duration_minutes` is the selected course's own length, not a countdown.
 - Mini washers:
-    - 🫤 MI2D7B (미니워시) - power only. This model has no "send to appliance" button in the LG app at all, so its course/option state can't be captured remotely without physically arming remote-start on the unit first.
+    - 🫤 MI2D7B (미니워시) - power, remaining time (candidate), and this-cycle/hour/day/month energy mapped. This model has no "send to appliance" button in the LG app at all, so its course/option state can't be captured remotely without physically arming remote-start on the unit first.
 - Dishwashers:
     - 🫤 H01 - state reading is thorough (course index, cycle duration, reservation delay, extra rinse/high-temp sterilize/intensive wash per rack/steam/hot-air dry all mapped), but course _selection_ (writing a course) is not yet implemented - the reverse of dryer's gap above.
 - Ovens:

@@ -6,6 +6,7 @@ import HADevice from './base'
 import AABBDevice from './aabb_device'
 import log from '@/util/logging'
 import { note as recordNote } from '../frame-recorder'
+import * as energyAccumulator from '../energy-accumulator'
 
 /*
  * LG MiniWash (미니워시), ThinQ model MI2D7B, deviceType 201.
@@ -58,6 +59,26 @@ import { note as recordNote } from '../frame-recorder'
  * trailing checksum/bb already stripped) is `0x00` right after OFF and `0x02` right after ON,
  * confirmed both directions. `power` is now read from this byte when the frame arrives, in
  * addition to the existing optimistic publish from `setProperty`.
+ *
+ * ENERGY (decoded 2026-09-18): mining the full frame log (10 days) for unmodelled shapes turned
+ * up `7:20:3e` twice - length 7, sub 0x20, opcode 0x3e, exactly FX___S.ts's own `MSG_ENERGY`
+ * opcode and `ENERGY_LEN`, whose own header comment literally shows the frame as starting `20
+ * 3E`. Same family, same energy-report frame, byte for byte:
+ *
+ *   20 3E | <u16 Wh since the last report> | <u16 Wh cumulative> | <report number, from 1>
+ *
+ * Both real captures (2026-09-13T01:13:38Z: delta=156, total=156, report=1; 2026-09-13T08:35:43Z:
+ * delta=21, total=21, report=1) are internally consistent with FX___S.ts's own decode - report 1
+ * always has delta === total, since the running total resets to 0 at cycle start. Only two
+ * samples in 10 days (this appliance sees little use, or its cycles are short enough that most
+ * only ever produce report 1 before finishing) - not the multi-sample confirmation FX___S.ts's own
+ * decode got, but the opcode/length/field-layout match is exact, not a guess. Unlike FX___S.ts,
+ * this handler has no faster-updating state-record source for the running total, so `energy` (this
+ * cycle) is published straight from this report's own `total` field - meaning it only moves about
+ * once every ~15 minutes, not every state update. `<delta>` feeds `energy-accumulator.ts` for
+ * hour/day/month the same way RD20_S.ts/2REF21EBNSX_3.ts/3REK2G03VI200S_2.ts/FX___S.ts do. No
+ * per-report breakdown entity (FX___S.ts's `energy_reports`) - not worth the entity for two
+ * samples, and this cycle's own total already says what matters.
  *
  * NOT YET DECODED: course selection (헹굼/탈수/물온도) and start. Unlike the dryer and styler,
  * this appliance's LG-app page has no "전송" (send-to-appliance) button at all - picking a
@@ -128,11 +149,17 @@ const NOTIFICATION: Record<number, string> = {
 }
 const NOTIFICATION_OPTIONS = [...new Set(Object.values(NOTIFICATION))]
 
+/** See the file header's ENERGY section. */
+const ENERGY_SUB = 0x20
+const ENERGY_OPCODE = 0x3e
+const ENERGY_LEN = 7
+
 export default class Device extends AABBDevice {
     power: boolean | undefined
 
     /** (dir:tag) pairs already flagged as unrecognised, so a repeating one is noted once. */
     private seenUnknown = new Set<string>()
+    private energy: energyAccumulator.EnergyTracker | undefined
 
     constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
         super(HA, thinq)
@@ -159,6 +186,48 @@ export default class Device extends AABBDevice {
                     device_class: 'duration',
                     unit_of_measurement: 'min',
                 },
+                // See the file header's ENERGY section - published straight from the ~15-minute
+                // report's own running total, not a faster-updating source like FX___S.ts has.
+                energy: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-energy',
+                    name: 'Energy this cycle',
+                    icon: 'mdi:lightning-bolt',
+                    device_class: 'energy',
+                    unit_of_measurement: 'Wh',
+                    state_class: 'total_increasing',
+                    state_topic: '$this/energy',
+                },
+                energy_hour: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-energy_hour',
+                    name: 'Energy this hour',
+                    icon: 'mdi:lightning-bolt',
+                    device_class: 'energy',
+                    unit_of_measurement: 'Wh',
+                    state_class: 'total_increasing',
+                    state_topic: '$this/energy_hour',
+                },
+                energy_day: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-energy_day',
+                    name: 'Energy today',
+                    icon: 'mdi:lightning-bolt',
+                    device_class: 'energy',
+                    unit_of_measurement: 'Wh',
+                    state_class: 'total_increasing',
+                    state_topic: '$this/energy_day',
+                },
+                energy_month: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-energy_month',
+                    name: 'Energy this month',
+                    icon: 'mdi:lightning-bolt',
+                    device_class: 'energy',
+                    unit_of_measurement: 'Wh',
+                    state_class: 'total_increasing',
+                    state_topic: '$this/energy_month',
+                },
                 // See the file header's NOTIFICATION section.
                 notification: {
                     platform: 'event',
@@ -175,13 +244,23 @@ export default class Device extends AABBDevice {
         log(
             'status',
             this.id,
-            'MI2D7B (미니워시) handler started - power on/off, remaining_minutes, notification, see file header',
+            'MI2D7B (미니워시) handler started - power on/off, remaining_minutes, energy, notification, see file header',
         )
+        // Wired here, not in start(), so a delta reaching processAABB works from construction
+        // onward regardless of whether/when start() runs - see the identical comment in
+        // RD20_S.ts/2REF21EBNSX_3.ts/3REK2G03VI200S_2.ts/FX___S.ts.
+        this.energy = energyAccumulator.attach(this.id, (property, value) => this.publishProperty(property, value))
     }
 
     start() {
         super.start()
         this.send(QUERY_FRAME)
+    }
+
+    cancelPendingWork() {
+        this.energy?.cancel()
+        this.energy = undefined
+        super.cancelPendingWork()
     }
 
     setProperty(prop: string, mqttValue: string) {
@@ -215,6 +294,16 @@ export default class Device extends AABBDevice {
         if (buf[0] === NOTIFY_SUB && buf[1] === NOTIFY_OPCODE && buf.length > NOTIFY_CODE_OFFSET && buf[2] === 0) {
             const name = NOTIFICATION[buf[NOTIFY_CODE_OFFSET]]
             if (name !== undefined) this.publishEvent('notification', name)
+            return
+        }
+
+        // energy report: <sub=0x20> 3e <u16 delta><u16 total><report#> - see the file header's
+        // ENERGY section.
+        if (buf.length === ENERGY_LEN && buf[0] === ENERGY_SUB && buf[1] === ENERGY_OPCODE) {
+            const delta = buf.readUInt16BE(2)
+            const total = buf.readUInt16BE(4)
+            this.publishProperty('energy', total)
+            if (delta > 0) void this.energy?.recordDelta(delta)
             return
         }
 
