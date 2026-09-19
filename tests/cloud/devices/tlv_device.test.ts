@@ -230,20 +230,28 @@ test('a relayed write with no known field does not schedule a query', (t) => {
     assert.equal(thinq.outbox.length, 0)
 })
 
-test('several relayed writes within the debounce window schedule one query, not one each', (t) => {
+test('several relayed writes within the debounce window schedule one query, timed off the LAST one', (t) => {
     enableMockTimers(t)
     const { thinq, dev, config } = makeDevice()
     dev.addField(config, { id: 0x1f7, name: 'power', comp: 'c' })
 
     // Two of the six real retries captured live 2026-09-18 landed just 479ms apart - well inside
-    // the debounce window - which is exactly what this collapses to one query.
+    // the debounce window. A true debounce resets on the second write, so the query fires
+    // BRIDGE_REFRESH_DELAY_MS after IT, not after the first - confirmed below by checking it has
+    // not fired yet at the old (first-write-relative) deadline.
     thinq.emit('sendData', outboundValuesFrame(0x1f7, 1))
     tickMockTimers(t, 480)
     thinq.emit('sendData', outboundValuesFrame(0x1f7, 1))
     assert.equal(thinq.outbox.length, 0, 'still debounced, no query yet')
 
-    tickMockTimers(t, 1000)
-    assert.equal(thinq.outbox.length, 1, 'one query for both writes, not two')
+    tickMockTimers(t, 500) // 480+500 = 980ms since the first write - short of the OLD deadline (1000ms after it)
+    assert.equal(thinq.outbox.length, 0, 'reset by the second write - not due at the first write + delay')
+
+    tickMockTimers(t, 100) // now 580ms since the second write - past its own 1000ms deadline is still to come, but comfortably past the old one, confirming it did NOT fire at the old timing
+    assert.equal(thinq.outbox.length, 0, 'still not due - the old deadline passing confirms the reset held')
+
+    tickMockTimers(t, 500) // 1080ms since the second write - past ITS deadline now
+    assert.equal(thinq.outbox.length, 1, 'due now: delay ms after the second (last) write')
 })
 
 test('a burst spread wider than the debounce window fires one query per gap, not one total', (t) => {
@@ -251,11 +259,12 @@ test('a burst spread wider than the debounce window fires one query per gap, not
     const { thinq, dev, config } = makeDevice()
     dev.addField(config, { id: 0x1f7, name: 'power', comp: 'c' })
 
-    // The exact retry pattern captured live 2026-09-18 - six writes ~15s apart in total, mostly
-    // 2-8s apart from each other (well outside the 1s debounce window). The debounce is not
-    // meant to collapse this down to one call - see pendingBridgeRefresh's own comment - it just
-    // keeps closely-spaced writes from each scheduling their own. Four queries went out for these
-    // six writes; that is the expected, harmless shape, not a regression.
+    // The exact retry pattern captured live 2026-09-18 - six writes ~15s apart in total. Most
+    // gaps (4307/1916/8016ms) are well outside the debounce window, so each of those writes still
+    // gets its own query, same as before the reset behavior was added; only the two close pairs
+    // (479ms, 528ms) reset and merge into the next write's own timer. Four queries for six writes
+    // either way - this pattern doesn't distinguish the two implementations, see the dedicated
+    // reset test above for that.
     const gapsMs = [479, 4307, 528, 1916, 8016]
     thinq.emit('sendData', outboundValuesFrame(0x1f7, 1))
     for (const gap of gapsMs) {
