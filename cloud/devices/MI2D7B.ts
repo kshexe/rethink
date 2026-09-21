@@ -268,7 +268,8 @@ export default class Device extends AABBDevice {
             case 'power': {
                 const on = mqttValue === 'ON'
                 this.send(buildSettingsWrite([[KEY_POWER, on ? 1 : 0]]))
-                // Optimistic: see the file header for why this is not read back off the wire.
+                // Optimistic for a snappy UI - the file header's POWER READ-BACK section (buf[46]
+                // of the 61-byte frame) also confirms this shortly after, in processAABB.
                 this.power = on
                 this.publishProperty('power', on ? 'ON' : 'OFF')
                 // remaining_minutes has no record of its own to fall back to 0 with while off (see

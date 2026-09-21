@@ -233,13 +233,20 @@ const FLAG_DRUM_LIGHT = 0x40
  *   to-device   aa 0d f0 e5 00 02 01 ff 01 1b 00 <ck> bb   (off)
  *   from-device aa 08 20 00 e5 00 <ck> bb                 (ack both times, same shape as power's)
  *
- * Unlike `power` (read continuously off the wire below), this is published optimistically from the
- * command just sent: captured mid-cycle, a before/after diff of the record moved several bytes at
- * once (a running minute counter among them), with nothing isolated cleanly enough to trust as
- * this setting's own bit the way FLAG_DRUM_LIGHT etc. were each isolated one control at a time at
- * standby. Left unread rather than guessed - see RD20_S.ts's identical call for the same reason.
+ * READ-BACK (found 2026-09-22, correcting the mid-cycle diff this replaces - that one really did
+ * move several bytes at once and genuinely wasn't isolable): re-diffed against three frames from
+ * the same 2026-09-18 capture instead of two - one from ~19s before the ON write, one from ~2s
+ * after it (before the OFF write that followed), and one from ~2s after THAT. `rec[49]` is the only
+ * byte that moves on either transition: `0x40 -> 0x60` at ON, back to `0x40` at OFF, both times
+ * isolated (no other byte moves on the same transition - the mid-cycle attempt's "several bytes"
+ * were this same setting sampled too coarsely, catching an unrelated counter's own drift alongside
+ * it). Bit 0x20, confirmed both directions with the reversal on the same round trip - the same
+ * confidence tier as FLAG_DRUM_LIGHT itself.
  */
 const KEY_DRUM_LIGHT_AUTO = 0x1b
+/** See the file header's DRUM LIGHT AUTO-ON section's READ-BACK note. */
+const OFF_DRUM_LIGHT_AUTO = 49
+const FLAG_DRUM_LIGHT_AUTO = 0x20
 // Set while the drum is actually turning. It clears on pause, but it ALSO clears and re-sets on its
 // own mid-cycle (measured twice, with no command in between and the remaining time still counting down),
 // so it must not be used to mean "paused" - that is PHASE_PAUSED and nothing else.
@@ -1735,6 +1742,10 @@ export default class Device extends AABBDevice {
         this.publishProperty('door_lock', rec[OFF_DOOR_LOCK] ? 'OFF' : 'ON')
         this.publishProperty('crease_care', rec[OFF_WRINKLE_CARE] & WRINKLE_CARE_ON ? 'ON' : 'OFF')
         this.publishProperty('drum_light', flags & FLAG_DRUM_LIGHT ? 'ON' : 'OFF')
+        // See the file header's DRUM LIGHT AUTO-ON section's READ-BACK note - alongside the
+        // optimistic publish in setProperty(), not replacing it, so the UI still updates
+        // immediately on a local command instead of waiting for the next record.
+        this.publishProperty('drum_light_auto', rec[OFF_DRUM_LIGHT_AUTO] & FLAG_DRUM_LIGHT_AUTO ? 'ON' : 'OFF')
 
         /*
          * Whether the cycle now under way is running with steam / TurboShot. The same two bits the
@@ -2197,7 +2208,8 @@ export default class Device extends AABBDevice {
             case 'drum_light_auto': {
                 const on = mqttValue === 'ON'
                 this.setField(KEY_DRUM_LIGHT_AUTO, on ? 1 : 0)
-                // Optimistic: see the file header's DRUM LIGHT AUTO-ON section.
+                // Optimistic for a snappy UI - the file header's DRUM LIGHT AUTO-ON section's
+                // READ-BACK note (rec[49]) also confirms this shortly after, in processRecord.
                 this.publishProperty('drum_light_auto', on ? 'ON' : 'OFF')
                 return
             }

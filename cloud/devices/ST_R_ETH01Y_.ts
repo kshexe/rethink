@@ -400,7 +400,9 @@ export default class Device extends AABBDevice {
             case 'power': {
                 const on = mqttValue === 'ON'
                 this.send(buildSettingsWrite([[KEY_POWER, on ? 1 : 0]]))
-                // Optimistic - see the file header for why the echo is not read back off the wire.
+                // Optimistic for a snappy UI - the command's own echo is not read back (see the
+                // file header's POWER section), but the STATUS RECORD's record[REC_POWER] also
+                // confirms this shortly after, in processAABB.
                 this.power = on
                 this.publishProperty('power', on ? 'ON' : 'OFF')
                 return

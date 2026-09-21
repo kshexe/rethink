@@ -226,10 +226,18 @@ import * as energyAccumulator from '../energy-accumulator'
  *
  * Only the "on" direction was captured (the app session ended there); "off" is assumed to be the
  * same shape with value 0x00, following every other boolean key on this opcode (KEY_POWER
- * included) - not yet independently confirmed. The appliance was powered off for this capture, so
- * there is no live readback to cross-check the persisted value against (the 114-byte status frame
- * was all-zero throughout, matching STATUS_NAMES[0x00]='power_off') - published optimistically
- * from the command just sent, the same as `power` above, not read back off the wire.
+ * included) - not yet independently confirmed.
+ *
+ * READ-BACK (found 2026-09-22, correcting the CAPTURED-2026-09-18 note this replaces - the
+ * appliance was NOT powered off for that capture; the frame log for the same session shows
+ * continuous real 114-byte status frames both before and after the write, so there was a live
+ * readback to check all along, just not looked for at the time): diffing the status frame from
+ * immediately before the write against the one 2 seconds after it, `buf[104]` moves `0x00 -> 0x08`
+ * - a single isolated bit, unlike every other byte that differs between the two samples (those are
+ * all just the ordinary timer/session-counter drift of two frames taken half a minute apart, not a
+ * clean on/off flip). Not yet an off/on/off round trip the way this file's other confirmed bits
+ * are - only the one on-transition has been seen - so read here, but flagged as a good-confidence
+ * single sample rather than fully confirmed.
  */
 
 const FROM_DEVICE_ACK_OPCODE = 0xe5
@@ -282,6 +290,11 @@ const OPTION_RESERVATION_ACTIVE = 0x08
 const OPTION_BUTTON_LOCK = 0x10
 
 const RESERVATION_MINUTES_OFFSET = 70
+
+/** See the file header's DRUM LIGHT AUTO-ON section's READ-BACK note - a single confirmed
+ *  on-transition, not yet an off/on/off round trip. */
+const DRUM_LIGHT_AUTO_OFFSET = 104
+const DRUM_LIGHT_AUTO_BIT = 0x08
 
 /** See the file header's NOTIFICATION CORRECTION section - not part of the `notification` event
  *  entity, read instead as a `remote_control` binary_sensor. */
@@ -684,6 +697,15 @@ export default class Device extends AABBDevice {
             this.publishProperty('drum_light', features & FEATURE_DRUM_LIGHT ? 'ON' : 'OFF')
             this.publishProperty('wrinkle_care', features & FEATURE_ANTI_WRINKLE ? 'ON' : 'OFF')
             this.publishProperty('ironing_alert', features & FEATURE_IRONING_ALERT ? 'ON' : 'OFF')
+
+            // See the file header's DRUM LIGHT AUTO-ON section's READ-BACK note. Read alongside the
+            // optimistic publish in setProperty() - not replacing it, so the UI still updates
+            // immediately on a local command instead of waiting for the next status frame.
+            const drumLightAuto = (buf[DRUM_LIGHT_AUTO_OFFSET] & DRUM_LIGHT_AUTO_BIT) !== 0
+            if (drumLightAuto !== this.drumLightAuto) {
+                this.drumLightAuto = drumLightAuto
+                this.publishProperty('drum_light_auto', drumLightAuto ? 'ON' : 'OFF')
+            }
 
             // OPTION_RESERVATION_ACTIVE (0x08, also on STATUS_OFFSET) is not separately exposed -
             // reservation_minutes already carries the same information (0 = none armed) without

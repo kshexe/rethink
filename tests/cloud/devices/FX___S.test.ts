@@ -292,7 +292,26 @@ describe('FX___S washer', () => {
         assert.equal(get(HA, 'drum_light'), 'OFF')
     })
 
-    test('drum_light_auto is a writable switch, published optimistically (no live readback - see file header)', () => {
+    test('drum_light_auto reads back rec[49] bit 0x20, confirmed by a real on/off round trip', () => {
+        const { HA, dut } = setup()
+        // Real record bytes from the 2026-09-18 capture - see the file header's DRUM LIGHT AUTO-ON
+        // section's READ-BACK note. Only byte 49 moves across the whole round trip.
+        const off = Buffer.from(
+            '000001041b00000000000000001500620065001b0c0b0901000001310000000000000000100100300000000000000400004000000000000000f00000000408000000',
+            'hex',
+        )
+        const on = Buffer.from(off)
+        on[49] = 0x60
+
+        dut.processRecord(off)
+        assert.equal(get(HA, 'drum_light_auto'), 'OFF')
+        dut.processRecord(on)
+        assert.equal(get(HA, 'drum_light_auto'), 'ON')
+        dut.processRecord(off)
+        assert.equal(get(HA, 'drum_light_auto'), 'OFF')
+    })
+
+    test('drum_light_auto is a writable switch, published optimistically pending the next record', () => {
         const { HA, dut } = setup()
         const comp = HA.devices[DEVICE_ID].config!.components.drum_light_auto as unknown as Record<string, unknown>
         assert.equal(comp.platform, 'switch')
