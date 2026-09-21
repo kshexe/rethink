@@ -65,12 +65,13 @@ function makeDevice(id = DEVICE_ID) {
 }
 
 describe(MODEL_ID, () => {
-    test('declares power as the only writable component, plus remaining_minutes/energy*/notification read-only', () => {
+    test('declares power as the only writable component, plus remaining_minutes/remaining_display/energy*/notification read-only', () => {
         const { ha } = makeDevice()
         const components = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
         assert.deepEqual(Object.keys(components), [
             'power',
             'remaining_minutes',
+            'remaining_display',
             'energy',
             'energy_hour',
             'energy_day',
@@ -129,6 +130,15 @@ describe(MODEL_ID, () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', STATUS_EC_28_MIN_LEFT)
         assert.equal(ha.devices[DEVICE_ID].properties.remaining_minutes, 28)
+    })
+
+    test('remaining_display follows power, off before on', () => {
+        const { ha, thinq, dev } = makeDevice()
+        dev.setProperty('power', 'ON')
+        thinq.emit('data', STATUS_EC_28_MIN_LEFT)
+        assert.equal(ha.devices[DEVICE_ID].properties.remaining_display, '28분')
+        dev.setProperty('power', 'OFF')
+        assert.equal(ha.devices[DEVICE_ID].properties.remaining_display, '-')
     })
 
     test('both real notification-channel codes publish washing_is_complete', () => {

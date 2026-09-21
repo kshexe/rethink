@@ -360,6 +360,11 @@ export default class Device extends AABBDevice {
     private seenUnknown = new Set<string>()
     private energy: energyAccumulator.EnergyTracker | undefined
 
+    /** The last remaining_minutes value seen, so `remaining_display` can be republished from the
+     *  power-change paths (where a fresh status frame is not available) as well as from the status
+     *  frame itself - see publishRemainingDisplay(). */
+    private lastRemainingMinutes = 0
+
     constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
         super(HA, thinq)
 
@@ -382,6 +387,17 @@ export default class Device extends AABBDevice {
                     icon: 'mdi:timer-outline',
                     device_class: 'duration',
                     unit_of_measurement: 'min',
+                },
+                // A ready-to-show text form of the same field (2026-09-21) - "N분" while power is
+                // on, "-" the moment it is off, so a dashboard card can read this directly with no
+                // template helper of its own on the HA side. No device_class/unit_of_measurement:
+                // this is formatted text, not a number - see FX___S.ts's identical entity.
+                remaining_display: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-remaining_display',
+                    state_topic: '$this/remaining_display',
+                    name: 'Time left',
+                    icon: 'mdi:timer-outline',
                 },
                 // See the file header's STATUS section - only running/cooling/complete are
                 // confirmed, anything else publishes as unknown_<value> rather than being guessed.
@@ -583,6 +599,7 @@ export default class Device extends AABBDevice {
                 // Optimistic: see the file header for why this is not read back off the wire.
                 this.power = on
                 this.publishProperty('power', on ? 'ON' : 'OFF')
+                this.publishRemainingDisplay()
                 return
             }
             case 'drum_light_auto': {
@@ -604,6 +621,14 @@ export default class Device extends AABBDevice {
      *  every reconnect) - see FX___S.ts's identical method for the full reasoning. */
     publishEvent(topic: string, eventType: string) {
         this.HA.publishProperty(this.id, topic, JSON.stringify({ event_type: eventType }), { retain: false })
+    }
+
+    /** `remaining_minutes` as ready-to-show text - "-" the moment power is off (called from both
+     *  power paths, since this appliance stops sending its status frame entirely while idle - see
+     *  the file header's REMAINING_MINUTES section - so waiting for the next status frame to catch
+     *  a power-off would mean it never gets caught at all), the countdown otherwise. */
+    private publishRemainingDisplay() {
+        this.publishProperty('remaining_display', this.power ? `${Math.max(this.lastRemainingMinutes, 0)}분` : '-')
     }
 
     processAABB(buf: Buffer) {
@@ -636,7 +661,9 @@ export default class Device extends AABBDevice {
             buf.length === STATUS_FRAME_LEN &&
             buf.subarray(STATUS_MARKER_OFFSET, STATUS_MARKER_OFFSET + STATUS_MARKER.length).equals(STATUS_MARKER)
         ) {
-            this.publishProperty('remaining_minutes', buf[REMAINING_MINUTES_OFFSET])
+            this.lastRemainingMinutes = buf[REMAINING_MINUTES_OFFSET]
+            this.publishProperty('remaining_minutes', this.lastRemainingMinutes)
+            this.publishRemainingDisplay()
 
             const status = decodeStatus(buf[STATUS_OFFSET])
             if (status !== this.status) {
@@ -693,6 +720,7 @@ export default class Device extends AABBDevice {
             if (on !== this.power) {
                 this.power = on
                 this.publishProperty('power', on ? 'ON' : 'OFF')
+                this.publishRemainingDisplay()
             }
             return
         }

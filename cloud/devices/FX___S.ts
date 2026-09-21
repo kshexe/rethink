@@ -499,10 +499,10 @@ const ERROR_NONE = 0
 // 1 minute rather than reaching 0, and Laundry care leaves the previous cycle's values untouched - both
 // would otherwise show a permanent "1 minute left" in Home Assistant.
 //
-// 41 (a tub clean) was missing here, which zeroed the remaining minutes for the whole of one and left
-// the finish time latched at the PREVIOUS cycle's, a day stale - `end_time` is fed from this same
-// number, so one omission took out both entities. The bytes are live in 41: on 2026-08-07 the total
-// read 84 minutes and the cloud put the finish 82 minutes out, one second apart.
+// 41 (a tub clean) was missing here, which zeroed the remaining minutes for the whole of one -
+// `remaining_display` is fed from this same number, so the omission took that out too. The bytes
+// are live in 41: on 2026-08-07 the total read 84 minutes and the cloud put the finish 82 minutes
+// out, one second apart.
 const TIMED_PHASES = new Set([3, 37, 11, 40, 12, 14, 41, PHASE_PAUSED])
 
 // Phases in which the appliance is actually working. Paused is deliberately excluded - `status` already
@@ -822,8 +822,6 @@ const COURSE_EXT_BY_NAME = { ...invert(COURSE_EXT), ...invert(COURSE_EXT_KO), ..
 export default class Device extends AABBDevice {
     /** Wh since the current cycle started, as the appliance last reported it. */
     energyTotal: number | undefined
-    /** The finish time last published while a cycle runs, so a re-anchored one under a minute away is not. */
-    endTimePredicted: number | undefined
 
     /**
      * Options seen switched on at any point in the cycle now running, cleared when it ends.
@@ -1151,9 +1149,8 @@ export default class Device extends AABBDevice {
                 },
                 // Renamed from `remaining_time` (2026-09-21) to match RD20_S.ts/MI2D7B.ts's own
                 // key for the identical field - all three appliances now publish this raw
-                // minutes-remaining value under the same name, `end_time` above being the
-                // timestamp derived from it. HA's entity_id/history for the old name are not
-                // migrated - see the deploy note this rename shipped with.
+                // minutes-remaining value under the same name. HA's entity_id/history for the old
+                // name are not migrated - see the deploy note this rename shipped with.
                 remaining_minutes: {
                     platform: 'sensor',
                     unique_id: '$deviceid-remaining_minutes',
@@ -1161,6 +1158,18 @@ export default class Device extends AABBDevice {
                     name: 'Remaining time',
                     device_class: 'duration',
                     unit_of_measurement: 'min',
+                },
+                // A ready-to-show text form of the same field (2026-09-21) - "N분" while a cycle
+                // is actually running, "-" the moment the appliance is off, so a dashboard card can
+                // read this directly with no template helper of its own on the HA side computing
+                // it. No device_class/unit_of_measurement: this is formatted text, not a number -
+                // see RD20_S.ts/MI2D7B.ts's identical entity for the same reasoning.
+                remaining_display: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-remaining_display',
+                    state_topic: '$this/remaining_display',
+                    name: 'Time left',
+                    icon: 'mdi:timer-outline',
                 },
                 total_time: {
                     platform: 'sensor',
@@ -1195,17 +1204,6 @@ export default class Device extends AABBDevice {
                     icon: 'mdi:playlist-check',
                     device_class: 'enum',
                     options: [COURSE_CLEARED, ...this.courseOptions],
-                },
-                end_time: {
-                    platform: 'sensor',
-                    unique_id: '$deviceid-end-time',
-                    state_topic: '$this/end_time',
-                    // Not "Finishes at" any more: since the timestamp is latched at Complete and
-                    // kept, this entity holds a time in the past for most of the day and a
-                    // prediction only while a cycle runs. A name in the present tense was right
-                    // for one of those and wrong for the other.
-                    name: 'Finish time',
-                    device_class: 'timestamp',
                 },
                 available_options: {
                     platform: 'sensor',
@@ -1824,65 +1822,14 @@ export default class Device extends AABBDevice {
         this.publishProperty('remaining_minutes', remaining)
 
         /*
-         * A reservation is a countdown too, and a much longer one, so the finish time below uses it
-         * instead. Measured 2026-08-04 18:45 onwards: the reservation ticks down a minute at a time
-         * (420, 419, 418, ...) while the remaining-minutes bytes hold the CYCLE's length - they read
-         * 30 for a thirty-minute cycle seven hours away, so they are not what "finishes at" wants.
-         *
-         * Taking this as the time to the FINISH rather than to the start is LG's own framing - the
-         * model JSON calls the feature `endReserveTime` and the appliance's panel calls it 종료 예약.
-         * It has not been watched all the way down, and the check when it is: the cycle should start
-         * when this counter reaches the cycle's own length, which is the 30 above, not at zero.
+         * A ready-to-show text form of `remaining_minutes` (2026-09-21, replacing this file's own
+         * `end_time` timestamp-derivation - see git history for that approach) - "-" the moment the
+         * appliance is off, the countdown itself (never negative - TIMED_PHASES already zeroes
+         * `remaining` outside a real cycle, matching remaining_minutes itself) at every other phase,
+         * Paused and Reserved included, so a dashboard card can read this directly with no template
+         * helper of its own computing it on the HA side.
          */
-        const untilFinish = phase === PHASE_RESERVED && rec[OFF_RESERVE_FLAG] & RESERVE_SET ? reserveMinutes : remaining
-
-        /*
-         * The finish time, which is a timestamp all the way through rather than a countdown that
-         * gives up. While a cycle runs it is the PREDICTED finish, recomputed only when the minute
-         * count actually moves - doing it on every frame would push a slightly different timestamp
-         * several times a second and fill the recorder with noise. When the cycle reaches Complete
-         * it is latched to that instant and left alone.
-         *
-         * It is never cleared. It used to publish 'None' the moment the clock stopped, which took
-         * the sensor to unknown and threw away the one number worth keeping: Home Assistant renders
-         * a `timestamp` entity relative to now, so a kept value reads "5 minutes ago" - the natural
-         * answer to "when did the washing finish?" - while unknown answers nothing. The next cycle
-         * overwrites it with its own prediction, and the retained MQTT value survives restarts.
-         *
-         * The latch is on the MOVE into Complete. Publishing on every frame that says Complete
-         * would drag the timestamp along with now and it would read "0 minutes ago" forever. A
-         * record that is already Complete when the first frame arrives (a restart while the washer
-         * sits finished) is deliberately NOT latched - that instant is the restart, not the finish,
-         * and the retained value already holds the real one.
-         */
-        if (untilFinish > 0) {
-            /*
-             * Only when it moves by a minute or more, because anything smaller is OUR noise rather
-             * than the appliance's news. The countdown is in whole minutes and the appliance revises
-             * it as it goes: measured over the 2026-08-04 cycle its ticks were 43 to 74 s apart and
-             * it dropped two minutes at once twice. Re-anchoring "now + remaining" at each of those
-             * lands on a slightly different instant every time, which published this entity 21 times
-             * in a 29-minute cycle. With the minute of hysteresis the same cycle publishes 6 times,
-             * over the same range - every genuine revision still gets through, and the wobble does
-             * not. A revision the appliance actually made cannot be smaller than its own granularity.
-             */
-            const predicted = Date.now() + untilFinish * 60_000
-            if (this.endTimePredicted === undefined || Math.abs(predicted - this.endTimePredicted) >= 60_000) {
-                this.endTimePredicted = predicted
-                // Published on the minute: the seconds carry no information, and a value that keeps
-                // its seconds invites the same wobble back in through a template or a comparison.
-                this.publishProperty('end_time', new Date(Math.round(predicted / 60_000) * 60_000).toISOString())
-            }
-        } else {
-            // So the next cycle's first prediction always publishes, however close it happens to fall
-            // to this one's.
-            this.endTimePredicted = undefined
-            if (phase === PHASE_DONE && previousPhase !== undefined && previousPhase !== PHASE_DONE) {
-                // Not rounded: this one is a measured event rather than an estimate, and it is
-                // published exactly once, so there is no wobble to suppress.
-                this.publishProperty('end_time', new Date().toISOString())
-            }
-        }
+        this.publishProperty('remaining_display', phase === PHASE_OFF ? '-' : `${Math.max(remaining, 0)}분`)
         this.publishProperty('total_time', phase === PHASE_OFF ? 0 : rec[OFF_TOTAL_H] * 60 + rec[OFF_TOTAL_M])
         this.publishProperty('rinse_remaining', rec[OFF_RINSE])
         this.updateButtonAvailability()

@@ -164,6 +164,7 @@ describe(MODEL_ID, () => {
         assert.deepEqual(Object.keys(components), [
             'power',
             'remaining_minutes',
+            'remaining_display',
             'status',
             'energy',
             'energy_hour',
@@ -248,6 +249,15 @@ describe(MODEL_ID, () => {
         // the file header. It must not move the property at all.
         thinq.emit('data', BUNDLED_STATUS)
         assert.equal(ha.devices[DEVICE_ID].properties.power, 'ON')
+    })
+
+    test('remaining_display follows power, off before on', () => {
+        const { thinq, dev, ha } = makeDevice()
+        dev.setProperty('power', 'ON')
+        thinq.emit('data', STATE_99_MIN_LEFT)
+        assert.equal(ha.devices[DEVICE_ID].properties.remaining_display, '99분')
+        dev.setProperty('power', 'OFF')
+        assert.equal(ha.devices[DEVICE_ID].properties.remaining_display, '-')
     })
 
     test('the 114-byte status frame publishes remaining_minutes, matching the official integration', () => {
