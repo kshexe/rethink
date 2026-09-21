@@ -360,6 +360,11 @@ export default class Device extends AABBDevice {
     private seenUnknown = new Set<string>()
     private energy: energyAccumulator.EnergyTracker | undefined
 
+    /** The currently-published `end_time` prediction (ms since epoch), or undefined if nothing
+     *  has been published yet this cycle - see FX___S.ts's identical field for the full reasoning
+     *  behind the hysteresis and latch-on-complete this guards. */
+    private endTimePredicted: number | undefined
+
     constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
         super(HA, thinq)
 
@@ -382,6 +387,15 @@ export default class Device extends AABBDevice {
                     icon: 'mdi:timer-outline',
                     device_class: 'duration',
                     unit_of_measurement: 'min',
+                },
+                // Derived from remaining_minutes - see processAABB below and FX___S.ts's identical
+                // "Finish time" field, which this was modelled on directly.
+                end_time: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-end-time',
+                    state_topic: '$this/end_time',
+                    name: 'Finish time',
+                    device_class: 'timestamp',
                 },
                 // See the file header's STATUS section - only running/cooling/complete are
                 // confirmed, anything else publishes as unknown_<value> rather than being guessed.
@@ -636,12 +650,37 @@ export default class Device extends AABBDevice {
             buf.length === STATUS_FRAME_LEN &&
             buf.subarray(STATUS_MARKER_OFFSET, STATUS_MARKER_OFFSET + STATUS_MARKER.length).equals(STATUS_MARKER)
         ) {
-            this.publishProperty('remaining_minutes', buf[REMAINING_MINUTES_OFFSET])
+            const remaining = buf[REMAINING_MINUTES_OFFSET]
+            this.publishProperty('remaining_minutes', remaining)
 
+            const previousStatus = this.status
             const status = decodeStatus(buf[STATUS_OFFSET])
             if (status !== this.status) {
                 this.status = status
                 this.publishProperty('status', status)
+            }
+
+            /*
+             * end_time: the same predicted-finish-timestamp derivation FX___S.ts's washer already
+             * does from its own remaining-minutes field, so see that file for the full reasoning.
+             * Recomputed only when the prediction moves by a minute or more (this appliance's own
+             * countdown is itself whole minutes, confirmed decrementing once every ~60s - see the
+             * file header's REMAINING_MINUTES section), latched at the moment `status` moves INTO
+             * 'complete' rather than cleared, and never published again from a stale remaining
+             * value once idle (this status frame does not arrive at all while `power_off` - see the
+             * file header - so there is no stale-remaining risk there, only across running/cooling).
+             */
+            if (remaining > 0 && (status === 'running' || status === 'cooling')) {
+                const predicted = Date.now() + remaining * 60_000
+                if (this.endTimePredicted === undefined || Math.abs(predicted - this.endTimePredicted) >= 60_000) {
+                    this.endTimePredicted = predicted
+                    this.publishProperty('end_time', new Date(Math.round(predicted / 60_000) * 60_000).toISOString())
+                }
+            } else {
+                this.endTimePredicted = undefined
+                if (status === 'complete' && previousStatus !== undefined && previousStatus !== 'complete') {
+                    this.publishProperty('end_time', new Date().toISOString())
+                }
             }
 
             // See the file header's ENERGY section - a mod-256 rolling Wh counter, so the delta
