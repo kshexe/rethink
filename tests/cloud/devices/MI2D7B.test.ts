@@ -125,22 +125,10 @@ describe(MODEL_ID, () => {
         assert.equal(ha.devices[DEVICE_ID].properties.power, 'ON')
     })
 
-    test('a real query-response status frame publishes remaining_minutes as ready-to-show text, even before power has been separately confirmed', () => {
-        // No dev.setProperty('power', ...) here - this.power is still `undefined` when the record
-        // arrives. The record's own arrival is what proves the appliance is running, so this must
-        // still publish the real countdown, not "-".
+    test('a real query-response status frame publishes remaining_minutes', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', STATUS_EC_28_MIN_LEFT)
-        assert.equal(ha.devices[DEVICE_ID].properties.remaining_minutes, '28분')
-    })
-
-    test('remaining_minutes reads "-" the moment power turns off, even without a fresh record', () => {
-        const { ha, thinq, dev } = makeDevice()
-        dev.setProperty('power', 'ON')
-        thinq.emit('data', STATUS_EC_28_MIN_LEFT)
-        assert.equal(ha.devices[DEVICE_ID].properties.remaining_minutes, '28분')
-        dev.setProperty('power', 'OFF')
-        assert.equal(ha.devices[DEVICE_ID].properties.remaining_minutes, '-')
+        assert.equal(ha.devices[DEVICE_ID].properties.remaining_minutes, 28)
     })
 
     test('both real notification-channel codes publish washing_is_complete', () => {

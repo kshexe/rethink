@@ -161,11 +161,6 @@ export default class Device extends AABBDevice {
     private seenUnknown = new Set<string>()
     private energy: energyAccumulator.EnergyTracker | undefined
 
-    /** The last raw minutes-remaining byte seen, so `remaining_minutes` can be republished from the
-     *  power-change path (where a fresh status record is not available) as well as from the
-     *  record itself - see publishRemainingMinutes(). */
-    private lastRemainingMinutes = 0
-
     constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
         super(HA, thinq)
 
@@ -181,18 +176,15 @@ export default class Device extends AABBDevice {
                     icon: 'mdi:washing-machine',
                 },
                 // See the file header's REMAINING_MINUTES section - a candidate reading, not as
-                // rigorously confirmed as this fork's other remaining_minutes fields yet. Ready-to-
-                // show text (2026-09-21), not a number - "N분" while power is on, "-" the moment it
-                // is off, so a dashboard card can read this directly with no template helper of its
-                // own on the HA side computing it. No device_class/unit_of_measurement: publishing
-                // both the number and a separate formatted-text twin (`remaining_display`) was
-                // considered and dropped - one entity, one job. See FX___S.ts's identical field.
+                // rigorously confirmed as this fork's other remaining_minutes fields yet.
                 remaining_minutes: {
                     platform: 'sensor',
                     unique_id: '$deviceid-remaining_minutes',
                     state_topic: '$this/remaining_minutes',
                     name: 'Remaining time',
                     icon: 'mdi:timer-outline',
+                    device_class: 'duration',
+                    unit_of_measurement: 'min',
                 },
                 // See the file header's ENERGY section - published straight from the ~15-minute
                 // report's own running total, not a faster-updating source like FX___S.ts has.
@@ -279,7 +271,6 @@ export default class Device extends AABBDevice {
                 // Optimistic: see the file header for why this is not read back off the wire.
                 this.power = on
                 this.publishProperty('power', on ? 'ON' : 'OFF')
-                this.publishRemainingMinutes(on)
                 return
             }
             default:
@@ -292,16 +283,6 @@ export default class Device extends AABBDevice {
      *  every reconnect) - see FX___S.ts's identical method for the full reasoning. */
     publishEvent(topic: string, eventType: string) {
         this.HA.publishProperty(this.id, topic, JSON.stringify({ event_type: eventType }), { retain: false })
-    }
-
-    /** `remaining_minutes` as ready-to-show text - "-" while off, the countdown otherwise. `on` is
-     *  explicit rather than read from `this.power`: the MSG_TUNNEL record branch below calls this
-     *  with `true` unconditionally, since a record's own arrival already proves the appliance is
-     *  running, independently of whether a separate power echo/optimistic set has confirmed
-     *  `this.power` yet. The two power-change call sites pass `this.power` itself, having just set
-     *  it. */
-    private publishRemainingMinutes(on: boolean) {
-        this.publishProperty('remaining_minutes', on ? `${Math.max(this.lastRemainingMinutes, 0)}분` : '-')
     }
 
     processAABB(buf: Buffer) {
@@ -332,7 +313,6 @@ export default class Device extends AABBDevice {
             if (on !== this.power) {
                 this.power = on
                 this.publishProperty('power', on ? 'ON' : 'OFF')
-                this.publishRemainingMinutes(on)
             }
             return
         }
@@ -349,8 +329,7 @@ export default class Device extends AABBDevice {
                 const offset = payload[6] === INNER_STATE ? RECORD_LEN : payload[6] === INNER_STATE_SINGLE ? 0 : -1
                 if (offset >= 0 && data.length >= offset + RECORD_LEN) {
                     const record = data.subarray(offset, offset + RECORD_LEN)
-                    this.lastRemainingMinutes = record[REMAINING_MINUTES_OFFSET]
-                    this.publishRemainingMinutes(true)
+                    this.publishProperty('remaining_minutes', record[REMAINING_MINUTES_OFFSET])
                     return
                 }
             }
