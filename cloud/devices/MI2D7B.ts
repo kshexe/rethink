@@ -161,12 +161,6 @@ export default class Device extends AABBDevice {
     private seenUnknown = new Set<string>()
     private energy: energyAccumulator.EnergyTracker | undefined
 
-    /** The currently-published `end_time` prediction (ms since epoch), or undefined if nothing
-     *  has been published yet this cycle - see FX___S.ts's identical field for the full reasoning
-     *  behind the hysteresis this guards. Latched (not just cleared) on the `washing_is_complete`
-     *  notification - see processAABB's NOTIFICATION branch. */
-    private endTimePredicted: number | undefined
-
     constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
         super(HA, thinq)
 
@@ -191,18 +185,6 @@ export default class Device extends AABBDevice {
                     icon: 'mdi:timer-outline',
                     device_class: 'duration',
                     unit_of_measurement: 'min',
-                },
-                // Derived from remaining_minutes - see processAABB below and FX___S.ts's identical
-                // "Finish time" field, which this was modelled on directly. Latched off the
-                // `washing_is_complete` notification rather than remaining_minutes reaching 0 -
-                // see the file header's REMAINING_MINUTES section for why this field alone is not
-                // confirmed to reach 0 at completion.
-                end_time: {
-                    platform: 'sensor',
-                    unique_id: '$deviceid-end-time',
-                    state_topic: '$this/end_time',
-                    name: 'Finish time',
-                    device_class: 'timestamp',
                 },
                 // See the file header's ENERGY section - published straight from the ~15-minute
                 // report's own running total, not a faster-updating source like FX___S.ts has.
@@ -312,15 +294,6 @@ export default class Device extends AABBDevice {
         if (buf[0] === NOTIFY_SUB && buf[1] === NOTIFY_OPCODE && buf.length > NOTIFY_CODE_OFFSET && buf[2] === 0) {
             const name = NOTIFICATION[buf[NOTIFY_CODE_OFFSET]]
             if (name !== undefined) this.publishEvent('notification', name)
-            // Latch end_time at the moment washing actually completes - see the file header's
-            // REMAINING_MINUTES section for why this notification is used instead of waiting for
-            // remaining_minutes itself to reach 0 (not confirmed to always get there). Only when a
-            // prediction was actually pending, so a stray/unexpected notification with nothing
-            // running does not publish a fabricated "just finished" timestamp.
-            if (name === 'washing_is_complete' && this.endTimePredicted !== undefined) {
-                this.endTimePredicted = undefined
-                this.publishProperty('end_time', new Date().toISOString())
-            }
             return
         }
 
@@ -356,27 +329,7 @@ export default class Device extends AABBDevice {
                 const offset = payload[6] === INNER_STATE ? RECORD_LEN : payload[6] === INNER_STATE_SINGLE ? 0 : -1
                 if (offset >= 0 && data.length >= offset + RECORD_LEN) {
                     const record = data.subarray(offset, offset + RECORD_LEN)
-                    const remaining = record[REMAINING_MINUTES_OFFSET]
-                    this.publishProperty('remaining_minutes', remaining)
-
-                    // end_time prediction while a cycle is genuinely in progress - see FX___S.ts's
-                    // identical derivation. Completion itself is latched off the notification
-                    // above rather than `remaining` reaching 0 - see the file header's
-                    // REMAINING_MINUTES section - so this branch only ever needs to handle the
-                    // "still counting down" case, never a reset.
-                    if (remaining > 0) {
-                        const predicted = Date.now() + remaining * 60_000
-                        if (
-                            this.endTimePredicted === undefined ||
-                            Math.abs(predicted - this.endTimePredicted) >= 60_000
-                        ) {
-                            this.endTimePredicted = predicted
-                            this.publishProperty(
-                                'end_time',
-                                new Date(Math.round(predicted / 60_000) * 60_000).toISOString(),
-                            )
-                        }
-                    }
+                    this.publishProperty('remaining_minutes', record[REMAINING_MINUTES_OFFSET])
                     return
                 }
             }
