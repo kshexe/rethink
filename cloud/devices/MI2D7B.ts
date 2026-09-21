@@ -271,6 +271,13 @@ export default class Device extends AABBDevice {
                 // Optimistic: see the file header for why this is not read back off the wire.
                 this.power = on
                 this.publishProperty('power', on ? 'ON' : 'OFF')
+                // remaining_minutes has no record of its own to fall back to 0 with while off (see
+                // the file header's REMAINING_MINUTES section - the record carrying it does not
+                // arrive at all once idle), so a real off would otherwise leave the last real
+                // countdown retained on the MQTT topic forever. Zeroed here explicitly rather than
+                // on the ON transition too - there is nothing wrong to overwrite yet there, and the
+                // first real record after a start corrects it either way.
+                if (!on) this.publishProperty('remaining_minutes', 0)
                 return
             }
             default:
@@ -313,6 +320,8 @@ export default class Device extends AABBDevice {
             if (on !== this.power) {
                 this.power = on
                 this.publishProperty('power', on ? 'ON' : 'OFF')
+                // See the identical zeroing in setProperty('power', ...) above.
+                if (!on) this.publishProperty('remaining_minutes', 0)
             }
             return
         }

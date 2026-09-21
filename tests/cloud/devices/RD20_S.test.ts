@@ -250,6 +250,15 @@ describe(MODEL_ID, () => {
         assert.equal(ha.devices[DEVICE_ID].properties.power, 'ON')
     })
 
+    test('remaining_minutes zeroes on power-off, since the status frame carrying it never arrives to do it itself', () => {
+        const { thinq, dev, ha } = makeDevice()
+        dev.setProperty('power', 'ON')
+        thinq.emit('data', STATE_99_MIN_LEFT)
+        assert.equal(ha.devices[DEVICE_ID].properties.remaining_minutes, 99)
+        dev.setProperty('power', 'OFF')
+        assert.equal(ha.devices[DEVICE_ID].properties.remaining_minutes, 0)
+    })
+
     test('the 114-byte status frame publishes remaining_minutes, matching the official integration', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', STATE_99_MIN_LEFT)

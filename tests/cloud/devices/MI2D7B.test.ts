@@ -131,6 +131,15 @@ describe(MODEL_ID, () => {
         assert.equal(ha.devices[DEVICE_ID].properties.remaining_minutes, 28)
     })
 
+    test('remaining_minutes zeroes on power-off, since the record carrying it never arrives to do it itself', () => {
+        const { ha, thinq, dev } = makeDevice()
+        dev.setProperty('power', 'ON')
+        thinq.emit('data', STATUS_EC_28_MIN_LEFT)
+        assert.equal(ha.devices[DEVICE_ID].properties.remaining_minutes, 28)
+        dev.setProperty('power', 'OFF')
+        assert.equal(ha.devices[DEVICE_ID].properties.remaining_minutes, 0)
+    })
+
     test('both real notification-channel codes publish washing_is_complete', () => {
         for (const frame of [NOTIFICATION_CODE_00, NOTIFICATION_CODE_C8]) {
             const { ha, thinq } = makeDevice()
