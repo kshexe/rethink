@@ -1149,10 +1149,15 @@ export default class Device extends AABBDevice {
                     icon: 'mdi:rotate-3d-variant',
                     entity_category: 'diagnostic',
                 },
-                remaining_time: {
+                // Renamed from `remaining_time` (2026-09-21) to match RD20_S.ts/MI2D7B.ts's own
+                // key for the identical field - all three appliances now publish this raw
+                // minutes-remaining value under the same name, `end_time` above being the
+                // timestamp derived from it. HA's entity_id/history for the old name are not
+                // migrated - see the deploy note this rename shipped with.
+                remaining_minutes: {
                     platform: 'sensor',
-                    unique_id: '$deviceid-remaining-time',
-                    state_topic: '$this/remaining_time',
+                    unique_id: '$deviceid-remaining_minutes',
+                    state_topic: '$this/remaining_minutes',
                     name: 'Remaining time',
                     device_class: 'duration',
                     unit_of_measurement: 'min',
@@ -1816,7 +1821,7 @@ export default class Device extends AABBDevice {
         // selected course's estimate though, which is worth seeing before pressing start, so it is
         // published whenever the appliance is on.
         const remaining = TIMED_PHASES.has(phase) ? rec[OFF_REMAIN_H] * 60 + rec[OFF_REMAIN_M] : 0
-        this.publishProperty('remaining_time', remaining)
+        this.publishProperty('remaining_minutes', remaining)
 
         /*
          * A reservation is a countdown too, and a much longer one, so the finish time below uses it

@@ -94,7 +94,7 @@ describe('FX___S washer', () => {
         const config = HA.devices[DEVICE_ID].config!
         assert.equal(config.device.model, 'FX___S')
         assert.ok(config.components.status)
-        assert.ok(config.components.remaining_time)
+        assert.ok(config.components.remaining_minutes)
     })
 
     test('decodes the idle record', () => {
@@ -105,7 +105,7 @@ describe('FX___S washer', () => {
         assert.equal(get(HA, 'status'), 'initial')
         assert.equal(get(HA, 'status_code'), 1)
         assert.equal(get(HA, 'running'), 'OFF')
-        assert.equal(get(HA, 'remaining_time'), 0) // not a timed phase
+        assert.equal(get(HA, 'remaining_minutes'), 0) // not a timed phase
         assert.equal(get(HA, 'course'), 'AI_COURSE')
         // Standby names nothing: the appliance can sit here for minutes holding a course the
         // owner has already changed at the panel. The select is where the selection lives.
@@ -127,7 +127,7 @@ describe('FX___S washer', () => {
         assert.equal(get(HA, 'status_code'), 3)
         assert.equal(get(HA, 'running'), 'ON')
         assert.equal(get(HA, 'drum_active'), 'ON')
-        assert.equal(get(HA, 'remaining_time'), 36)
+        assert.equal(get(HA, 'remaining_minutes'), 36)
         assert.equal(get(HA, 'total_time'), 36)
     })
 
@@ -137,7 +137,7 @@ describe('FX___S washer', () => {
 
         assert.equal(get(HA, 'status'), 'rinsing')
         assert.equal(get(HA, 'status_code'), 12)
-        assert.equal(get(HA, 'remaining_time'), 21)
+        assert.equal(get(HA, 'remaining_minutes'), 21)
         assert.equal(get(HA, 'total_time'), 28) // re-estimated mid-cycle, down from 36
         assert.equal(get(HA, 'rinse_remaining'), 2)
     })
@@ -164,7 +164,7 @@ describe('FX___S washer', () => {
 
         assert.equal(get(HA, 'status'), 'end')
         assert.equal(get(HA, 'status_code'), 42)
-        assert.equal(get(HA, 'remaining_time'), 0)
+        assert.equal(get(HA, 'remaining_minutes'), 0)
         // The 0x10 flag is still set here, so deriving `running` from it reported a finished wash as
         // running - seen on the appliance after the first deploy.
         assert.equal(get(HA, 'running'), 'OFF')
@@ -179,7 +179,7 @@ describe('FX___S washer', () => {
         feed(thinq, RINSE_SPIN_STARTED)
 
         assert.equal(get(HA, 'status'), 'rinsing')
-        assert.equal(get(HA, 'remaining_time'), 25)
+        assert.equal(get(HA, 'remaining_minutes'), 25)
         assert.equal(get(HA, 'rinse_remaining'), 1)
         assert.equal(get(HA, 'current_course'), 'RINSE_SPIN')
     })
@@ -232,7 +232,7 @@ describe('FX___S washer', () => {
         assert.equal(get(HA, 'status_code'), 14)
         assert.equal(get(HA, 'running'), 'ON')
         assert.equal(get(HA, 'course'), 'RINSE_SPIN')
-        assert.equal(get(HA, 'remaining_time'), 2)
+        assert.equal(get(HA, 'remaining_minutes'), 2)
         assert.equal(get(HA, 'total_time'), 25)
         assert.equal(get(HA, 'cycles'), '16')
         assert.equal(get(HA, 'buzzer'), 'very_high')
@@ -824,7 +824,7 @@ describe('FX___S entity names', () => {
         // These report what the appliance is doing rather than setting it, so grouping them with the
         // controls would say they are adjustable.
         assert.equal(nameOf(HA, 'current_course'), 'Current course')
-        assert.equal(nameOf(HA, 'remaining_time'), 'Remaining time')
+        assert.equal(nameOf(HA, 'remaining_minutes'), 'Remaining time')
     })
 
     test('energy_reports is withdrawn, not just left undeclared - existing installs get it removed', () => {
@@ -1233,7 +1233,7 @@ describe('FX___S reservation armed on the appliance itself', () => {
         assert.ok(at >= before + 419 * 60_000 - 30_000, 'about seven hours out, not thirty minutes')
         assert.ok(at <= Date.now() + 419 * 60_000 + 30_000)
         // ...and the remaining-time sensor stays out of it: the cycle has not started.
-        assert.equal(get(HA, 'remaining_time'), 0)
+        assert.equal(get(HA, 'remaining_minutes'), 0)
     })
 
     test('it counts down a minute at a time without the reservation setpoint jittering', () => {
@@ -2046,7 +2046,7 @@ describe('FX___S a tub clean is a running cycle', () => {
         const { HA, dut } = setup()
         const before = Date.now()
         dut.processRecord(tubClean())
-        assert.equal(get(HA, 'remaining_time'), 82)
+        assert.equal(get(HA, 'remaining_minutes'), 82)
         assert.equal(get(HA, 'total_time'), 84)
         const at = Date.parse(String(get(HA, 'end_time')))
         assert.ok(at >= before + 82 * 60_000 - 60_000, 'about 82 minutes out')
