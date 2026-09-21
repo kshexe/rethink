@@ -360,9 +360,9 @@ export default class Device extends AABBDevice {
     private seenUnknown = new Set<string>()
     private energy: energyAccumulator.EnergyTracker | undefined
 
-    /** The last remaining_minutes value seen, so `remaining_display` can be republished from the
+    /** The last raw minutes-remaining byte seen, so `remaining_minutes` can be republished from the
      *  power-change paths (where a fresh status frame is not available) as well as from the status
-     *  frame itself - see publishRemainingDisplay(). */
+     *  frame itself - see publishRemainingMinutes(). */
     private lastRemainingMinutes = 0
 
     constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
@@ -379,24 +379,16 @@ export default class Device extends AABBDevice {
                     name: '',
                     icon: 'mdi:tumble-dryer',
                 },
+                // Ready-to-show text (2026-09-21), not a number - "N분" while power is on, "-" the
+                // moment it is off, so a dashboard card can read this directly with no template
+                // helper of its own on the HA side computing it. No device_class/unit_of_measurement:
+                // publishing both the number and a separate formatted-text twin (`remaining_display`)
+                // was considered and dropped - one entity, one job. See FX___S.ts's identical field.
                 remaining_minutes: {
                     platform: 'sensor',
                     unique_id: '$deviceid-remaining_minutes',
                     state_topic: '$this/remaining_minutes',
                     name: 'Remaining time',
-                    icon: 'mdi:timer-outline',
-                    device_class: 'duration',
-                    unit_of_measurement: 'min',
-                },
-                // A ready-to-show text form of the same field (2026-09-21) - "N분" while power is
-                // on, "-" the moment it is off, so a dashboard card can read this directly with no
-                // template helper of its own on the HA side. No device_class/unit_of_measurement:
-                // this is formatted text, not a number - see FX___S.ts's identical entity.
-                remaining_display: {
-                    platform: 'sensor',
-                    unique_id: '$deviceid-remaining_display',
-                    state_topic: '$this/remaining_display',
-                    name: 'Time left',
                     icon: 'mdi:timer-outline',
                 },
                 // See the file header's STATUS section - only running/cooling/complete are
@@ -599,7 +591,7 @@ export default class Device extends AABBDevice {
                 // Optimistic: see the file header for why this is not read back off the wire.
                 this.power = on
                 this.publishProperty('power', on ? 'ON' : 'OFF')
-                this.publishRemainingDisplay()
+                this.publishRemainingMinutes(on)
                 return
             }
             case 'drum_light_auto': {
@@ -623,12 +615,14 @@ export default class Device extends AABBDevice {
         this.HA.publishProperty(this.id, topic, JSON.stringify({ event_type: eventType }), { retain: false })
     }
 
-    /** `remaining_minutes` as ready-to-show text - "-" the moment power is off (called from both
-     *  power paths, since this appliance stops sending its status frame entirely while idle - see
-     *  the file header's REMAINING_MINUTES section - so waiting for the next status frame to catch
-     *  a power-off would mean it never gets caught at all), the countdown otherwise. */
-    private publishRemainingDisplay() {
-        this.publishProperty('remaining_display', this.power ? `${Math.max(this.lastRemainingMinutes, 0)}분` : '-')
+    /** `remaining_minutes` as ready-to-show text - "-" while off, the countdown otherwise. `on`
+     *  is explicit rather than read from `this.power`: the status frame branch below calls this
+     *  with `true` unconditionally, since the frame's own arrival already proves the appliance is
+     *  running (see the file header's REMAINING_MINUTES section - it does not arrive at all while
+     *  idle) independently of whether a separate power echo/optimistic set has confirmed `this.power`
+     *  yet. The two power-change call sites pass `this.power` itself, having just set it. */
+    private publishRemainingMinutes(on: boolean) {
+        this.publishProperty('remaining_minutes', on ? `${Math.max(this.lastRemainingMinutes, 0)}분` : '-')
     }
 
     processAABB(buf: Buffer) {
@@ -662,8 +656,7 @@ export default class Device extends AABBDevice {
             buf.subarray(STATUS_MARKER_OFFSET, STATUS_MARKER_OFFSET + STATUS_MARKER.length).equals(STATUS_MARKER)
         ) {
             this.lastRemainingMinutes = buf[REMAINING_MINUTES_OFFSET]
-            this.publishProperty('remaining_minutes', this.lastRemainingMinutes)
-            this.publishRemainingDisplay()
+            this.publishRemainingMinutes(true)
 
             const status = decodeStatus(buf[STATUS_OFFSET])
             if (status !== this.status) {
@@ -720,7 +713,7 @@ export default class Device extends AABBDevice {
             if (on !== this.power) {
                 this.power = on
                 this.publishProperty('power', on ? 'ON' : 'OFF')
-                this.publishRemainingDisplay()
+                this.publishRemainingMinutes(on)
             }
             return
         }

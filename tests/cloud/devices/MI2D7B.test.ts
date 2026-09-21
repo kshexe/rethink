@@ -65,13 +65,12 @@ function makeDevice(id = DEVICE_ID) {
 }
 
 describe(MODEL_ID, () => {
-    test('declares power as the only writable component, plus remaining_minutes/remaining_display/energy*/notification read-only', () => {
+    test('declares power as the only writable component, plus remaining_minutes/energy*/notification read-only', () => {
         const { ha } = makeDevice()
         const components = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
         assert.deepEqual(Object.keys(components), [
             'power',
             'remaining_minutes',
-            'remaining_display',
             'energy',
             'energy_hour',
             'energy_day',
@@ -126,19 +125,22 @@ describe(MODEL_ID, () => {
         assert.equal(ha.devices[DEVICE_ID].properties.power, 'ON')
     })
 
-    test('a real query-response status frame publishes remaining_minutes', () => {
+    test('a real query-response status frame publishes remaining_minutes as ready-to-show text, even before power has been separately confirmed', () => {
+        // No dev.setProperty('power', ...) here - this.power is still `undefined` when the record
+        // arrives. The record's own arrival is what proves the appliance is running, so this must
+        // still publish the real countdown, not "-".
         const { ha, thinq } = makeDevice()
         thinq.emit('data', STATUS_EC_28_MIN_LEFT)
-        assert.equal(ha.devices[DEVICE_ID].properties.remaining_minutes, 28)
+        assert.equal(ha.devices[DEVICE_ID].properties.remaining_minutes, '28분')
     })
 
-    test('remaining_display follows power, off before on', () => {
+    test('remaining_minutes reads "-" the moment power turns off, even without a fresh record', () => {
         const { ha, thinq, dev } = makeDevice()
         dev.setProperty('power', 'ON')
         thinq.emit('data', STATUS_EC_28_MIN_LEFT)
-        assert.equal(ha.devices[DEVICE_ID].properties.remaining_display, '28분')
+        assert.equal(ha.devices[DEVICE_ID].properties.remaining_minutes, '28분')
         dev.setProperty('power', 'OFF')
-        assert.equal(ha.devices[DEVICE_ID].properties.remaining_display, '-')
+        assert.equal(ha.devices[DEVICE_ID].properties.remaining_minutes, '-')
     })
 
     test('both real notification-channel codes publish washing_is_complete', () => {

@@ -164,7 +164,6 @@ describe(MODEL_ID, () => {
         assert.deepEqual(Object.keys(components), [
             'power',
             'remaining_minutes',
-            'remaining_display',
             'status',
             'energy',
             'energy_hour',
@@ -191,7 +190,7 @@ describe(MODEL_ID, () => {
         assert.equal(components.power.command_topic, '$this/power/set')
         assert.equal(components.drum_light_auto.command_topic, '$this/drum_light_auto/set')
         assert.equal(components.remaining_minutes.platform, 'sensor')
-        assert.equal(components.remaining_minutes.unit_of_measurement, 'min')
+        assert.equal(components.remaining_minutes.unit_of_measurement, undefined) // formatted text, not a number
     })
 
     test('power write reproduces the captured frame byte for byte', () => {
@@ -251,25 +250,35 @@ describe(MODEL_ID, () => {
         assert.equal(ha.devices[DEVICE_ID].properties.power, 'ON')
     })
 
-    test('remaining_display follows power, off before on', () => {
+    test('remaining_minutes reads "-" the moment power turns off, even without a fresh status frame', () => {
         const { thinq, dev, ha } = makeDevice()
         dev.setProperty('power', 'ON')
         thinq.emit('data', STATE_99_MIN_LEFT)
-        assert.equal(ha.devices[DEVICE_ID].properties.remaining_display, '99분')
+        assert.equal(ha.devices[DEVICE_ID].properties.remaining_minutes, '99분')
         dev.setProperty('power', 'OFF')
-        assert.equal(ha.devices[DEVICE_ID].properties.remaining_display, '-')
+        assert.equal(ha.devices[DEVICE_ID].properties.remaining_minutes, '-')
+    })
+
+    test('a status frame publishes the countdown even before power has been separately confirmed', () => {
+        // No dev.setProperty('power', ...) and no power echo here - this.power is still
+        // `undefined` when the status frame arrives. The frame's own arrival is what proves the
+        // appliance is running (see the file header's REMAINING_MINUTES section), so this must
+        // still publish the real countdown, not "-".
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', STATE_99_MIN_LEFT)
+        assert.equal(ha.devices[DEVICE_ID].properties.remaining_minutes, '99분')
     })
 
     test('the 114-byte status frame publishes remaining_minutes, matching the official integration', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', STATE_99_MIN_LEFT)
-        assert.equal(ha.devices[DEVICE_ID].properties.remaining_minutes, 99)
+        assert.equal(ha.devices[DEVICE_ID].properties.remaining_minutes, '99분')
         thinq.emit('data', STATE_74_MIN_LEFT)
-        assert.equal(ha.devices[DEVICE_ID].properties.remaining_minutes, 74)
+        assert.equal(ha.devices[DEVICE_ID].properties.remaining_minutes, '74분')
         thinq.emit('data', STATE_58_TO_11_MIN_LEFT)
         assert.equal(
             ha.devices[DEVICE_ID].properties.remaining_minutes,
-            11,
+            '11분',
             'reads the second (current) record, not the first',
         )
     })

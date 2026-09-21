@@ -105,7 +105,7 @@ describe('FX___S washer', () => {
         assert.equal(get(HA, 'status'), 'initial')
         assert.equal(get(HA, 'status_code'), 1)
         assert.equal(get(HA, 'running'), 'OFF')
-        assert.equal(get(HA, 'remaining_minutes'), 0) // not a timed phase
+        assert.equal(get(HA, 'remaining_minutes'), '0분') // not a timed phase, but power is on
         assert.equal(get(HA, 'course'), 'AI_COURSE')
         // Standby names nothing: the appliance can sit here for minutes holding a course the
         // owner has already changed at the panel. The select is where the selection lives.
@@ -127,18 +127,16 @@ describe('FX___S washer', () => {
         assert.equal(get(HA, 'status_code'), 3)
         assert.equal(get(HA, 'running'), 'ON')
         assert.equal(get(HA, 'drum_active'), 'ON')
-        assert.equal(get(HA, 'remaining_minutes'), 36)
+        assert.equal(get(HA, 'remaining_minutes'), '36분')
         assert.equal(get(HA, 'total_time'), 36)
-        assert.equal(get(HA, 'remaining_display'), '36분')
     })
 
-    test('remaining_display reads "-" while the appliance is off, not a stale number', () => {
+    test('remaining_minutes reads "-" while the appliance is off, not a stale number', () => {
         const { HA, thinq } = setup()
         feed(thinq, STARTED)
-        assert.equal(get(HA, 'remaining_display'), '36분')
+        assert.equal(get(HA, 'remaining_minutes'), '36분')
         feed(thinq, POWERED_OFF)
-        assert.equal(get(HA, 'remaining_display'), '-')
-        assert.equal(get(HA, 'remaining_minutes'), 0)
+        assert.equal(get(HA, 'remaining_minutes'), '-')
     })
 
     test('reports the rinse stage and the rinses still to go', () => {
@@ -147,7 +145,7 @@ describe('FX___S washer', () => {
 
         assert.equal(get(HA, 'status'), 'rinsing')
         assert.equal(get(HA, 'status_code'), 12)
-        assert.equal(get(HA, 'remaining_minutes'), 21)
+        assert.equal(get(HA, 'remaining_minutes'), '21분')
         assert.equal(get(HA, 'total_time'), 28) // re-estimated mid-cycle, down from 36
         assert.equal(get(HA, 'rinse_remaining'), 2)
     })
@@ -174,7 +172,7 @@ describe('FX___S washer', () => {
 
         assert.equal(get(HA, 'status'), 'end')
         assert.equal(get(HA, 'status_code'), 42)
-        assert.equal(get(HA, 'remaining_minutes'), 0)
+        assert.equal(get(HA, 'remaining_minutes'), '0분') // complete, but still powered on
         // The 0x10 flag is still set here, so deriving `running` from it reported a finished wash as
         // running - seen on the appliance after the first deploy.
         assert.equal(get(HA, 'running'), 'OFF')
@@ -189,7 +187,7 @@ describe('FX___S washer', () => {
         feed(thinq, RINSE_SPIN_STARTED)
 
         assert.equal(get(HA, 'status'), 'rinsing')
-        assert.equal(get(HA, 'remaining_minutes'), 25)
+        assert.equal(get(HA, 'remaining_minutes'), '25분')
         assert.equal(get(HA, 'rinse_remaining'), 1)
         assert.equal(get(HA, 'current_course'), 'RINSE_SPIN')
     })
@@ -242,7 +240,7 @@ describe('FX___S washer', () => {
         assert.equal(get(HA, 'status_code'), 14)
         assert.equal(get(HA, 'running'), 'ON')
         assert.equal(get(HA, 'course'), 'RINSE_SPIN')
-        assert.equal(get(HA, 'remaining_minutes'), 2)
+        assert.equal(get(HA, 'remaining_minutes'), '2분')
         assert.equal(get(HA, 'total_time'), 25)
         assert.equal(get(HA, 'cycles'), '16')
         assert.equal(get(HA, 'buzzer'), 'very_high')
@@ -1093,7 +1091,7 @@ describe('FX___S reservation armed on the appliance itself', () => {
         rec[13] = 30 // the cycle is half an hour, and that is NOT when it finishes
         dut.processRecord(rec)
 
-        assert.equal(get(HA, 'remaining_minutes'), 0)
+        assert.equal(get(HA, 'remaining_minutes'), '0분')
     })
 
     test('it counts down a minute at a time without the reservation setpoint jittering', () => {
@@ -1905,9 +1903,8 @@ describe('FX___S a tub clean is a running cycle', () => {
     test('its clock is live, so the remaining time is this cycle and not the last one', () => {
         const { HA, dut } = setup()
         dut.processRecord(tubClean())
-        assert.equal(get(HA, 'remaining_minutes'), 82)
+        assert.equal(get(HA, 'remaining_minutes'), '82분')
         assert.equal(get(HA, 'total_time'), 84)
-        assert.equal(get(HA, 'remaining_display'), '82분')
     })
 
     test('it offers pause, and does not offer start', () => {

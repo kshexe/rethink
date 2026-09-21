@@ -499,10 +499,10 @@ const ERROR_NONE = 0
 // 1 minute rather than reaching 0, and Laundry care leaves the previous cycle's values untouched - both
 // would otherwise show a permanent "1 minute left" in Home Assistant.
 //
-// 41 (a tub clean) was missing here, which zeroed the remaining minutes for the whole of one -
-// `remaining_display` is fed from this same number, so the omission took that out too. The bytes
-// are live in 41: on 2026-08-07 the total read 84 minutes and the cloud put the finish 82 minutes
-// out, one second apart.
+// 41 (a tub clean) was missing here, which zeroed the remaining minutes for the whole of one - the
+// text `remaining_minutes` now publishes is fed from this same number, so the omission took that
+// out too. The bytes are live in 41: on 2026-08-07 the total read 84 minutes and the cloud put the
+// finish 82 minutes out, one second apart.
 const TIMED_PHASES = new Set([3, 37, 11, 40, 12, 14, 41, PHASE_PAUSED])
 
 // Phases in which the appliance is actually working. Paused is deliberately excluded - `status` already
@@ -1148,27 +1148,18 @@ export default class Device extends AABBDevice {
                     entity_category: 'diagnostic',
                 },
                 // Renamed from `remaining_time` (2026-09-21) to match RD20_S.ts/MI2D7B.ts's own
-                // key for the identical field - all three appliances now publish this raw
-                // minutes-remaining value under the same name. HA's entity_id/history for the old
-                // name are not migrated - see the deploy note this rename shipped with.
+                // key for the identical field. Ready-to-show text (2026-09-21), not a number any
+                // more - "N분" while a cycle is actually running, "-" the moment the appliance is
+                // off - so a dashboard card can read this directly with no template helper of its
+                // own on the HA side computing it. No device_class/unit_of_measurement: publishing
+                // both the number and a separate formatted-text twin was considered and dropped -
+                // one entity, one job. HA's entity_id/history for the old numeric-duration
+                // name/shape are not migrated.
                 remaining_minutes: {
                     platform: 'sensor',
                     unique_id: '$deviceid-remaining_minutes',
                     state_topic: '$this/remaining_minutes',
                     name: 'Remaining time',
-                    device_class: 'duration',
-                    unit_of_measurement: 'min',
-                },
-                // A ready-to-show text form of the same field (2026-09-21) - "N분" while a cycle
-                // is actually running, "-" the moment the appliance is off, so a dashboard card can
-                // read this directly with no template helper of its own on the HA side computing
-                // it. No device_class/unit_of_measurement: this is formatted text, not a number -
-                // see RD20_S.ts/MI2D7B.ts's identical entity for the same reasoning.
-                remaining_display: {
-                    platform: 'sensor',
-                    unique_id: '$deviceid-remaining_display',
-                    state_topic: '$this/remaining_display',
-                    name: 'Time left',
                     icon: 'mdi:timer-outline',
                 },
                 total_time: {
@@ -1814,22 +1805,22 @@ export default class Device extends AABBDevice {
             this.publishProperty('energy', (rec[OFF_ENERGY_HI] << 8) | rec[OFF_ENERGY_LO])
         }
 
-        // Only the wash clock counts down, so everything else would show a stale figure - and at the end
-        // of a cycle the remaining-minutes byte sticks at 1 rather than reaching 0. The total is the
-        // selected course's estimate though, which is worth seeing before pressing start, so it is
-        // published whenever the appliance is on.
-        const remaining = TIMED_PHASES.has(phase) ? rec[OFF_REMAIN_H] * 60 + rec[OFF_REMAIN_M] : 0
-        this.publishProperty('remaining_minutes', remaining)
-
         /*
-         * A ready-to-show text form of `remaining_minutes` (2026-09-21, replacing this file's own
-         * `end_time` timestamp-derivation - see git history for that approach) - "-" the moment the
+         * Ready-to-show text (2026-09-21, replacing this file's own `end_time` timestamp-derivation
+         * AND a separate `remaining_display` twin - see git history for both) - "-" the moment the
          * appliance is off, the countdown itself (never negative - TIMED_PHASES already zeroes
-         * `remaining` outside a real cycle, matching remaining_minutes itself) at every other phase,
-         * Paused and Reserved included, so a dashboard card can read this directly with no template
-         * helper of its own computing it on the HA side.
+         * `remaining` outside a real cycle) at every other phase, Paused and Reserved included, so a
+         * dashboard card can read this one entity directly with no template helper of its own
+         * computing it on the HA side.
+         *
+         * Only the wash clock counts down, so everything else would show a stale figure - and at
+         * the end of a cycle the remaining-minutes byte sticks at 1 rather than reaching 0.
          */
-        this.publishProperty('remaining_display', phase === PHASE_OFF ? '-' : `${Math.max(remaining, 0)}분`)
+        const remaining = TIMED_PHASES.has(phase) ? rec[OFF_REMAIN_H] * 60 + rec[OFF_REMAIN_M] : 0
+        this.publishProperty('remaining_minutes', phase === PHASE_OFF ? '-' : `${Math.max(remaining, 0)}분`)
+        // total_time keeps its own numeric shape - it is the selected course's estimate, worth
+        // seeing before pressing start, so it is published whenever the appliance is on rather
+        // than only while TIMED_PHASES is counting down.
         this.publishProperty('total_time', phase === PHASE_OFF ? 0 : rec[OFF_TOTAL_H] * 60 + rec[OFF_TOTAL_M])
         this.publishProperty('rinse_remaining', rec[OFF_RINSE])
         this.updateButtonAvailability()
