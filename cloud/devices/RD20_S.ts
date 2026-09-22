@@ -142,6 +142,26 @@ import * as energyAccumulator from '../energy-accumulator'
  * inside a cycle mined closely enough to place with confidence, so they publish as
  * `unknown_<value>` rather than being guessed at.
  *
+ * COURSE (decoded 2026-09-12, wired into the handler 2026-09-22): confirmed via self-triggered
+ * command+echo diffing (drive a course selection myself via the headless-Playwright method, then
+ * diff the immediate round trip) - `<sub=0x30> 7F <id>` (3-byte body), broadcast continuously
+ * (~every 1.5s) regardless of power state, same "self-test burst" chatter the 114-byte status
+ * frame's own absence-while-idle note describes. `id`: `0x03` = normal (표준, the default/no
+ * course selected state), `0x04` = ai_course (인공지능건조). Re-confirmed live 2026-09-22 against
+ * a real cycle: the byte read `0x03` while the panel/app was still being browsed, flipped to
+ * `0x04` the moment AI Course was picked, and held `0x04` for the entire ~103-minute cycle through
+ * to completion - a clean, reproducible signal, not a one-off coincidence.
+ *
+ * The RV13-series reference dryers' own course enum (`rec[6]`: 0x01 Heavy Duty...0x1a Super Dry)
+ * was checked as a possible shortcut - only `0x03` happens to agree (their Normal is also 3), and
+ * `0x04` means something else in their table, so that numbering was not reused here. This model's
+ * live cloud snapshot (`GET /bridge/<id>/snapshot`, `washerDryer.panelCrsList`) lists the full
+ * panel dial in order (index 0 NORMAL, 1 AI_COURSE, 2 BEDDING, 3 QUICKDRY, 4 WOOL, 5
+ * BEDDINGBRUSH, 6 TUBCLEAN, 7 CONDENSERCARE, 8 CLOTHCARE, 9 BABYWEAR, 10 COOLAIR, ...) and the two
+ * confirmed ids line up with "panel index + 3" (NORMAL 0->3, AI_COURSE 1->4) - a plausible pattern
+ * for the rest, but UNCONFIRMED beyond these two, so only these two are named; anything else
+ * publishes as `#<id>` rather than guessing the offset holds for the whole list.
+ *
  * ENERGY (decoded 2026-09-13): `buf[81]` (`buf[31]` is the "old" record's copy of the same field,
  * same +50 pairing as everything else in this frame) is a **1 Wh/count, mod-256 rolling total** -
  * not a delta report like FX___S's `0x3E` or a persistent multi-byte total like
@@ -316,6 +336,22 @@ const NOTIFICATION: Record<number, string> = {
 }
 const NOTIFICATION_OPTIONS = [...new Set(Object.values(NOTIFICATION))]
 
+/** See the file header's COURSE section - `<sub=0x30> 7F <id>`, broadcast continuously (~every
+ *  1.5s) regardless of power state, confirmed 2026-09-12 by self-triggered testing. */
+const COURSE_SUB = 0x30
+const COURSE_OPCODE = 0x7f
+const COURSE_ID_OFFSET = 2
+/** Only the two IDs actually seen selecting a real cycle are named - see the file header for why
+ *  the rest are not guessed at. */
+const COURSE_NAMES: Record<number, string> = {
+    3: 'normal',
+    4: 'ai_course',
+}
+
+function decodeCourse(raw: number): string {
+    return COURSE_NAMES[raw] ?? `#${raw}`
+}
+
 const STATUS_NAMES: Record<number, string> = {
     0x41: 'running',
     0x61: 'cooling',
@@ -354,6 +390,7 @@ const QUERY_FRAME = Buffer.from('f0ed1211010000010400', 'hex')
 export default class Device extends AABBDevice {
     power: boolean | undefined
     status: string | undefined
+    course: string | undefined
     remoteControl: boolean | undefined
     drumLightAuto: boolean | undefined
 
@@ -415,6 +452,20 @@ export default class Device extends AABBDevice {
                     icon: 'mdi:tumble-dryer',
                 },
                 status: { platform: 'sensor' } as ComponentInfo,
+                // See the file header's COURSE section - the only two ids ever seen selecting a
+                // real cycle are named, anything else publishes as `#<id>` rather than being
+                // guessed at (see FX___S.ts's own `current_course` for the same convention). No
+                // `device_class: 'enum'` here on purpose: unlike current_course, this model has no
+                // course-table declaration to grow the option list from, and an enum sensor
+                // publishing a value outside its declared options is rejected outright by Home
+                // Assistant.
+                course: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-course',
+                    state_topic: '$this/course',
+                    name: 'Course',
+                    icon: 'mdi:playlist-check',
+                },
                 // The unwrapped raw byte, reconstructed across its mod-256 rolls - see the file
                 // header's ENERGY section and cycleEnergyWh's own comment. Mirrors FX___S.ts's
                 // "Energy this cycle" - same shape, same name, same idea, different appliance.
@@ -654,6 +705,18 @@ export default class Device extends AABBDevice {
     processAABB(buf: Buffer) {
         // ack: <sub> 00 e5 00  (4 bytes) - nothing to publish, just confirms the write landed
         if (buf.length === 4 && buf[1] === 0x00 && buf[2] === FROM_DEVICE_ACK_OPCODE && buf[3] === 0x00) return
+
+        // course id: <sub=0x30> 7F <id> (3 bytes) - see the file header's COURSE section.
+        // Broadcast continuously regardless of power state, so this is the only reliable source
+        // for "what course is this cycle running" this model exposes at all.
+        if (buf.length === 3 && buf[0] === COURSE_SUB && buf[1] === COURSE_OPCODE) {
+            const course = decodeCourse(buf[COURSE_ID_OFFSET])
+            if (course !== this.course) {
+                this.course = course
+                this.publishProperty('course', course)
+            }
+            return
+        }
 
         // notification channel: <sub=0x30> 72 <payload> - see the file header's NOTIFICATION
         // section. Frame length is not fixed, so only the sub/opcode/gate byte are checked.

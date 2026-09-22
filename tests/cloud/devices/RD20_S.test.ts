@@ -105,6 +105,12 @@ const NOTIFICATION_CODE_00 = buf('aa09307200000000bb')
 const NOTIFICATION_REMOTE_ON = buf('aa09307200c9004bbb')
 const NOTIFICATION_REMOTE_OFF = buf('aa09307200c80048bb')
 
+// Real course-id frames - see the file header's COURSE section. Captured 2026-09-22 across a real
+// AI Course cycle: NORMAL while the panel/app was still being browsed, then AI_COURSE from
+// selection through to completion ~103 minutes later.
+const COURSE_NORMAL = buf('aa07307f0336bb')
+const COURSE_AI = buf('aa07307f0431bb')
+
 /*
  * Real 114-byte status frames, mined from the live one-control-at-a-time idle testing that found
  * the fields below (2026-09-14) - see RD20_S.ts's file header for the full account, including the
@@ -167,6 +173,7 @@ describe(MODEL_ID, () => {
             'remaining_minutes',
             'state',
             'status',
+            'course',
             'energy',
             'energy_hour',
             'energy_day',
@@ -381,6 +388,22 @@ describe(MODEL_ID, () => {
         thinq.emit('data', NOTIFICATION_REMOTE_OFF)
         assert.equal(ha.devices[DEVICE_ID].properties.remote_control, 'OFF')
         assert.equal(ha.devices[DEVICE_ID].properties.notification, undefined)
+    })
+
+    test('course id reads sub=0x30/opcode=0x7f byte[2], confirmed against a real AI Course cycle', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', COURSE_NORMAL)
+        assert.equal(ha.devices[DEVICE_ID].properties.course, 'normal')
+        thinq.emit('data', COURSE_AI)
+        assert.equal(ha.devices[DEVICE_ID].properties.course, 'ai_course')
+    })
+
+    test('an unnamed course id publishes as #<id> rather than being guessed at', () => {
+        const { ha, thinq } = makeDevice()
+        // Synthetic, not a real capture - COURSE_NORMAL/COURSE_AI's own checksum formula (see
+        // AABBDevice.send()) applied to an id neither of them used, just to exercise the fallback.
+        thinq.emit('data', buf('aa07307f0530bb'))
+        assert.equal(ha.devices[DEVICE_ID].properties.course, '#5')
     })
 
     test('drum_light reads buf[87] 0x20, confirmed by a real on/off reversal', () => {
