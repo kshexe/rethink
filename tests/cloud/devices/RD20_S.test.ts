@@ -250,6 +250,11 @@ describe(MODEL_ID, () => {
         assert.equal(ha.devices[DEVICE_ID].properties.power, 'ON')
     })
 
+    test('remaining_minutes starts at 0 on construction, not whatever MQTT retained from before a restart', () => {
+        const { ha } = makeDevice()
+        assert.equal(ha.devices[DEVICE_ID].properties.remaining_minutes, 0)
+    })
+
     test('remaining_minutes zeroes on power-off, since the status frame carrying it never arrives to do it itself', () => {
         const { thinq, dev, ha } = makeDevice()
         dev.setProperty('power', 'ON')

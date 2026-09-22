@@ -241,6 +241,13 @@ export default class Device extends AABBDevice {
         })
 
         this.setConfig(config)
+        // Zeroed unconditionally on every (re)connect, not just on a power-off transition this
+        // process happens to witness - see the file header's REMAINING_MINUTES section: the record
+        // carrying this value does not arrive at all while idle, so a rethink restart while the
+        // appliance sits off (the common case) would otherwise leave whatever number MQTT retained
+        // from the last real cycle showing forever, with nothing to ever correct it. A device that
+        // is genuinely mid-cycle corrects this within the next real record either way.
+        this.publishProperty('remaining_minutes', 0)
         log(
             'status',
             this.id,

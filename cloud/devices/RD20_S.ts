@@ -566,6 +566,15 @@ export default class Device extends AABBDevice {
         })
 
         this.setConfig(config)
+        // Zeroed unconditionally on every (re)connect, not just on a power-off transition this
+        // process happens to witness - see the file header's REMAINING_MINUTES section: the status
+        // frame carrying this value does not arrive at all while idle, so a rethink restart while
+        // the appliance sits off (the common case) would otherwise leave whatever number MQTT
+        // retained from the last real cycle showing forever, with nothing to ever correct it. A
+        // dryer that is genuinely mid-cycle corrects this within the next real status frame either
+        // way. Confirmed live 2026-09-22: the mini-wash sat on a stale "51 minutes" for 12+ hours
+        // after the real cycle it belonged to had already finished, for exactly this reason.
+        this.publishProperty('remaining_minutes', 0)
         log(
             'status',
             this.id,
