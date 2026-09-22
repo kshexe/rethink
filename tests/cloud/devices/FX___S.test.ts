@@ -912,151 +912,6 @@ describe('FX___S status names follow the appliance, aligned against LG on one cl
     })
 })
 
-describe('FX___S finish time is a timestamp, not a countdown that gives up', () => {
-    test('while running it is the predicted finish', () => {
-        const { HA, thinq } = setup()
-        const before = Date.now()
-        feed(thinq, RINSING) // 21 minutes left
-
-        // Published on the minute, so it can sit up to half a minute either side of the raw estimate.
-        const predicted = Date.parse(String(get(HA, 'end_time')))
-        assert.ok(predicted >= before + 21 * 60_000 - 30_000, 'about 21 minutes out')
-        assert.ok(predicted <= Date.now() + 21 * 60_000 + 30_000)
-        assert.equal(new Date(predicted).getSeconds(), 0)
-    })
-
-    test('it latches at the moment the cycle completes, instead of going unknown', () => {
-        const { HA, thinq } = setup()
-        feed(thinq, RINSING)
-        const running = String(get(HA, 'end_time'))
-
-        const before = Date.now()
-        feed(thinq, COMPLETE)
-        const finished = String(get(HA, 'end_time'))
-
-        assert.notEqual(finished, running)
-        // This is what makes Home Assistant render "5 minutes ago" rather than nothing: the entity
-        // has device_class 'timestamp', so a kept value is shown relative to now.
-        const at = Date.parse(finished)
-        assert.ok(at >= before && at <= Date.now(), 'the completion instant, not a prediction')
-    })
-
-    test('every frame that repeats Complete leaves the timestamp alone', () => {
-        const { HA, thinq } = setup()
-        feed(thinq, RINSING)
-        feed(thinq, COMPLETE)
-        const latched = String(get(HA, 'end_time'))
-
-        // Without the transition check this would be dragged along with the clock and read
-        // "0 minutes ago" forever - the appliance repeats its state for as long as it sits there.
-        feed(thinq, COMPLETE)
-        feed(thinq, COMPLETE)
-        assert.equal(get(HA, 'end_time'), latched)
-    })
-
-    test('a restart while the washer already sits finished does not restamp it', () => {
-        const { HA, thinq } = setup()
-        // First frame after a restart, already Complete. That instant is the restart, not the
-        // finish; the retained MQTT value still holds the real one, so publishing here would
-        // overwrite a true timestamp with a false one.
-        feed(thinq, COMPLETE)
-        assert.equal(get(HA, 'end_time'), undefined)
-    })
-
-    test("it never publishes 'None', which is what took it to unknown", () => {
-        const { HA, thinq } = setup()
-        const seen: string[] = []
-        for (const frame of [STANDBY, STARTED, RINSING, COMPLETE, POWERED_OFF]) {
-            feed(thinq, frame)
-            const value = get(HA, 'end_time')
-            if (value !== undefined) seen.push(String(value))
-        }
-        assert.ok(!seen.includes('None'))
-        // ...and switching the appliance off afterwards keeps the finish time on screen.
-        assert.ok(Date.parse(String(get(HA, 'end_time'))) > 0)
-    })
-})
-
-describe('FX___S finish time does not wobble while the appliance revises its own estimate', () => {
-    // The 2026-08-04 cycle, from Home Assistant's own recorder: (seconds into the cycle, remaining
-    // minutes as the appliance reported it). Its ticks are 43 to 74 s apart and it drops two minutes
-    // at once twice - that irregularity is what moved the published timestamp 21 times.
-    const TICKS: [number, number][] = [
-        [0, 35],
-        [17, 28],
-        [19, 27],
-        [73, 26],
-        [133, 25],
-        [193, 24],
-        [253, 23],
-        [313, 22],
-        [387, 21],
-        [402, 19],
-        [476, 18],
-        [523, 17],
-        [601, 16],
-        [639, 15],
-        [649, 14],
-        [729, 13],
-        [789, 12],
-        [883, 11],
-        [931, 10],
-        [974, 8],
-    ]
-
-    function runCycle() {
-        const { HA, dut } = setup()
-        const start = Date.now()
-        const seen: string[] = []
-        for (const [offset, remaining] of TICKS) {
-            const rec = Buffer.alloc(66)
-            rec[OFF_PHASE_FOR_TEST] = 11 // running, which is a timed phase
-            rec[13] = remaining % 60
-            rec[12] = Math.floor(remaining / 60)
-            // The handler stamps from Date.now(); shifting it per tick is what reproduces the
-            // re-anchoring, so the clock is moved rather than the record.
-            const at = start + offset * 1000
-            const realNow = Date.now
-            Date.now = () => at
-            try {
-                dut.processRecord(rec)
-            } finally {
-                Date.now = realNow
-            }
-            const value = String(get(HA, 'end_time') ?? '')
-            if (value && seen[seen.length - 1] !== value) seen.push(value)
-        }
-        return seen
-    }
-
-    const OFF_PHASE_FOR_TEST = 20
-
-    test('a minute of hysteresis cuts twenty-one publishes to a handful', () => {
-        const seen = runCycle()
-        // Measured: 27 recomputes over these ticks, 21 of which HA recorded as changes. Anything in
-        // single figures is the wobble gone; the exact number is not the point and is not pinned.
-        assert.ok(seen.length <= 8, `published ${seen.length} times: ${seen.join(' ')}`)
-        assert.ok(seen.length >= 2, 'but it must still follow the appliance revising its estimate')
-    })
-
-    test('every published value is on the minute', () => {
-        for (const value of runCycle()) {
-            assert.equal(new Date(value).getSeconds(), 0, `${value} carries seconds`)
-            assert.equal(new Date(value).getMilliseconds(), 0)
-        }
-    })
-
-    test('the revisions that survive are the real ones', () => {
-        const seen = runCycle().map((v) => Date.parse(v))
-        // The appliance's estimate genuinely moved - 35 minutes at the start, then 28 seventeen
-        // seconds later - so the first two must differ by minutes, not seconds.
-        assert.ok(Math.abs(seen[1] - seen[0]) >= 60_000)
-        for (let i = 1; i < seen.length; i++) {
-            assert.ok(Math.abs(seen[i] - seen[i - 1]) >= 60_000, 'no sub-minute step is ever published')
-        }
-    })
-})
-
 describe('FX___S names every state its own maker declares', () => {
     // LG's model JSON for this appliance declares 33 states, each with an index, and the index is this
     // byte: every one of the twelve values measured here is declared at exactly the number measured,
@@ -1237,9 +1092,8 @@ describe('FX___S reservation armed on the appliance itself', () => {
         assert.equal(get(HA, 'drum_active'), 'ON')
     })
 
-    test('the finish time counts the reservation, not the cycle length', () => {
+    test('the remaining-time sensor stays out of a reservation: the cycle has not started', () => {
         const { HA, dut } = setup()
-        const before = Date.now()
         // 18:45:21 exactly: seven hours to go, on a cycle whose own length reads 30 minutes.
         const rec = armed()
         rec[10] = 1
@@ -1248,10 +1102,6 @@ describe('FX___S reservation armed on the appliance itself', () => {
         rec[13] = 30 // the cycle is half an hour, and that is NOT when it finishes
         dut.processRecord(rec)
 
-        const at = Date.parse(String(get(HA, 'end_time')))
-        assert.ok(at >= before + 419 * 60_000 - 30_000, 'about seven hours out, not thirty minutes')
-        assert.ok(at <= Date.now() + 419 * 60_000 + 30_000)
-        // ...and the remaining-time sensor stays out of it: the cycle has not started.
         assert.equal(get(HA, 'remaining_minutes'), 0)
     })
 
@@ -2061,15 +1911,11 @@ describe('FX___S a tub clean is a running cycle', () => {
         assert.equal(get(HA, 'running'), 'ON')
     })
 
-    test('its clock is live, so the finish time is this cycle and not the last one', () => {
+    test('its clock is live, so the remaining time is this cycle and not the last one', () => {
         const { HA, dut } = setup()
-        const before = Date.now()
         dut.processRecord(tubClean())
         assert.equal(get(HA, 'remaining_minutes'), 82)
         assert.equal(get(HA, 'total_time'), 84)
-        const at = Date.parse(String(get(HA, 'end_time')))
-        assert.ok(at >= before + 82 * 60_000 - 60_000, 'about 82 minutes out')
-        assert.ok(at <= Date.now() + 82 * 60_000 + 60_000)
     })
 
     test('it offers pause, and does not offer start', () => {

@@ -701,11 +701,9 @@ export default class Device extends AABBDevice {
             // See the file header's DRUM LIGHT AUTO-ON section's READ-BACK note. Read alongside the
             // optimistic publish in setProperty() - not replacing it, so the UI still updates
             // immediately on a local command instead of waiting for the next status frame.
-            const drumLightAuto = (buf[DRUM_LIGHT_AUTO_OFFSET] & DRUM_LIGHT_AUTO_BIT) !== 0
-            if (drumLightAuto !== this.drumLightAuto) {
-                this.drumLightAuto = drumLightAuto
-                this.publishProperty('drum_light_auto', drumLightAuto ? 'ON' : 'OFF')
-            }
+            // publishProperty() itself already dedupes (see aabb_device.ts), same as drum_light/
+            // wrinkle_care/ironing_alert just above - no need for a second check here.
+            this.publishProperty('drum_light_auto', buf[DRUM_LIGHT_AUTO_OFFSET] & DRUM_LIGHT_AUTO_BIT ? 'ON' : 'OFF')
 
             // OPTION_RESERVATION_ACTIVE (0x08, also on STATUS_OFFSET) is not separately exposed -
             // reservation_minutes already carries the same information (0 = none armed) without
