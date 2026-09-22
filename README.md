@@ -160,7 +160,7 @@ text field:
 | 202  | Dryer (건조기)           |
 | 204  | Dishwasher (식기세척기)  |
 | 223  | WashTower (워시타워)     |
-| 301  | Gas Range (가스레인지)   |
+| 301  | Range (레인지)           |
 | 302  | Microwave (전자레인지)   |
 | 401  | Air Conditioner (에어컨) |
 
