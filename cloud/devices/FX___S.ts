@@ -297,7 +297,7 @@ const PHASE_CARE = 47
 const PHASE_RESERVED = 7
 
 // Operations the appliance can only act on in some states - see updateButtonAvailability.
-const GATED_BUTTONS = ['start', 'pause', 'resume', 'add_wash']
+const GATED_BUTTONS = ['start', 'pause', 'resume', 'add_garment']
 
 /*
  * "추가 세탁하기" turns out not to be a command at all. The owner pressed it in the LG app on
@@ -614,24 +614,24 @@ const COURSE_NONE = 0
 // else. A write the appliance rejects simply leaves the record unchanged, which the raw options sensor
 // makes visible.
 type CourseLimits = {
-    wash?: number[] | null
-    water_temp?: number[] | null
+    soil_wash?: number[] | null
+    temp?: number[] | null
     rinse?: number[] | null
     spin?: number[] | null
     steam?: false
 }
 const COURSE_LIMITS: Record<string, CourseLimits> = {
-    114: { wash: [3, 7], steam: false }, // 인공지능세탁
+    114: { soil_wash: [3, 7], steam: false }, // 인공지능세탁
     46: {}, // 표준 - the permissive one, everything on full range
     'ext:245': {}, // 표준1
     'ext:246': {}, // 타월1
-    94: { wash: [0, 3], water_temp: null, spin: [0, 1, 2], steam: false }, // 울/섬세
-    27: { wash: [0, 1, 3], water_temp: [2, 3, 8], spin: [0, 1, 2, 4], steam: false }, // 이불
-    135: { wash: [0, 3], water_temp: null, steam: false }, // 쾌속스팀살균 - steam is driven by the
+    94: { soil_wash: [0, 3], temp: null, spin: [0, 1, 2], steam: false }, // 울/섬세
+    27: { soil_wash: [0, 1, 3], temp: [2, 3, 8], spin: [0, 1, 2, 4], steam: false }, // 이불
+    135: { soil_wash: [0, 3], temp: null, steam: false }, // 쾌속스팀살균 - steam is driven by the
     // appliance here rather than by the user: its bit follows the wash stage on its own.
-    55: { wash: null, water_temp: null, steam: false }, // 헹굼+탈수
-    85: { wash: null, water_temp: null, rinse: null, spin: null, steam: false }, // 통살균 - nothing
-    134: { wash: null, water_temp: null, rinse: null, spin: null, steam: false }, // 급속통헹굼 - nothing
+    55: { soil_wash: null, temp: null, steam: false }, // 헹굼+탈수
+    85: { soil_wash: null, temp: null, rinse: null, spin: null, steam: false }, // 통살균 - nothing
+    134: { soil_wash: null, temp: null, rinse: null, spin: null, steam: false }, // 급속통헹굼 - nothing
 }
 
 // The whole dial, named by sweeping it one position at a time through a full revolution and writing the
@@ -842,7 +842,7 @@ export default class Device extends AABBDevice {
      * record we do see has it set. What it cannot recover is a cycle we only join after the stage
      * has finished, and nothing can.
      */
-    seenThisCycle = { steam: false, turbowash: false }
+    seenThisCycle = { steam: false, turbo_wash: false }
 
     /**
      * Remote control gates STARTING the machine, not writing settings to it. Settings writes are
@@ -921,6 +921,48 @@ export default class Device extends AABBDevice {
         //     not use.
         // `child_lock` was already right (`childLock` in both models' schemas).
         //
+        // NAMING AUDIT (2026-09-22): a second pass, this time against `MonitoringValue`'s time
+        // fields and cycle-state enum in both models' modelJSON (see RD20_S.ts/MI2D7B.ts for the
+        // same audit applied there):
+        //   - `state` (was `status` here and on RD20_S.ts): both models' modelJSON name this
+        //     `MonitoringValue.state`, with enum values (POWEROFF/INITIAL/RUNNING/...) that match
+        //     what STATUS already mapped phase numbers to - confirmed the same concept, not just a
+        //     plausible-sounding name.
+        //   - `remain_time_minutes` (was `remaining_minutes` here, RD20_S.ts and MI2D7B.ts):
+        //     modelJSON's field is split `remainTimeHour`/`remainTimeMinute` - kept as one
+        //     minutes-only number per the owner's call (2026-09-22) rather than adding an hour
+        //     field nothing here has ever needed, but named after the real field this time instead
+        //     of a name invented for this handler.
+        //   - `initial_time_minutes` (was `total_time` here): same story, modelJSON's
+        //     `initialTimeHour`/`initialTimeMinute`.
+        //   - `drumlight_auto_on` (was `drum_light_auto` here and on RD20_S.ts): modelJSON's field
+        //     is `drumlightAutoOn` - casing/word-break difference only, same feature.
+        // `status_code` is withdrawn in the same pass: it existed only as an escape hatch for a
+        // phase value STATUS had no name for yet, and the on-box frame log
+        // (`/share/rethink/frames/`) already captures the same raw byte independently of whether
+        // this publishes - keeping it was pure duplication once that was pointed out.
+        // `options_raw` is the same kind of escape hatch but is not touched here - not yet decided.
+        //
+        // A third pass the same day, this time against the write side - `ControlWifi/WMDownload/
+        // data/washerDryer`, the actual field table the appliance's own writes use, not just
+        // MonitoringValue - turned up renames the first two passes missed entirely, because they
+        // only checked read-side field names:
+        //   - `soil_wash` (was `wash`): the real field is `soilWash`, the soil/wash-level
+        //     selection - `wash` was a name invented for this handler, not LG's own.
+        //   - `temp` (was `water_temp`): the real field is `temp` in both the write table and
+        //     `MonitoringValue`, not `waterTemp` (that string only appears as a UI label key,
+        //     `@WM_MP_FX___S_OPTION_WATERTEMP_W`, not a field name).
+        //   - `turbo_wash` (was `turbowash`): the real field is `turboWash` - the two words were
+        //     run together here.
+        //   - `add_garment` (was `add_wash`): the real field is `MonitoringValue.addGarment` -
+        //     found only by searching the whole file for anything containing "add", after a
+        //     substring-based first attempt missed it completely (no letters in common between
+        //     "add_wash" and "addGarment" beyond "add").
+        // `power`, `start`/`pause`/`resume`, `auto_optimise`, `clock_when_off` and `remote_control`
+        // were searched for exhaustively (every spelling variant, the whole raw modelJSON text, not
+        // just key names) and genuinely do not appear anywhere in this model's modelJSON - left
+        // alone rather than guessed at.
+        //
         // Annotated because allowExtendedType infers its result from the assignment target: with
         // nothing to infer from it would come out `unknown`.
         const config: DeviceDiscovery = allowExtendedType({
@@ -934,36 +976,24 @@ export default class Device extends AABBDevice {
                     name: '',
                     icon: 'mdi:washing-machine',
                 },
-                status: {
+                // Renamed from `status` (2026-09-22) to match modelJSON's own `MonitoringValue.state`
+                // field - see the NAMING AUDIT note above. A removal stub for the old name follows
+                // below so an existing install loses the stale entity instead of keeping it forever.
+                state: {
                     platform: 'sensor',
-                    unique_id: '$deviceid-status',
-                    state_topic: '$this/status',
+                    unique_id: '$deviceid-state',
+                    state_topic: '$this/state',
                     name: 'Status',
                     icon: 'mdi:state-machine',
                     device_class: 'enum',
                     options: STATUS_OPTIONS,
                 },
-                // The phase enum is incomplete (3/37 are not pinned to a named stage, and only four
-                // courses have been run). Exposing the raw byte lets an unnamed phase be identified
-                // from history instead of vanishing into "Unknown".
-                //
-                // Off by default at the owner's request (2026-08-11): it is the escape hatch for
-                // naming a phase nobody has seen yet, not something to read day to day, and `status`
-                // now names all 33 states the model JSON declares. It stays declared so it can be
-                // switched on the moment a phase publishes `unknown`.
-                //
-                // This only affects installs that have not registered it yet - Home Assistant reads
-                // enabled_by_default when the entity FIRST enters the registry and never again, so
-                // an existing one has to be disabled by hand in the UI.
-                status_code: {
-                    platform: 'sensor',
-                    unique_id: '$deviceid-status-code',
-                    state_topic: '$this/status_code',
-                    name: 'Status code',
-                    icon: 'mdi:numeric',
-                    entity_category: 'diagnostic',
-                    enabled_by_default: false,
-                },
+                status: { platform: 'sensor' } as ComponentInfo,
+                // Withdrawn (2026-09-22, see the NAMING AUDIT note above): the frame log already
+                // captures the same raw phase byte independently, so this escape hatch was pure
+                // duplication. A removal stub, not a repurposed key - see cycle_plan above for why
+                // it must not gain any other field.
+                status_code: { platform: 'sensor' } as ComponentInfo,
                 // These two published 0x3E as a per-stage TIME plan. It is an energy meter -
                 // see processEnergyReport() - so they are withdrawn rather than repurposed: an
                 // entity that changes from minutes to watt-hours under the same name is worse
@@ -1093,15 +1123,18 @@ export default class Device extends AABBDevice {
                 },
                 // See the file header's DRUM LIGHT AUTO-ON section - whether the appliance turns
                 // the light on by itself the next time the door opens, not the light's own state.
-                drum_light_auto: {
+                // Renamed from `drum_light_auto` (2026-09-22) to match modelJSON's own
+                // `drumlightAutoOn` field - see the NAMING AUDIT note above.
+                drumlight_auto_on: {
                     platform: 'switch',
-                    unique_id: '$deviceid-drum-light-auto',
-                    state_topic: '$this/drum_light_auto',
-                    command_topic: '$this/drum_light_auto/set',
+                    unique_id: '$deviceid-drumlight-auto-on',
+                    state_topic: '$this/drumlight_auto_on',
+                    command_topic: '$this/drumlight_auto_on/set',
                     name: 'Drum light auto-on',
                     icon: 'mdi:lightbulb-auto-outline',
                     entity_category: 'config',
                 },
+                drum_light_auto: { platform: 'switch' } as ComponentInfo,
                 // The three "is it happening now" sensors, which exist because the switches below
                 // cannot answer that question and be a setting at the same time. A switch has to
                 // hold what the NEXT cycle will do - that is what the owner set and what they can
@@ -1126,15 +1159,18 @@ export default class Device extends AABBDevice {
                     name: 'Steam this cycle',
                     icon: 'mdi:kettle-steam',
                 },
-                turbowash_active: {
+                // Renamed from `turbowash_active` (2026-09-22) to match `turbo_wash`'s own rename
+                // just above - see the NAMING AUDIT note there.
+                turbo_wash_active: {
                     platform: 'binary_sensor',
-                    unique_id: '$deviceid-turbowash-active',
-                    state_topic: '$this/turbowash_active',
+                    unique_id: '$deviceid-turbo-wash-active',
+                    state_topic: '$this/turbo_wash_active',
                     name: 'TurboShot this cycle',
                     icon: 'mdi:car-turbocharger',
                 },
+                turbowash_active: { platform: 'binary_sensor' } as ComponentInfo,
                 /*
-                 * WITHDRAWN the day it was built, and the owner is right about why: `status` already
+                 * WITHDRAWN the day it was built, and the owner is right about why: `state` already
                  * says `refreshing` when laundry care is running, so this entity said the same thing
                  * in a second place. Two entities for one fact is worse than either.
                  *
@@ -1154,25 +1190,31 @@ export default class Device extends AABBDevice {
                     entity_category: 'diagnostic',
                 },
                 // Renamed from `remaining_time` (2026-09-21) to match RD20_S.ts/MI2D7B.ts's own
-                // key for the identical field - all three appliances now publish this raw
-                // minutes-remaining value under the same name. HA's entity_id/history for the old
-                // name are not migrated - see the deploy note this rename shipped with.
-                remaining_minutes: {
+                // key for the identical field, then again from `remaining_minutes` (2026-09-22) to
+                // match modelJSON's own `remainTimeHour`/`remainTimeMinute` fields - see the NAMING
+                // AUDIT note above. Kept as one minutes-only number, not split into hour/minute, per
+                // the owner's call the same day. HA's entity_id/history for either old name are not
+                // migrated - see the deploy note each rename shipped with.
+                remain_time_minutes: {
                     platform: 'sensor',
-                    unique_id: '$deviceid-remaining_minutes',
-                    state_topic: '$this/remaining_minutes',
+                    unique_id: '$deviceid-remain-time-minutes',
+                    state_topic: '$this/remain_time_minutes',
                     name: 'Remaining time',
                     device_class: 'duration',
                     unit_of_measurement: 'min',
                 },
-                total_time: {
+                remaining_minutes: { platform: 'sensor' } as ComponentInfo,
+                // Renamed from `total_time` (2026-09-22) to match modelJSON's own
+                // `initialTimeHour`/`initialTimeMinute` fields - see the NAMING AUDIT note above.
+                initial_time_minutes: {
                     platform: 'sensor',
-                    unique_id: '$deviceid-total-time',
-                    state_topic: '$this/total_time',
+                    unique_id: '$deviceid-initial-time-minutes',
+                    state_topic: '$this/initial_time_minutes',
                     name: 'Total time',
                     device_class: 'duration',
                     unit_of_measurement: 'min',
                 },
+                total_time: { platform: 'sensor' } as ComponentInfo,
                 // Counts down as the appliance works through the rinses, so it is genuinely useful
                 // while running - unlike the `rinse` select, which holds the selection.
                 rinse_remaining: {
@@ -1244,24 +1286,32 @@ export default class Device extends AABBDevice {
                     // for; see courseOptions. Republished by setCourseOptions when it does.
                     options: [...this.courseOptions],
                 },
-                wash: {
+                // Renamed from `wash` (2026-09-22) to match modelJSON's own `soilWash` field (the
+                // `ControlWifi/WMDownload` write table, not MonitoringValue - see the NAMING AUDIT
+                // note above) - it names the soil/wash-level selection, not a generic "wash" toggle.
+                soil_wash: {
                     platform: 'select',
-                    unique_id: '$deviceid-wash',
-                    state_topic: '$this/wash',
-                    command_topic: '$this/wash/set',
+                    unique_id: '$deviceid-soil-wash',
+                    state_topic: '$this/soil_wash',
+                    command_topic: '$this/soil_wash/set',
                     name: 'Course - Wash',
                     icon: 'mdi:washing-machine',
                     options: Object.values(this.washNames),
                 },
-                water_temp: {
+                wash: { platform: 'select' } as ComponentInfo,
+                // Renamed from `water_temp` (2026-09-22) to match modelJSON's own `temp` field
+                // (both the `ControlWifi/WMDownload` write table and `MonitoringValue/temp`) - see
+                // the NAMING AUDIT note above.
+                temp: {
                     platform: 'select',
-                    unique_id: '$deviceid-water-temp',
-                    state_topic: '$this/water_temp',
-                    command_topic: '$this/water_temp/set',
+                    unique_id: '$deviceid-temp',
+                    state_topic: '$this/temp',
+                    command_topic: '$this/temp/set',
                     name: 'Course - Water temperature',
                     icon: 'mdi:thermometer-water',
                     options: Object.values(WATER_TEMP),
                 },
+                water_temp: { platform: 'select' } as ComponentInfo,
                 rinse: {
                     platform: 'select',
                     unique_id: '$deviceid-rinse',
@@ -1280,14 +1330,19 @@ export default class Device extends AABBDevice {
                     icon: 'mdi:rotate-right',
                     options: Object.values(SPIN),
                 },
-                turbowash: {
+                // Renamed from `turbowash` (2026-09-22) to match modelJSON's own `turboWash`
+                // field exactly (the old name ran the two words together) - see the NAMING AUDIT
+                // note above. Still named "TurboShot" in the UI, which is LG's own current branding
+                // for the same feature - the modelJSON field name is simply older than that name.
+                turbo_wash: {
                     platform: 'switch',
-                    unique_id: '$deviceid-turbowash',
-                    state_topic: '$this/turbowash',
-                    command_topic: '$this/turbowash/set',
+                    unique_id: '$deviceid-turbo-wash',
+                    state_topic: '$this/turbo_wash',
+                    command_topic: '$this/turbo_wash/set',
                     name: 'Course - TurboShot',
                     icon: 'mdi:car-turbocharger',
                 },
+                turbowash: { platform: 'switch' } as ComponentInfo,
                 steam: {
                     platform: 'switch',
                     unique_id: '$deviceid-steam',
@@ -1324,17 +1379,20 @@ export default class Device extends AABBDevice {
                     name: 'Pause',
                     icon: 'mdi:pause-circle-outline',
                 },
-                // See ADD_WASH_COURSE. Named for the cycle it actually starts, not for the app's
-                // "추가 세탁하기", because one press cannot show whether the app always chooses this
-                // course.
-                add_wash: {
+                // See ADD_WASH_COURSE. Renamed from `add_wash` (2026-09-22) to match modelJSON's
+                // own `MonitoringValue.addGarment` field - see the NAMING AUDIT note above. Still
+                // implemented as a button that selects a specific course rather than a real
+                // addGarment command, because one press cannot show whether the app always chooses
+                // this course - see the rest of this comment, unchanged from before the rename.
+                add_garment: {
                     platform: 'button',
-                    unique_id: '$deviceid-add-wash',
-                    command_topic: '$this/add_wash/set',
+                    unique_id: '$deviceid-add-garment',
+                    command_topic: '$this/add_garment/set',
                     payload_press: '',
                     name: 'Add wash (Rinse + Spin)',
                     icon: 'mdi:water-sync',
                 },
+                add_wash: { platform: 'button' } as ComponentInfo,
                 resume: {
                     platform: 'button',
                     unique_id: '$deviceid-resume',
@@ -1730,7 +1788,7 @@ export default class Device extends AABBDevice {
         // See the file header's DRUM LIGHT AUTO-ON section's READ-BACK note - alongside the
         // optimistic publish in setProperty(), not replacing it, so the UI still updates
         // immediately on a local command instead of waiting for the next record.
-        this.publishProperty('drum_light_auto', rec[OFF_DRUM_LIGHT_AUTO] & FLAG_DRUM_LIGHT_AUTO ? 'ON' : 'OFF')
+        this.publishProperty('drumlight_auto_on', rec[OFF_DRUM_LIGHT_AUTO] & FLAG_DRUM_LIGHT_AUTO ? 'ON' : 'OFF')
 
         /*
          * Whether the cycle now under way is running with steam / TurboShot. The same two bits the
@@ -1764,13 +1822,13 @@ export default class Device extends AABBDevice {
          * turns out to be another thing that was only true of the cycles we happened to catch.
          */
         const inCycle = CYCLE_PHASES.has(phase)
-        if (!inCycle) this.seenThisCycle = { steam: false, turbowash: false }
+        if (!inCycle) this.seenThisCycle = { steam: false, turbo_wash: false }
         else {
             if (rec[OFF_STEAM] & STEAM_ON) this.seenThisCycle.steam = true
-            if (rec[OFF_TURBOSHOT] & TURBOSHOT_ON) this.seenThisCycle.turbowash = true
+            if (rec[OFF_TURBOSHOT] & TURBOSHOT_ON) this.seenThisCycle.turbo_wash = true
         }
         this.publishProperty('steam_active', inCycle && this.seenThisCycle.steam ? 'ON' : 'OFF')
-        this.publishProperty('turbowash_active', inCycle && this.seenThisCycle.turbowash ? 'ON' : 'OFF')
+        this.publishProperty('turbo_wash_active', inCycle && this.seenThisCycle.turbo_wash ? 'ON' : 'OFF')
 
         /*
          * Laundry care is the odd one of the three and needs neither a latch nor a sensor.
@@ -1817,8 +1875,8 @@ export default class Device extends AABBDevice {
         // selected course's estimate though, which is worth seeing before pressing start, so it is
         // published whenever the appliance is on.
         const remaining = TIMED_PHASES.has(phase) ? rec[OFF_REMAIN_H] * 60 + rec[OFF_REMAIN_M] : 0
-        this.publishProperty('remaining_minutes', remaining)
-        this.publishProperty('total_time', phase === PHASE_OFF ? 0 : rec[OFF_TOTAL_H] * 60 + rec[OFF_TOTAL_M])
+        this.publishProperty('remain_time_minutes', remaining)
+        this.publishProperty('initial_time_minutes', phase === PHASE_OFF ? 0 : rec[OFF_TOTAL_H] * 60 + rec[OFF_TOTAL_M])
         this.publishProperty('rinse_remaining', rec[OFF_RINSE])
         this.updateButtonAvailability()
 
@@ -1865,8 +1923,7 @@ export default class Device extends AABBDevice {
         this.publishProperty('power', phase === PHASE_OFF ? 'OFF' : 'ON')
         // Lower case: this sensor declares device_class 'enum', and Home Assistant rejects a state that
         // is not one of the declared options - 'Unknown' was not one of them, 'unknown' is.
-        this.publishProperty('status', STATUS[phase] ?? 'unknown')
-        this.publishProperty('status_code', phase)
+        this.publishProperty('state', STATUS[phase] ?? 'unknown')
         this.publishProperty('running', ACTIVE_PHASES.has(phase) ? 'ON' : 'OFF')
         // Not while a reservation waits: the bit is set for the whole of it - see FLAG_DRUM_ACTIVE.
         this.publishProperty('drum_active', flags & FLAG_DRUM_ACTIVE && phase !== PHASE_RESERVED ? 'ON' : 'OFF')
@@ -1878,8 +1935,8 @@ export default class Device extends AABBDevice {
      * of a cycle. See the call site for why those two and no others.
      */
     publishCycleOptions(rec: Buffer, course: number) {
-        this.publishOption('wash', this.washNames[rec[OFF_WASH]])
-        this.publishOption('water_temp', WATER_TEMP[rec[OFF_WATER_TEMP]])
+        this.publishOption('soil_wash', this.washNames[rec[OFF_WASH]])
+        this.publishOption('temp', WATER_TEMP[rec[OFF_WATER_TEMP]])
         this.publishOption('rinse', RINSE.includes(rec[OFF_RINSE]) ? String(rec[OFF_RINSE]) : undefined)
         this.publishOption('spin', SPIN[rec[OFF_SPIN]])
 
@@ -1900,16 +1957,16 @@ export default class Device extends AABBDevice {
          * What the cycle is actually running with is `steam_active` / `turbowash_active`.
          */
         this.publishProperty('steam', rec[OFF_STEAM] & STEAM_ON ? 'ON' : 'OFF')
-        this.publishProperty('turbowash', rec[OFF_TURBOSHOT] & TURBOSHOT_ON ? 'ON' : 'OFF')
+        this.publishProperty('turbo_wash', rec[OFF_TURBOSHOT] & TURBOSHOT_ON ? 'ON' : 'OFF')
 
         // Only four courses have been run on this appliance and the water-temperature/spin lists are
         // just as partial, so an unrecognised value is expected rather than exceptional. A select whose
         // state is not one of its own options is rejected by Home Assistant, so those are left holding
-        // their previous value and the raw bytes are published here instead - the same escape hatch as
-        // `status_code`, and the thing to read when naming a new course.
+        // their previous value and the raw bytes are published here instead - the same kind of
+        // escape hatch `status_code` used to be, and the thing to read when naming a new course.
         this.publishProperty(
             'options_raw',
-            `course=${course} ext=${rec[OFF_COURSE_EXT]} wash=${rec[OFF_WASH]} temp=${rec[OFF_WATER_TEMP]} rinse=${rec[OFF_RINSE]} spin=${rec[OFF_SPIN]} steam=${rec[OFF_STEAM]}`,
+            `course=${course} ext=${rec[OFF_COURSE_EXT]} soil_wash=${rec[OFF_WASH]} temp=${rec[OFF_WATER_TEMP]} rinse=${rec[OFF_RINSE]} spin=${rec[OFF_SPIN]} steam=${rec[OFF_STEAM]}`,
         )
     }
 
@@ -1923,7 +1980,7 @@ export default class Device extends AABBDevice {
      *   resume   remote control ON and actually paused.
      *   pause    running. NOT gated on remote control: whether a pause needs it has never been
      *            measured, and greying out a control that might work is worse than a log line.
-     *   add_wash the same gate as start, because it IS a start - it carries the operation key. The
+     *   add_garment the same gate as start, because it IS a start - it carries the operation key. The
      *            appliance's own answer to pressing it twice is what settles that: the second write
      *            came back with status 0x09 on the operation key rather than 0x00, so it refuses one
      *            while a cycle is already under way.
@@ -1937,7 +1994,7 @@ export default class Device extends AABBDevice {
 
         const canStart = state(this.remoteControl && !running && phase !== PHASE_OFF)
         this.HA.publishProperty(this.id, 'start-availability', canStart)
-        this.HA.publishProperty(this.id, 'add_wash-availability', canStart)
+        this.HA.publishProperty(this.id, 'add_garment-availability', canStart)
         this.HA.publishProperty(this.id, 'resume-availability', state(this.remoteControl && phase === PHASE_PAUSED))
         this.HA.publishProperty(this.id, 'pause-availability', state(running))
     }
@@ -1994,8 +2051,8 @@ export default class Device extends AABBDevice {
             values === null ? null : (values ?? Object.keys(map).map(Number)).map((v) => map[v] ?? String(v))
 
         const attrs = {
-            wash: named(limits.wash, this.washNames),
-            water_temp: named(limits.water_temp, WATER_TEMP),
+            soil_wash: named(limits.soil_wash, this.washNames),
+            temp: named(limits.temp, WATER_TEMP),
             rinse: limits.rinse === null ? null : (limits.rinse ?? RINSE).map(String),
             spin: named(limits.spin, SPIN),
             steam: limits.steam !== false,
@@ -2122,25 +2179,25 @@ export default class Device extends AABBDevice {
         // Settings writes are accepted with remote control off - measured, a hundred of them applied
         // that way, and the owner confirms the app's "send to washer" works without it. What needs it
         // is starting the machine remotely, so the warning is limited to that.
-        if (!this.remoteControl && (prop === 'start' || prop === 'resume' || prop === 'add_wash')) {
+        if (!this.remoteControl && (prop === 'start' || prop === 'resume' || prop === 'add_garment')) {
             log('status', `${this.id}: ${prop} sent while remote control is off - press start on the appliance instead`)
         }
 
         switch (prop) {
             case 'power':
                 return this.setField(KEY_POWER, mqttValue === 'ON' ? 1 : 0)
-            case 'drum_light_auto': {
+            case 'drumlight_auto_on': {
                 const on = mqttValue === 'ON'
                 this.setField(KEY_DRUM_LIGHT_AUTO, on ? 1 : 0)
                 // Optimistic for a snappy UI - the file header's DRUM LIGHT AUTO-ON section's
                 // READ-BACK note (rec[49]) also confirms this shortly after, in processRecord.
-                this.publishProperty('drum_light_auto', on ? 'ON' : 'OFF')
+                this.publishProperty('drumlight_auto_on', on ? 'ON' : 'OFF')
                 return
             }
             case 'start':
                 this.setField(KEY_OPERATION, OP_START)
                 return this.trigger()
-            case 'add_wash':
+            case 'add_garment':
                 // The app's frame, byte for byte - see ADD_WASH_COURSE. No trigger() follows it:
                 // the LG cloud sent one ten times over fifteen seconds after this write, but that is
                 // its polling and not part of the command, and the appliance had already moved to
@@ -2171,10 +2228,20 @@ export default class Device extends AABBDevice {
                 return this.setField(KEY_AUTO_OPTIMISE, mqttValue === 'ON' ? 1 : 0)
             case 'clock_when_off':
                 return this.setField(KEY_CLOCK_WHEN_OFF, mqttValue === 'ON' ? 1 : 0)
-            case 'turbowash':
-                return this.setField(KEY_TURBOWASH, mqttValue === 'ON' ? 1 : 0)
+            case 'turbo_wash':
+                this.setField(KEY_TURBOWASH, mqttValue === 'ON' ? 1 : 0)
+                // Optimistic for a snappy UI, same reason as drum_light_auto's own case - this
+                // appliance can sit silent for minutes with no status frame at all (see the file
+                // header), so without this the switch snaps back to its old state in Home
+                // Assistant until one happens to arrive. processRecord's own read of rec[OFF_TURBOSHOT]
+                // corrects this shortly after either way.
+                this.publishProperty('turbo_wash', mqttValue === 'ON' ? 'ON' : 'OFF')
+                return
             case 'steam':
-                return this.setField(KEY_STEAM, mqttValue === 'ON' ? 1 : 0)
+                this.setField(KEY_STEAM, mqttValue === 'ON' ? 1 : 0)
+                // Optimistic for the same reason as turbowash just above.
+                this.publishProperty('steam', mqttValue === 'ON' ? 'ON' : 'OFF')
+                return
             case 'rinse': {
                 const count = Number(mqttValue)
                 if (RINSE.includes(count)) this.setField(KEY_RINSE, count)
@@ -2208,8 +2275,8 @@ export default class Device extends AABBDevice {
 
         const selects: Record<string, [number, Record<string, number>]> = {
             course: [KEY_COURSE, COURSE_BY_NAME],
-            wash: [KEY_WASH, WASH_BY_NAME],
-            water_temp: [KEY_WATER_TEMP, WATER_TEMP_BY_NAME],
+            soil_wash: [KEY_WASH, WASH_BY_NAME],
+            temp: [KEY_WATER_TEMP, WATER_TEMP_BY_NAME],
             spin: [KEY_SPIN, SPIN_BY_NAME],
             buzzer: [KEY_BEEP, BEEP_BY_NAME],
         }

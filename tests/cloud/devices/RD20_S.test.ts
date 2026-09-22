@@ -158,12 +158,14 @@ function makeDevice(id = DEVICE_ID) {
 }
 
 describe(MODEL_ID, () => {
-    test('declares power and remaining_minutes', () => {
+    test('declares power and remain_time_minutes', () => {
         const { ha } = makeDevice()
         const components = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
         assert.deepEqual(Object.keys(components), [
             'power',
+            'remain_time_minutes',
             'remaining_minutes',
+            'state',
             'status',
             'energy',
             'energy_hour',
@@ -180,17 +182,24 @@ describe(MODEL_ID, () => {
             'notification',
             'remote_control',
             'drum_light',
+            'drumlight_auto_on',
             'drum_light_auto',
             'wrinkle_care',
             'ironing_alert',
             'child_lock',
+            'reserve_time_minutes',
             'reservation_minutes',
             'buzzer',
         ])
         assert.equal(components.power.command_topic, '$this/power/set')
-        assert.equal(components.drum_light_auto.command_topic, '$this/drum_light_auto/set')
-        assert.equal(components.remaining_minutes.platform, 'sensor')
-        assert.equal(components.remaining_minutes.unit_of_measurement, 'min')
+        assert.equal(components.drumlight_auto_on.command_topic, '$this/drumlight_auto_on/set')
+        assert.equal(components.remain_time_minutes.platform, 'sensor')
+        assert.equal(components.remain_time_minutes.unit_of_measurement, 'min')
+        // The 2026-09-22 renames withdraw their four old names as removal stubs, same mechanism
+        // as energy_total/alarm_volume/anti_wrinkle/button_lock above.
+        for (const old of ['remaining_minutes', 'status', 'drum_light_auto', 'reservation_minutes']) {
+            assert.deepEqual(Object.keys(components[old]), ['platform'], old)
+        }
     })
 
     test('power write reproduces the captured frame byte for byte', () => {
@@ -220,17 +229,17 @@ describe(MODEL_ID, () => {
         // is, since that value has not been independently confirmed, just assumed symmetric.
         const { thinq, dev } = makeDevice()
         thinq.resetRecorder()
-        dev.setProperty('drum_light_auto', 'ON')
+        dev.setProperty('drumlight_auto_on', 'ON')
         assert.equal(thinq.outbox.length, 1)
         assert.equal(thinq.outbox[0].toString('hex'), 'aa0df0e5000201ff011b01febb')
     })
 
     test('drum_light_auto is published optimistically as soon as it is set, not waiting on a device echo', () => {
         const { ha, dev } = makeDevice()
-        dev.setProperty('drum_light_auto', 'ON')
-        assert.equal(ha.devices[DEVICE_ID].properties.drum_light_auto, 'ON')
-        dev.setProperty('drum_light_auto', 'OFF')
-        assert.equal(ha.devices[DEVICE_ID].properties.drum_light_auto, 'OFF')
+        dev.setProperty('drumlight_auto_on', 'ON')
+        assert.equal(ha.devices[DEVICE_ID].properties.drumlight_auto_on, 'ON')
+        dev.setProperty('drumlight_auto_on', 'OFF')
+        assert.equal(ha.devices[DEVICE_ID].properties.drumlight_auto_on, 'OFF')
     })
 
     test('the ack frame is accepted and publishes nothing', () => {
@@ -252,27 +261,27 @@ describe(MODEL_ID, () => {
 
     test('remaining_minutes starts at 0 on construction, not whatever MQTT retained from before a restart', () => {
         const { ha } = makeDevice()
-        assert.equal(ha.devices[DEVICE_ID].properties.remaining_minutes, 0)
+        assert.equal(ha.devices[DEVICE_ID].properties.remain_time_minutes, 0)
     })
 
     test('remaining_minutes zeroes on power-off, since the status frame carrying it never arrives to do it itself', () => {
         const { thinq, dev, ha } = makeDevice()
         dev.setProperty('power', 'ON')
         thinq.emit('data', STATE_99_MIN_LEFT)
-        assert.equal(ha.devices[DEVICE_ID].properties.remaining_minutes, 99)
+        assert.equal(ha.devices[DEVICE_ID].properties.remain_time_minutes, 99)
         dev.setProperty('power', 'OFF')
-        assert.equal(ha.devices[DEVICE_ID].properties.remaining_minutes, 0)
+        assert.equal(ha.devices[DEVICE_ID].properties.remain_time_minutes, 0)
     })
 
     test('the 114-byte status frame publishes remaining_minutes, matching the official integration', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', STATE_99_MIN_LEFT)
-        assert.equal(ha.devices[DEVICE_ID].properties.remaining_minutes, 99)
+        assert.equal(ha.devices[DEVICE_ID].properties.remain_time_minutes, 99)
         thinq.emit('data', STATE_74_MIN_LEFT)
-        assert.equal(ha.devices[DEVICE_ID].properties.remaining_minutes, 74)
+        assert.equal(ha.devices[DEVICE_ID].properties.remain_time_minutes, 74)
         thinq.emit('data', STATE_58_TO_11_MIN_LEFT)
         assert.equal(
-            ha.devices[DEVICE_ID].properties.remaining_minutes,
+            ha.devices[DEVICE_ID].properties.remain_time_minutes,
             11,
             'reads the second (current) record, not the first',
         )
@@ -281,11 +290,11 @@ describe(MODEL_ID, () => {
     test('the status byte publishes running/cooling/complete, matching two independent real cycles', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', STATUS_RUNNING_18_MIN_LEFT)
-        assert.equal(ha.devices[DEVICE_ID].properties.status, 'running')
+        assert.equal(ha.devices[DEVICE_ID].properties.state, 'running')
         thinq.emit('data', STATUS_COOLING_5_MIN_LEFT)
-        assert.equal(ha.devices[DEVICE_ID].properties.status, 'cooling')
+        assert.equal(ha.devices[DEVICE_ID].properties.state, 'cooling')
         thinq.emit('data', STATUS_COMPLETE_1_MIN_LEFT)
-        assert.equal(ha.devices[DEVICE_ID].properties.status, 'complete')
+        assert.equal(ha.devices[DEVICE_ID].properties.state, 'complete')
     })
 
     test('status 0x00 publishes power_off, confirmed live against the cloud snapshot API', () => {
@@ -297,7 +306,7 @@ describe(MODEL_ID, () => {
         const frame = Buffer.from(STATUS_RUNNING_18_MIN_LEFT)
         frame[2 + 89] = 0x00
         thinq.emit('data', frame)
-        assert.equal(ha.devices[DEVICE_ID].properties.status, 'power_off')
+        assert.equal(ha.devices[DEVICE_ID].properties.state, 'power_off')
     })
 
     test('an unrecognised status value publishes as unknown_<value> rather than being guessed', () => {
@@ -307,7 +316,7 @@ describe(MODEL_ID, () => {
         const frame = Buffer.from(STATUS_RUNNING_18_MIN_LEFT)
         frame[2 + 89] = 0x99
         thinq.emit('data', frame)
-        assert.equal(ha.devices[DEVICE_ID].properties.status, 'unknown_153')
+        assert.equal(ha.devices[DEVICE_ID].properties.state, 'unknown_153')
     })
 
     test('a real +1Wh step between two consecutive status frames publishes an energy delta', async () => {
@@ -409,9 +418,9 @@ describe(MODEL_ID, () => {
     test('reservation_minutes reads buf[70..71] as 16-bit minutes, confirmed by a real arm/cancel', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', RESERVATION_3H)
-        assert.equal(ha.devices[DEVICE_ID].properties.reservation_minutes, 180)
+        assert.equal(ha.devices[DEVICE_ID].properties.reserve_time_minutes, 180)
         thinq.emit('data', RESERVATION_OFF)
-        assert.equal(ha.devices[DEVICE_ID].properties.reservation_minutes, 0)
+        assert.equal(ha.devices[DEVICE_ID].properties.reserve_time_minutes, 0)
     })
 
     test('buzzer reads buf[82] while idle, matching the on-screen 보통(medium) setting', () => {

@@ -65,11 +65,13 @@ function makeDevice(id = DEVICE_ID) {
 }
 
 describe(MODEL_ID, () => {
-    test('declares power as the only writable component, plus remaining_minutes/energy*/notification read-only', () => {
+    test('declares power as the only writable component, plus remain_time_minutes/energy*/notification read-only', () => {
         const { ha } = makeDevice()
         const components = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
         assert.deepEqual(Object.keys(components), [
             'power',
+            'remain_time_minutes',
+            // Withdrawal stub for the pre-2026-09-22 name - see the component's own comment.
             'remaining_minutes',
             'energy',
             'energy_hour',
@@ -78,7 +80,8 @@ describe(MODEL_ID, () => {
             'notification',
         ])
         assert.equal(components.power.command_topic, '$this/power/set')
-        assert.equal(components.remaining_minutes.command_topic, undefined)
+        assert.equal(components.remain_time_minutes.command_topic, undefined)
+        assert.deepEqual(Object.keys(components.remaining_minutes), ['platform'])
     })
 
     /*
@@ -128,21 +131,21 @@ describe(MODEL_ID, () => {
     test('a real query-response status frame publishes remaining_minutes', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', STATUS_EC_28_MIN_LEFT)
-        assert.equal(ha.devices[DEVICE_ID].properties.remaining_minutes, 28)
+        assert.equal(ha.devices[DEVICE_ID].properties.remain_time_minutes, 28)
     })
 
     test('remaining_minutes starts at 0 on construction, not whatever MQTT retained from before a restart', () => {
         const { ha } = makeDevice()
-        assert.equal(ha.devices[DEVICE_ID].properties.remaining_minutes, 0)
+        assert.equal(ha.devices[DEVICE_ID].properties.remain_time_minutes, 0)
     })
 
     test('remaining_minutes zeroes on power-off, since the record carrying it never arrives to do it itself', () => {
         const { ha, thinq, dev } = makeDevice()
         dev.setProperty('power', 'ON')
         thinq.emit('data', STATUS_EC_28_MIN_LEFT)
-        assert.equal(ha.devices[DEVICE_ID].properties.remaining_minutes, 28)
+        assert.equal(ha.devices[DEVICE_ID].properties.remain_time_minutes, 28)
         dev.setProperty('power', 'OFF')
-        assert.equal(ha.devices[DEVICE_ID].properties.remaining_minutes, 0)
+        assert.equal(ha.devices[DEVICE_ID].properties.remain_time_minutes, 0)
     })
 
     test('both real notification-channel codes publish washing_is_complete', () => {

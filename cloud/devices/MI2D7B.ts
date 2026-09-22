@@ -1,5 +1,5 @@
 import { Device as Thinq2Device } from '../thinq2/device'
-import { type Connection, type DeviceDiscovery } from '../homeassistant'
+import { type ComponentInfo, type Connection, type DeviceDiscovery } from '../homeassistant'
 import { type Metadata } from '../thinq'
 import { allowExtendedType } from '@/util/casting'
 import HADevice from './base'
@@ -176,16 +176,21 @@ export default class Device extends AABBDevice {
                     icon: 'mdi:washing-machine',
                 },
                 // See the file header's REMAINING_MINUTES section - a candidate reading, not as
-                // rigorously confirmed as this fork's other remaining_minutes fields yet.
-                remaining_minutes: {
+                // rigorously confirmed as this fork's other remain_time_minutes fields yet.
+                // Renamed from `remaining_minutes` (2026-09-22) to match modelJSON's own
+                // `remainTimeHour`/`remainTimeMinute` fields - see FX___S.ts's own NAMING AUDIT
+                // note of the same date. Kept as one minutes-only number, not split into hour/
+                // minute, per the owner's call the same day.
+                remain_time_minutes: {
                     platform: 'sensor',
-                    unique_id: '$deviceid-remaining_minutes',
-                    state_topic: '$this/remaining_minutes',
+                    unique_id: '$deviceid-remain-time-minutes',
+                    state_topic: '$this/remain_time_minutes',
                     name: 'Remaining time',
                     icon: 'mdi:timer-outline',
                     device_class: 'duration',
                     unit_of_measurement: 'min',
                 },
+                remaining_minutes: { platform: 'sensor' } as ComponentInfo,
                 // See the file header's ENERGY section - published straight from the ~15-minute
                 // report's own running total, not a faster-updating source like FX___S.ts has.
                 energy: {
@@ -247,11 +252,11 @@ export default class Device extends AABBDevice {
         // appliance sits off (the common case) would otherwise leave whatever number MQTT retained
         // from the last real cycle showing forever, with nothing to ever correct it. A device that
         // is genuinely mid-cycle corrects this within the next real record either way.
-        this.publishProperty('remaining_minutes', 0)
+        this.publishProperty('remain_time_minutes', 0)
         log(
             'status',
             this.id,
-            'MI2D7B (미니워시) handler started - power on/off, remaining_minutes, energy, notification, see file header',
+            'MI2D7B (미니워시) handler started - power on/off, remain_time_minutes, energy, notification, see file header',
         )
         // Wired here, not in start(), so a delta reaching processAABB works from construction
         // onward regardless of whether/when start() runs - see the identical comment in
@@ -285,7 +290,7 @@ export default class Device extends AABBDevice {
                 // countdown retained on the MQTT topic forever. Zeroed here explicitly rather than
                 // on the ON transition too - there is nothing wrong to overwrite yet there, and the
                 // first real record after a start corrects it either way.
-                if (!on) this.publishProperty('remaining_minutes', 0)
+                if (!on) this.publishProperty('remain_time_minutes', 0)
                 return
             }
             default:
@@ -329,7 +334,7 @@ export default class Device extends AABBDevice {
                 this.power = on
                 this.publishProperty('power', on ? 'ON' : 'OFF')
                 // See the identical zeroing in setProperty('power', ...) above.
-                if (!on) this.publishProperty('remaining_minutes', 0)
+                if (!on) this.publishProperty('remain_time_minutes', 0)
             }
             return
         }
@@ -346,7 +351,7 @@ export default class Device extends AABBDevice {
                 const offset = payload[6] === INNER_STATE ? RECORD_LEN : payload[6] === INNER_STATE_SINGLE ? 0 : -1
                 if (offset >= 0 && data.length >= offset + RECORD_LEN) {
                     const record = data.subarray(offset, offset + RECORD_LEN)
-                    this.publishProperty('remaining_minutes', record[REMAINING_MINUTES_OFFSET])
+                    this.publishProperty('remain_time_minutes', record[REMAINING_MINUTES_OFFSET])
                     return
                 }
             }

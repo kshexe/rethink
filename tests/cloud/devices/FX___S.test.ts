@@ -93,8 +93,8 @@ describe('FX___S washer', () => {
         const { HA } = setup()
         const config = HA.devices[DEVICE_ID].config!
         assert.equal(config.device.model, 'FX___S')
-        assert.ok(config.components.status)
-        assert.ok(config.components.remaining_minutes)
+        assert.ok(config.components.state)
+        assert.ok(config.components.remain_time_minutes)
     })
 
     test('decodes the idle record', () => {
@@ -102,43 +102,40 @@ describe('FX___S washer', () => {
         feed(thinq, STANDBY)
 
         assert.equal(get(HA, 'power'), 'ON')
-        assert.equal(get(HA, 'status'), 'initial')
-        assert.equal(get(HA, 'status_code'), 1)
+        assert.equal(get(HA, 'state'), 'initial')
         assert.equal(get(HA, 'running'), 'OFF')
-        assert.equal(get(HA, 'remaining_minutes'), 0) // not a timed phase
+        assert.equal(get(HA, 'remain_time_minutes'), 0) // not a timed phase
         assert.equal(get(HA, 'course'), 'AI_COURSE')
         // Standby names nothing: the appliance can sit here for minutes holding a course the
         // owner has already changed at the panel. The select is where the selection lives.
         assert.equal(get(HA, 'current_course'), '-')
-        assert.equal(get(HA, 'wash'), 'normal')
-        assert.equal(get(HA, 'water_temp'), '40')
+        assert.equal(get(HA, 'soil_wash'), 'normal')
+        assert.equal(get(HA, 'temp'), '40')
         assert.equal(get(HA, 'rinse'), '2')
         assert.equal(get(HA, 'spin'), 'high')
         assert.equal(get(HA, 'buzzer'), 'very_high')
         assert.equal(get(HA, 'cycles'), '15') // the LG cloud reported 15 the same morning
-        assert.equal(get(HA, 'total_time'), 36) // the course estimate, useful before pressing start
+        assert.equal(get(HA, 'initial_time_minutes'), 36) // the course estimate, useful before pressing start
     })
 
     test('decodes a started cycle, including the running flag and the clock', () => {
         const { HA, thinq } = setup()
         feed(thinq, STARTED)
 
-        assert.equal(get(HA, 'status'), 'detecting')
-        assert.equal(get(HA, 'status_code'), 3)
+        assert.equal(get(HA, 'state'), 'detecting')
         assert.equal(get(HA, 'running'), 'ON')
         assert.equal(get(HA, 'drum_active'), 'ON')
-        assert.equal(get(HA, 'remaining_minutes'), 36)
-        assert.equal(get(HA, 'total_time'), 36)
+        assert.equal(get(HA, 'remain_time_minutes'), 36)
+        assert.equal(get(HA, 'initial_time_minutes'), 36)
     })
 
     test('reports the rinse stage and the rinses still to go', () => {
         const { HA, thinq } = setup()
         feed(thinq, RINSING)
 
-        assert.equal(get(HA, 'status'), 'rinsing')
-        assert.equal(get(HA, 'status_code'), 12)
-        assert.equal(get(HA, 'remaining_minutes'), 21)
-        assert.equal(get(HA, 'total_time'), 28) // re-estimated mid-cycle, down from 36
+        assert.equal(get(HA, 'state'), 'rinsing')
+        assert.equal(get(HA, 'remain_time_minutes'), 21)
+        assert.equal(get(HA, 'initial_time_minutes'), 28) // re-estimated mid-cycle, down from 36
         assert.equal(get(HA, 'rinse_remaining'), 2)
     })
 
@@ -154,17 +151,16 @@ describe('FX___S washer', () => {
 
         // The record's wash/water-temperature bytes have been consumed to 0 by this point; the selects
         // must still show what was selected.
-        assert.equal(get(HA, 'wash'), 'normal')
-        assert.equal(get(HA, 'water_temp'), '40')
+        assert.equal(get(HA, 'soil_wash'), 'normal')
+        assert.equal(get(HA, 'temp'), '40')
     })
 
     test('treats phase 42 as complete and suppresses the stuck 1-minute clock', () => {
         const { HA, thinq } = setup()
         feed(thinq, COMPLETE)
 
-        assert.equal(get(HA, 'status'), 'end')
-        assert.equal(get(HA, 'status_code'), 42)
-        assert.equal(get(HA, 'remaining_minutes'), 0)
+        assert.equal(get(HA, 'state'), 'end')
+        assert.equal(get(HA, 'remain_time_minutes'), 0)
         // The 0x10 flag is still set here, so deriving `running` from it reported a finished wash as
         // running - seen on the appliance after the first deploy.
         assert.equal(get(HA, 'running'), 'OFF')
@@ -178,8 +174,8 @@ describe('FX___S washer', () => {
         const { HA, thinq } = setup()
         feed(thinq, RINSE_SPIN_STARTED)
 
-        assert.equal(get(HA, 'status'), 'rinsing')
-        assert.equal(get(HA, 'remaining_minutes'), 25)
+        assert.equal(get(HA, 'state'), 'rinsing')
+        assert.equal(get(HA, 'remain_time_minutes'), 25)
         assert.equal(get(HA, 'rinse_remaining'), 1)
         assert.equal(get(HA, 'current_course'), 'RINSE_SPIN')
     })
@@ -190,9 +186,9 @@ describe('FX___S washer', () => {
         feed(thinq, POWERED_OFF)
 
         assert.equal(get(HA, 'power'), 'OFF')
-        assert.equal(get(HA, 'status'), 'power_off')
+        assert.equal(get(HA, 'state'), 'power_off')
         assert.equal(get(HA, 'running'), 'OFF')
-        assert.equal(get(HA, 'total_time'), 0)
+        assert.equal(get(HA, 'initial_time_minutes'), 0)
         // Powering off clears the phase, the clock and wash/temperature/rinse, but NOT these two -
         // they stay correct and must keep being published (a 16 -> 0 -> 16 cycle count would read as a
         // counter reset to Home Assistant's statistics).
@@ -202,15 +198,14 @@ describe('FX___S washer', () => {
         // had been selected, so it correctly overrides the AI Wash published from the standby frame.
         assert.equal(get(HA, 'course'), 'RINSE_SPIN')
         // The consumable option bytes were cleared though, and must not be written back over the select.
-        assert.equal(get(HA, 'wash'), 'normal')
+        assert.equal(get(HA, 'soil_wash'), 'normal')
     })
 
     test('also reads state out of the short-framed settings reply', () => {
         const { HA, thinq } = setup()
         feed(thinq, SETTINGS_REPLY_POWER_OFF)
 
-        assert.equal(get(HA, 'status'), 'power_off')
-        assert.equal(get(HA, 'status_code'), 0)
+        assert.equal(get(HA, 'state'), 'power_off')
     })
 
     test('leaves a select alone when the appliance reports a value we cannot name', () => {
@@ -228,12 +223,11 @@ describe('FX___S washer', () => {
         feed(thinq, RECONNECT_SNAPSHOT)
 
         // Without this the entities stay unknown from a restart until the appliance next changes state.
-        assert.equal(get(HA, 'status'), 'spinning')
-        assert.equal(get(HA, 'status_code'), 14)
+        assert.equal(get(HA, 'state'), 'spinning')
         assert.equal(get(HA, 'running'), 'ON')
         assert.equal(get(HA, 'course'), 'RINSE_SPIN')
-        assert.equal(get(HA, 'remaining_minutes'), 2)
-        assert.equal(get(HA, 'total_time'), 25)
+        assert.equal(get(HA, 'remain_time_minutes'), 2)
+        assert.equal(get(HA, 'initial_time_minutes'), 25)
         assert.equal(get(HA, 'cycles'), '16')
         assert.equal(get(HA, 'buzzer'), 'very_high')
     })
@@ -244,19 +238,19 @@ describe('FX___S washer', () => {
 
         // Steam cannot be switched on this course, and wash is limited to two of its six positions -
         // both reported by the owner working the panel, since the appliance never declares any of it.
-        assert.equal(get(HA, 'available_options'), 'wash, water_temp, rinse, spin')
+        assert.equal(get(HA, 'available_options'), 'soil_wash, temp, rinse, spin')
         const attrs = JSON.parse(String(get(HA, 'available_options_attrs')))
-        assert.deepEqual(attrs.wash, ['normal', 'soak'])
+        assert.deepEqual(attrs.soil_wash, ['normal', 'soak'])
         assert.equal(attrs.steam, false)
-        assert.equal(attrs.water_temp.length, 5)
+        assert.equal(attrs.temp.length, 5)
     })
 
     test('reports a course that locks everything', () => {
         const { HA, thinq } = setup()
         feed(thinq, RINSE_SPIN_STARTED) // Rinse + Spin, which fixes wash and temperature
         const attrs = JSON.parse(String(get(HA, 'available_options_attrs')))
-        assert.equal(attrs.wash, null)
-        assert.equal(attrs.water_temp, null)
+        assert.equal(attrs.soil_wash, null)
+        assert.equal(attrs.temp, null)
     })
 
     test('decodes remote control, the door lock that follows it, and TurboShot', () => {
@@ -268,10 +262,10 @@ describe('FX___S washer', () => {
         assert.equal(get(HA, 'door_lock'), 'OFF') // device_class lock: off means locked
         assert.equal(get(HA, 'child_lock'), 'OFF')
         assert.equal(get(HA, 'crease_care'), 'OFF')
-        assert.equal(get(HA, 'turbowash'), 'ON')
+        assert.equal(get(HA, 'turbo_wash'), 'ON')
         assert.equal(get(HA, 'drum_light'), 'OFF')
         // The same bit was read as "a cycle is loaded" before this was isolated on the panel.
-        assert.equal(get(HA, 'status'), 'initial')
+        assert.equal(get(HA, 'state'), 'initial')
         assert.equal(get(HA, 'running'), 'OFF')
     })
 
@@ -304,23 +298,23 @@ describe('FX___S washer', () => {
         on[49] = 0x60
 
         dut.processRecord(off)
-        assert.equal(get(HA, 'drum_light_auto'), 'OFF')
+        assert.equal(get(HA, 'drumlight_auto_on'), 'OFF')
         dut.processRecord(on)
-        assert.equal(get(HA, 'drum_light_auto'), 'ON')
+        assert.equal(get(HA, 'drumlight_auto_on'), 'ON')
         dut.processRecord(off)
-        assert.equal(get(HA, 'drum_light_auto'), 'OFF')
+        assert.equal(get(HA, 'drumlight_auto_on'), 'OFF')
     })
 
     test('drum_light_auto is a writable switch, published optimistically pending the next record', () => {
         const { HA, dut } = setup()
-        const comp = HA.devices[DEVICE_ID].config!.components.drum_light_auto as unknown as Record<string, unknown>
+        const comp = HA.devices[DEVICE_ID].config!.components.drumlight_auto_on as unknown as Record<string, unknown>
         assert.equal(comp.platform, 'switch')
-        assert.equal(comp.command_topic, '$this/drum_light_auto/set')
+        assert.equal(comp.command_topic, '$this/drumlight_auto_on/set')
 
-        dut.setProperty('drum_light_auto', 'ON')
-        assert.equal(get(HA, 'drum_light_auto'), 'ON')
-        dut.setProperty('drum_light_auto', 'OFF')
-        assert.equal(get(HA, 'drum_light_auto'), 'OFF')
+        dut.setProperty('drumlight_auto_on', 'ON')
+        assert.equal(get(HA, 'drumlight_auto_on'), 'ON')
+        dut.setProperty('drumlight_auto_on', 'OFF')
+        assert.equal(get(HA, 'drumlight_auto_on'), 'OFF')
     })
 
     test('adds a course it has no name for and makes it selectable', () => {
@@ -371,7 +365,7 @@ describe('FX___S washer', () => {
         // Switching it off at the panel drops the connection; going unavailable would throw away a
         // state we know is correct and read as a network fault.
         assert.equal(HA.devices[DEVICE_ID].availability, 'online')
-        assert.equal(get(HA, 'status'), 'power_off')
+        assert.equal(get(HA, 'state'), 'power_off')
     })
 
     test('goes unavailable when it drops from any other state', () => {
@@ -384,7 +378,7 @@ describe('FX___S washer', () => {
     test('ignores frames that are not from the appliance', () => {
         const { HA, thinq } = setup()
         feed(thinq, buf('aa09f0241001018cbb')) // our own start command echoed back
-        assert.equal(get(HA, 'status'), undefined)
+        assert.equal(get(HA, 'state'), undefined)
     })
     test('energy comes from the state record, a minute at a time', () => {
         const { HA, dut } = setup()
@@ -486,8 +480,8 @@ describe('FX___S commands', () => {
     const cases: [string, string, string, string][] = [
         ['power', 'OFF', 'aa0df0e5000201ff010200c4bb', 'power off'],
         ['power', 'ON', 'aa0df0e5000201ff010201c7bb', 'power on'],
-        ['drum_light_auto', 'OFF', 'aa0df0e5000201ff011b00ffbb', 'drum_light_auto off'],
-        ['drum_light_auto', 'ON', 'aa0df0e5000201ff011b01febb', 'drum_light_auto on'],
+        ['drumlight_auto_on', 'OFF', 'aa0df0e5000201ff011b00ffbb', 'drum_light_auto off'],
+        ['drumlight_auto_on', 'ON', 'aa0df0e5000201ff011b01febb', 'drum_light_auto on'],
         ['pause', '', 'aa0df0e5000201ff010302c1bb', 'pause'],
         ['course', 'TUB_CLEAN', 'aa0df0e5000201ff010a55bbbb', 'course = Tub Clean'],
         ['course', 'AI_COURSE', 'aa0df0e5000201ff010a725ebb', 'course = AI Wash'],
@@ -811,7 +805,7 @@ describe('FX___S entity names', () => {
     test('the seven writable cycle settings are grouped under one prefix', () => {
         const { HA } = setup()
         assert.deepEqual(
-            ['course', 'wash', 'water_temp', 'rinse', 'spin', 'steam', 'turbowash'].map((k) => nameOf(HA, k)),
+            ['course', 'soil_wash', 'temp', 'rinse', 'spin', 'steam', 'turbo_wash'].map((k) => nameOf(HA, k)),
             [
                 'Course - Select',
                 'Course - Wash',
@@ -824,26 +818,35 @@ describe('FX___S entity names', () => {
         )
     })
 
-    test('the raw phase byte is declared but off by default', () => {
-        const { HA } = setup()
-        const comp = HA.devices[DEVICE_ID].config!.components.status_code as unknown as Record<string, unknown>
-        // Owner's call: it is the escape hatch for naming an unseen phase, not a daily reading.
-        assert.equal(comp.enabled_by_default, false)
-        // Still published, so switching it on in the UI is all it takes.
-        assert.equal(comp.state_topic, '$this/status_code')
-        // And it is the only one turned off - `status` and the diagnostics stay as they were.
-        const off = Object.entries(HA.devices[DEVICE_ID].config!.components)
-            .filter(([, c]) => (c as unknown as Record<string, unknown>).enabled_by_default === false)
-            .map(([k]) => k)
-        assert.deepEqual(off, ['status_code'])
-    })
-
     test('the readings that describe the cycle keep their own names', () => {
         const { HA } = setup()
         // These report what the appliance is doing rather than setting it, so grouping them with the
         // controls would say they are adjustable.
         assert.equal(nameOf(HA, 'current_course'), 'Current course')
-        assert.equal(nameOf(HA, 'remaining_minutes'), 'Remaining time')
+        assert.equal(nameOf(HA, 'remain_time_minutes'), 'Remaining time')
+    })
+
+    test('the 2026-09-22 renames withdraw all nine old names as removal stubs', () => {
+        const { HA } = setup()
+        // Same mechanism as energy_reports/cycle_plan below and laundry_care_active elsewhere in
+        // this file - the key stays, carrying `platform` and nothing else, which is what deletes
+        // an existing install's entity rather than leaving it orphaned forever. `status_code` has
+        // no replacement at all (see the NAMING AUDIT note in the handler) - it is just gone.
+        for (const old of [
+            'status',
+            'status_code',
+            'drum_light_auto',
+            'remaining_minutes',
+            'total_time',
+            'wash',
+            'water_temp',
+            'turbowash',
+            'turbowash_active',
+            'add_wash',
+        ]) {
+            const stub = HA.devices[DEVICE_ID].config!.components[old] as unknown as Record<string, unknown>
+            assert.deepEqual(Object.keys(stub), ['platform'], old)
+        }
     })
 
     test('energy_reports is withdrawn, not just left undeclared - existing installs get it removed', () => {
@@ -886,20 +889,19 @@ describe('FX___S status names follow the appliance, aligned against LG on one cl
             const rec = Buffer.alloc(66)
             rec[20] = phase
             dut.processRecord(rec)
-            assert.equal(get(HA, 'status'), name)
-            assert.equal(get(HA, 'status_code'), phase)
+            assert.equal(get(HA, 'state'), name)
         })
     }
 
     test('every name it can publish is one of the options it declared', () => {
         const { HA, dut } = setup()
-        const declared = (HA.devices[DEVICE_ID].config!.components.status as unknown as { options: string[] }).options
+        const declared = (HA.devices[DEVICE_ID].config!.components.state as unknown as { options: string[] }).options
 
         for (const [phase] of MEASURED) {
             const rec = Buffer.alloc(66)
             rec[20] = phase
             dut.processRecord(rec)
-            assert.ok(declared.includes(String(get(HA, 'status'))), `${phase} publishes a declared option`)
+            assert.ok(declared.includes(String(get(HA, 'state'))), `${phase} publishes a declared option`)
         }
 
         // A phase we have never seen. The fallback used to be 'Unknown', which is not in the list - and
@@ -907,7 +909,7 @@ describe('FX___S status names follow the appliance, aligned against LG on one cl
         const rec = Buffer.alloc(66)
         rec[20] = 200
         dut.processRecord(rec)
-        assert.equal(get(HA, 'status'), 'unknown')
+        assert.equal(get(HA, 'state'), 'unknown')
         assert.ok(declared.includes('unknown'))
     })
 })
@@ -923,13 +925,13 @@ describe('FX___S names every state its own maker declares', () => {
 
     test('no declared state reads as unknown', () => {
         const { HA, dut } = setup()
-        const declared = (HA.devices[DEVICE_ID].config!.components.status as unknown as { options: string[] }).options
+        const declared = (HA.devices[DEVICE_ID].config!.components.state as unknown as { options: string[] }).options
 
         for (const phase of DECLARED) {
             const rec = Buffer.alloc(66)
             rec[20] = phase
             dut.processRecord(rec)
-            const name = String(get(HA, 'status'))
+            const name = String(get(HA, 'state'))
             assert.notEqual(name, 'unknown', `phase ${phase} has no name`)
             assert.ok(declared.includes(name), `phase ${phase} publishes ${name}, which is not an option`)
         }
@@ -942,14 +944,14 @@ describe('FX___S names every state its own maker declares', () => {
         // A delay-end reservation counting down.
         rec[20] = 7
         dut.processRecord(rec)
-        assert.equal(get(HA, 'status'), 'reserved')
+        assert.equal(get(HA, 'state'), 'reserved')
 
         // A finished cycle on a machine that does NOT leave remote control on. This owner's washer
         // always finishes on 42, which the JSON calls END_REMOTE_MAINTAIN_ON; 16 is the plain END and
         // used to publish 'unknown'.
         rec[20] = 16
         dut.processRecord(rec)
-        assert.equal(get(HA, 'status'), 'end')
+        assert.equal(get(HA, 'state'), 'end')
     })
 
     test('a byte outside the declaration still falls back rather than inventing a name', () => {
@@ -957,7 +959,7 @@ describe('FX___S names every state its own maker declares', () => {
         const rec = Buffer.alloc(66)
         rec[20] = 200
         dut.processRecord(rec)
-        assert.equal(get(HA, 'status'), 'unknown')
+        assert.equal(get(HA, 'state'), 'unknown')
     })
 })
 
@@ -1070,8 +1072,7 @@ describe('FX___S reservation armed on the appliance itself', () => {
     test('phase 7 is what the model JSON called RESERVED, and it really happens', () => {
         const { HA, dut } = setup()
         dut.processRecord(armed())
-        assert.equal(get(HA, 'status'), 'reserved')
-        assert.equal(get(HA, 'status_code'), 7)
+        assert.equal(get(HA, 'state'), 'reserved')
         assert.equal(get(HA, 'reservation'), 3)
     })
 
@@ -1102,7 +1103,7 @@ describe('FX___S reservation armed on the appliance itself', () => {
         rec[13] = 30 // the cycle is half an hour, and that is NOT when it finishes
         dut.processRecord(rec)
 
-        assert.equal(get(HA, 'remaining_minutes'), 0)
+        assert.equal(get(HA, 'remain_time_minutes'), 0)
     })
 
     test('it counts down a minute at a time without the reservation setpoint jittering', () => {
@@ -1125,7 +1126,7 @@ describe('FX___S reservation armed on the appliance itself', () => {
         assert.equal(get(HA, 'reservation'), 3)
         dut.processRecord(Buffer.alloc(66)) // phase 0, everything zero
         assert.equal(get(HA, 'reservation'), 0)
-        assert.equal(get(HA, 'status'), 'power_off')
+        assert.equal(get(HA, 'state'), 'power_off')
     })
 })
 
@@ -1368,18 +1369,18 @@ describe('FX___S publish order', () => {
          *
          * So the four states an automation triggers on go last, after everything it might ask about.
          */
-        const triggers = ['power', 'status', 'status_code', 'running', 'drum_active']
+        const triggers = ['power', 'state', 'running', 'drum_active']
         const asked = [
             'current_course',
             'course',
             'laundry_care',
             'crease_care',
             'steam_active',
-            'turbowash_active',
+            'turbo_wash_active',
             'steam',
-            'turbowash',
-            'wash',
-            'water_temp',
+            'turbo_wash',
+            'soil_wash',
+            'temp',
             'rinse',
             'spin',
         ]
@@ -1407,7 +1408,7 @@ describe('FX___S the cycle options are a setting and a reading, not one entity d
     test('the switches take the selection from standby', () => {
         const { HA, dut } = setup()
         dut.processRecord(record(1, { turbo: true, steam: true }))
-        assert.equal(get(HA, 'turbowash'), 'ON')
+        assert.equal(get(HA, 'turbo_wash'), 'ON')
         assert.equal(get(HA, 'steam'), 'ON')
     })
 
@@ -1424,7 +1425,7 @@ describe('FX___S the cycle options are a setting and a reading, not one entity d
 
         dut.processRecord(record(3, { turbo: true, steam: true })) // detecting: the cycle as started
         assert.equal(get(HA, 'steam'), 'ON')
-        assert.equal(get(HA, 'turbowash'), 'ON')
+        assert.equal(get(HA, 'turbo_wash'), 'ON')
     })
 
     test('but only on the move in, so the appliance consuming them mid-cycle changes nothing', () => {
@@ -1450,24 +1451,24 @@ describe('FX___S the cycle options are a setting and a reading, not one entity d
         dut.processRecord(record(1, { steam: true, turbo: true }))
         dut.processRecord(record(11, { steam: true, turbo: true }))
         assert.equal(get(HA, 'steam_active'), 'ON')
-        assert.equal(get(HA, 'turbowash_active'), 'ON')
+        assert.equal(get(HA, 'turbo_wash_active'), 'ON')
 
         // 2026-08-12 16:46:19: the steam bit is spent entering rinse, with 21 minutes of the cycle
         // left. Published straight the sensor said "no steam" for all of it; latched, it holds.
         dut.processRecord(record(12, { turbo: true }))
         assert.equal(get(HA, 'steam_active'), 'ON')
-        assert.equal(get(HA, 'turbowash_active'), 'ON')
+        assert.equal(get(HA, 'turbo_wash_active'), 'ON')
 
         // The cycle ends and the latch goes with it.
         dut.processRecord(record(42))
         assert.equal(get(HA, 'steam_active'), 'OFF')
-        assert.equal(get(HA, 'turbowash_active'), 'OFF')
+        assert.equal(get(HA, 'turbo_wash_active'), 'OFF')
 
         // ...and does not leak into the next cycle, which is what a latch has to be checked for.
         dut.processRecord(record(1))
         dut.processRecord(record(11))
         assert.equal(get(HA, 'steam_active'), 'OFF')
-        assert.equal(get(HA, 'turbowash_active'), 'OFF')
+        assert.equal(get(HA, 'turbo_wash_active'), 'OFF')
     })
 
     test('a cycle joined after the steam stage cannot claim steam, and does not', () => {
@@ -1482,42 +1483,42 @@ describe('FX___S the cycle options are a setting and a reading, not one entity d
     test('and hold it when the appliance zeroes the bytes at the end of the cycle', () => {
         const { HA, dut } = setup()
         dut.processRecord(record(1, { turbo: true }))
-        assert.equal(get(HA, 'turbowash'), 'ON')
+        assert.equal(get(HA, 'turbo_wash'), 'ON')
 
         // Measured in both full cycles on disk: the option bytes survive every working phase and are
         // zeroed on the move into Complete. Published unconditionally this read as the appliance
         // switching TurboShot off by itself, which is what Home Assistant's history recorded on four
         // separate cycles.
         dut.processRecord(record(11, { turbo: true }))
-        assert.equal(get(HA, 'turbowash'), 'ON')
+        assert.equal(get(HA, 'turbo_wash'), 'ON')
         dut.processRecord(record(42))
-        assert.equal(get(HA, 'turbowash'), 'ON')
+        assert.equal(get(HA, 'turbo_wash'), 'ON')
         dut.processRecord(record(0))
-        assert.equal(get(HA, 'turbowash'), 'ON')
+        assert.equal(get(HA, 'turbo_wash'), 'ON')
 
         // The next standby is the next selection, and it is followed.
         dut.processRecord(record(1))
-        assert.equal(get(HA, 'turbowash'), 'OFF')
+        assert.equal(get(HA, 'turbo_wash'), 'OFF')
     })
 
     test('the sensors answer the other question: what is this cycle running with', () => {
         const { HA, dut } = setup()
         dut.processRecord(record(1, { turbo: true, steam: true }))
         // Nothing is under way at standby, so they say so rather than repeating the switches.
-        assert.equal(get(HA, 'turbowash_active'), 'OFF')
+        assert.equal(get(HA, 'turbo_wash_active'), 'OFF')
         assert.equal(get(HA, 'steam_active'), 'OFF')
 
         dut.processRecord(record(11, { turbo: true, steam: true }))
-        assert.equal(get(HA, 'turbowash_active'), 'ON')
+        assert.equal(get(HA, 'turbo_wash_active'), 'ON')
         assert.equal(get(HA, 'steam_active'), 'ON')
 
         // Still mid-cycle: a pause is excluded from `running` on purpose, but the cycle is unchanged.
         dut.processRecord(record(2, { turbo: true, steam: true }))
         assert.equal(get(HA, 'running'), 'OFF')
-        assert.equal(get(HA, 'turbowash_active'), 'ON')
+        assert.equal(get(HA, 'turbo_wash_active'), 'ON')
 
         dut.processRecord(record(42))
-        assert.equal(get(HA, 'turbowash_active'), 'OFF')
+        assert.equal(get(HA, 'turbo_wash_active'), 'OFF')
         assert.equal(get(HA, 'steam_active'), 'OFF')
     })
 
@@ -1541,7 +1542,7 @@ describe('FX___S the cycle options are a setting and a reading, not one entity d
         // owner's request: phase 47 is what it read, and `status` publishes that as `refreshing`.
         // Two entities for one fact is worse than either.
         dut.processRecord(record(47, { care: true }))
-        assert.equal(get(HA, 'status'), 'refreshing')
+        assert.equal(get(HA, 'state'), 'refreshing')
         assert.equal(get(HA, 'laundry_care_active'), undefined, 'nothing is published to it')
 
         // The removal stub: the key stays, carrying `platform` and nothing else, which is what
@@ -1553,7 +1554,7 @@ describe('FX___S the cycle options are a setting and a reading, not one entity d
     test('the switches still write the same two keys', () => {
         const { thinq, dut } = setup()
         dut.setProperty('steam', 'ON')
-        dut.setProperty('turbowash', 'ON')
+        dut.setProperty('turbo_wash', 'ON')
         assert.equal(hex(thinq.outbox[0]), hex(buf('aa0df0e5000201ff013e019bbb')))
         assert.equal(hex(thinq.outbox[1]), hex(buf('aa0df0e5000201ff01350190bb')))
     })
@@ -1582,12 +1583,12 @@ describe('FX___S course names in the configured language', () => {
     test('the wash scale is named in that language too, and only that one', () => {
         const { HA: en, thinq: te } = setupIn()
         feed(te, STANDBY)
-        assert.equal(get(en, 'wash'), 'normal')
+        assert.equal(get(en, 'soil_wash'), 'normal')
 
         const { HA: ko, thinq: tk } = setupIn('ko')
         feed(tk, STANDBY)
-        assert.equal(get(ko, 'wash'), '표준')
-        assert.deepEqual((ko.devices[DEVICE_ID].config!.components.wash as { options?: string[] }).options, [
+        assert.equal(get(ko, 'soil_wash'), '표준')
+        assert.deepEqual((ko.devices[DEVICE_ID].config!.components.soil_wash as { options?: string[] }).options, [
             '안함',
             '적은 때',
             '표준',
@@ -1597,11 +1598,11 @@ describe('FX___S course names in the configured language', () => {
         ])
         // The advisory attributes speak the same vocabulary, or the sensor would name values the
         // select does not offer. AI Wash allows two of the six.
-        assert.deepEqual(JSON.parse(String(get(ko, 'available_options_attrs'))).wash, ['표준', '불림'])
+        assert.deepEqual(JSON.parse(String(get(ko, 'available_options_attrs'))).soil_wash, ['표준', '불림'])
         // Untouched: the owner asked for the wash scale, and each of these would change an entity
         // state that automations may compare against.
         assert.equal(get(ko, 'spin'), 'high')
-        assert.equal(get(ko, 'water_temp'), '40')
+        assert.equal(get(ko, 'temp'), '40')
         assert.equal(get(ko, 'buzzer'), 'very_high')
     })
 
@@ -1609,7 +1610,7 @@ describe('FX___S course names in the configured language', () => {
         for (const language of [undefined, 'ko']) {
             for (const name of ['normal', '표준']) {
                 const { thinq, dut } = setupIn(language)
-                dut.setProperty('wash', name)
+                dut.setProperty('soil_wash', name)
                 assert.equal(hex(thinq.outbox[0]), hex(buf('aa0df0e5000201ff011e03e5bb')), `${language} <- ${name}`)
             }
         }
@@ -1670,24 +1671,24 @@ describe('FX___S the operation buttons say when they can be used', () => {
         const { HA } = setup()
         // An MQTT entity whose availability topic was never published reads as unavailable, so the
         // honest default has to be published at startup rather than waited for.
-        for (const name of ['start', 'pause', 'resume', 'add_wash']) assert.equal(avail(HA, name), 'online')
+        for (const name of ['start', 'pause', 'resume', 'add_garment']) assert.equal(avail(HA, name), 'online')
     })
 
     test('add wash is gated exactly like start, because it carries a start', () => {
         const { HA, dut } = setup()
         dut.processRecord(record(42)) // finished, remote control on - where the owner pressed it
-        assert.equal(avail(HA, 'add_wash'), 'online')
+        assert.equal(avail(HA, 'add_garment'), 'online')
 
         dut.processRecord(record(12)) // already running: the appliance answered a repeat with 0x09
-        assert.equal(avail(HA, 'add_wash'), 'offline')
+        assert.equal(avail(HA, 'add_garment'), 'offline')
 
         dut.processRecord(record(1, false)) // remote control off
-        assert.equal(avail(HA, 'add_wash'), 'offline')
+        assert.equal(avail(HA, 'add_garment'), 'offline')
     })
 
     test('add wash replays the frame the app sent, byte for byte', () => {
         const { thinq, dut } = setup()
-        dut.setProperty('add_wash', '')
+        dut.setProperty('add_garment', '')
         // Captured 2026-08-12 17:34:03 as toDevice while the owner pressed 추가 세탁하기 in the LG
         // app: course -> 55 (Rinse + Spin) and operation -> 1 (start), in one two-pair write.
         assert.equal(hex(thinq.outbox[0]), hex(buf('aa0ff0e5000201ff020a37030182bb')))
@@ -1791,7 +1792,7 @@ describe('FX___S the two moments it announces', () => {
         feed(thinq, COMPLETE_NOTIFY)
         assert.equal(eventType(HA, 'notification'), 'washing_is_complete')
         // ...and nothing about the state has moved: this frame carries no record.
-        assert.equal(get(HA, 'status'), undefined)
+        assert.equal(get(HA, 'state'), undefined)
     })
 
     test('the second wash of the day announces itself too', () => {
@@ -1905,17 +1906,16 @@ describe('FX___S a tub clean is a running cycle', () => {
     test('it is called what the cloud calls it, and the appliance is working', () => {
         const { HA, dut } = setup()
         dut.processRecord(tubClean())
-        assert.equal(get(HA, 'status'), 'running')
+        assert.equal(get(HA, 'state'), 'running')
         // The raw byte still tells 41 apart from 11 for anyone who needs to.
-        assert.equal(get(HA, 'status_code'), 41)
         assert.equal(get(HA, 'running'), 'ON')
     })
 
     test('its clock is live, so the remaining time is this cycle and not the last one', () => {
         const { HA, dut } = setup()
         dut.processRecord(tubClean())
-        assert.equal(get(HA, 'remaining_minutes'), 82)
-        assert.equal(get(HA, 'total_time'), 84)
+        assert.equal(get(HA, 'remain_time_minutes'), 82)
+        assert.equal(get(HA, 'initial_time_minutes'), 84)
     })
 
     test('it offers pause, and does not offer start', () => {

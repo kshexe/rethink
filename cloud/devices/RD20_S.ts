@@ -376,6 +376,14 @@ export default class Device extends AABBDevice {
     constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
         super(HA, thinq)
 
+        // NAMING AUDIT (2026-09-22): see FX___S.ts's own note of the same date for the full
+        // reasoning - both models' modelJSON were compared field by field. Renamed here to match:
+        // `state` (was `status`, modelJSON's `MonitoringValue.state`), `remain_time_minutes` (was
+        // `remaining_minutes`, modelJSON's `remainTimeHour`/`remainTimeMinute` - kept as one
+        // minutes-only number), `reserve_time_minutes` (was `reservation_minutes`, modelJSON's
+        // `reserveTimeHour`/`reserveTimeMinute`), `drumlight_auto_on` (was `drum_light_auto`,
+        // modelJSON's `drumlightAutoOn`). Old names withdrawn as removal stubs below, same
+        // mechanism as buzzer/crease_care's own rename.
         const config: DeviceDiscovery = allowExtendedType({
             ...HADevice.config(meta),
             components: {
@@ -387,24 +395,26 @@ export default class Device extends AABBDevice {
                     name: '',
                     icon: 'mdi:tumble-dryer',
                 },
-                remaining_minutes: {
+                remain_time_minutes: {
                     platform: 'sensor',
-                    unique_id: '$deviceid-remaining_minutes',
-                    state_topic: '$this/remaining_minutes',
+                    unique_id: '$deviceid-remain-time-minutes',
+                    state_topic: '$this/remain_time_minutes',
                     name: 'Remaining time',
                     icon: 'mdi:timer-outline',
                     device_class: 'duration',
                     unit_of_measurement: 'min',
                 },
+                remaining_minutes: { platform: 'sensor' } as ComponentInfo,
                 // See the file header's STATUS section - only running/cooling/complete are
                 // confirmed, anything else publishes as unknown_<value> rather than being guessed.
-                status: {
+                state: {
                     platform: 'sensor',
-                    unique_id: '$deviceid-status',
-                    state_topic: '$this/status',
+                    unique_id: '$deviceid-state',
+                    state_topic: '$this/state',
                     name: 'Status',
                     icon: 'mdi:tumble-dryer',
                 },
+                status: { platform: 'sensor' } as ComponentInfo,
                 // The unwrapped raw byte, reconstructed across its mod-256 rolls - see the file
                 // header's ENERGY section and cycleEnergyWh's own comment. Mirrors FX___S.ts's
                 // "Energy this cycle" - same shape, same name, same idea, different appliance.
@@ -501,15 +511,18 @@ export default class Device extends AABBDevice {
                 },
                 // See the file header's DRUM LIGHT AUTO-ON section - modelJSON `drumlightAutoOn`,
                 // whether the appliance turns the light on by itself the next time the door opens.
-                drum_light_auto: {
+                // Renamed from `drum_light_auto` (2026-09-22) to match that field name exactly -
+                // see the NAMING AUDIT note above.
+                drumlight_auto_on: {
                     platform: 'switch',
-                    unique_id: '$deviceid-drum_light_auto',
-                    state_topic: '$this/drum_light_auto',
-                    command_topic: '$this/drum_light_auto/set',
+                    unique_id: '$deviceid-drumlight-auto-on',
+                    state_topic: '$this/drumlight_auto_on',
+                    command_topic: '$this/drumlight_auto_on/set',
                     name: 'Drum light auto-on',
                     icon: 'mdi:lightbulb-auto-outline',
                     entity_category: 'config',
                 },
+                drum_light_auto: { platform: 'switch' } as ComponentInfo,
                 // Named to match this model's own modelJSON field (`wrinkleCare`) - FX___S.ts's
                 // sibling entity is named for ITS OWN modelJSON field instead (`creaseCare`), a
                 // genuinely different name LG itself uses for the two models, not something this
@@ -539,17 +552,20 @@ export default class Device extends AABBDevice {
                     icon: 'mdi:lock-outline',
                 },
                 // See the file header's "FEATURE/OPTION FLAG BYTES" section. 0 when no
-                // reservation is armed.
-                reservation_minutes: {
+                // reservation is armed. Renamed from `reservation_minutes` (2026-09-22) to match
+                // modelJSON's own `reserveTimeHour`/`reserveTimeMinute` fields - see the NAMING
+                // AUDIT note above.
+                reserve_time_minutes: {
                     platform: 'sensor',
-                    unique_id: '$deviceid-reservation_minutes',
-                    state_topic: '$this/reservation_minutes',
+                    unique_id: '$deviceid-reserve-time-minutes',
+                    state_topic: '$this/reserve_time_minutes',
                     name: 'Reservation',
                     icon: 'mdi:timer-plus-outline',
                     device_class: 'duration',
                     unit_of_measurement: 'min',
                     entity_category: 'diagnostic',
                 },
+                reservation_minutes: { platform: 'sensor' } as ComponentInfo,
                 // Named to match this model's own modelJSON field (`buzzer`) - FX___S.ts's own
                 // writable equivalent is named the same way. See the file header's "ENERGY BYTE IS
                 // DUAL-PURPOSE" section - only published while STATUS reads 'idle'; not touched at
@@ -574,11 +590,11 @@ export default class Device extends AABBDevice {
         // dryer that is genuinely mid-cycle corrects this within the next real status frame either
         // way. Confirmed live 2026-09-22: the mini-wash sat on a stale "51 minutes" for 12+ hours
         // after the real cycle it belonged to had already finished, for exactly this reason.
-        this.publishProperty('remaining_minutes', 0)
+        this.publishProperty('remain_time_minutes', 0)
         log(
             'status',
             this.id,
-            'RD20_S (건조기) handler started - power, remaining_minutes, status, energy, buzzer, feature flags, drum light auto-on, reservation, notification, remote_control, see file header',
+            'RD20_S (건조기) handler started - power, remain_time_minutes, state, energy, buzzer, feature flags, drum light auto-on, reservation, notification, remote_control, see file header',
         )
         // Wired here, not in start(), so a delta reaching processAABB works from construction
         // onward regardless of whether/when start() runs - matches this always having worked
@@ -611,16 +627,16 @@ export default class Device extends AABBDevice {
                 // real countdown retained on the MQTT topic forever. Zeroed here explicitly rather
                 // than on the ON transition too - there is nothing wrong to overwrite yet there,
                 // and the first real status frame after a start corrects it either way.
-                if (!on) this.publishProperty('remaining_minutes', 0)
+                if (!on) this.publishProperty('remain_time_minutes', 0)
                 return
             }
-            case 'drum_light_auto': {
+            case 'drumlight_auto_on': {
                 const on = mqttValue === 'ON'
                 this.send(buildSettingsWrite([[KEY_DRUM_LIGHT_AUTO, on ? 1 : 0]]))
                 // Optimistic: see the file header's DRUM LIGHT AUTO-ON section for why this is not
                 // read back off the wire.
                 this.drumLightAuto = on
-                this.publishProperty('drum_light_auto', on ? 'ON' : 'OFF')
+                this.publishProperty('drumlight_auto_on', on ? 'ON' : 'OFF')
                 return
             }
             default:
@@ -665,12 +681,12 @@ export default class Device extends AABBDevice {
             buf.length === STATUS_FRAME_LEN &&
             buf.subarray(STATUS_MARKER_OFFSET, STATUS_MARKER_OFFSET + STATUS_MARKER.length).equals(STATUS_MARKER)
         ) {
-            this.publishProperty('remaining_minutes', buf[REMAINING_MINUTES_OFFSET])
+            this.publishProperty('remain_time_minutes', buf[REMAINING_MINUTES_OFFSET])
 
             const status = decodeStatus(buf[STATUS_OFFSET])
             if (status !== this.status) {
                 this.status = status
-                this.publishProperty('status', status)
+                this.publishProperty('state', status)
             }
 
             // See the file header's ENERGY section - a mod-256 rolling Wh counter, so the delta
@@ -712,14 +728,14 @@ export default class Device extends AABBDevice {
             // immediately on a local command instead of waiting for the next status frame.
             // publishProperty() itself already dedupes (see aabb_device.ts), same as drum_light/
             // wrinkle_care/ironing_alert just above - no need for a second check here.
-            this.publishProperty('drum_light_auto', buf[DRUM_LIGHT_AUTO_OFFSET] & DRUM_LIGHT_AUTO_BIT ? 'ON' : 'OFF')
+            this.publishProperty('drumlight_auto_on', buf[DRUM_LIGHT_AUTO_OFFSET] & DRUM_LIGHT_AUTO_BIT ? 'ON' : 'OFF')
 
             // OPTION_RESERVATION_ACTIVE (0x08, also on STATUS_OFFSET) is not separately exposed -
             // reservation_minutes already carries the same information (0 = none armed) without
             // needing a second entity.
             this.publishProperty('child_lock', buf[STATUS_OFFSET] & OPTION_BUTTON_LOCK ? 'ON' : 'OFF')
 
-            this.publishProperty('reservation_minutes', buf.readUInt16BE(RESERVATION_MINUTES_OFFSET))
+            this.publishProperty('reserve_time_minutes', buf.readUInt16BE(RESERVATION_MINUTES_OFFSET))
             return
         }
 
@@ -730,7 +746,7 @@ export default class Device extends AABBDevice {
                 this.power = on
                 this.publishProperty('power', on ? 'ON' : 'OFF')
                 // See the identical zeroing in setProperty('power', ...) above.
-                if (!on) this.publishProperty('remaining_minutes', 0)
+                if (!on) this.publishProperty('remain_time_minutes', 0)
             }
             return
         }
