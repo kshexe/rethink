@@ -436,7 +436,7 @@ export default class Device extends AABBDevice {
                     platform: 'sensor',
                     unique_id: '$deviceid-remain-time-minutes',
                     state_topic: '$this/remain_time_minutes',
-                    name: 'Remaining time',
+                    name: 'remainTimeMinute',
                     icon: 'mdi:timer-outline',
                     device_class: 'duration',
                     unit_of_measurement: 'min',
@@ -448,7 +448,7 @@ export default class Device extends AABBDevice {
                     platform: 'sensor',
                     unique_id: '$deviceid-state',
                     state_topic: '$this/state',
-                    name: 'Status',
+                    name: 'state',
                     icon: 'mdi:tumble-dryer',
                 },
                 status: { platform: 'sensor' } as ComponentInfo,
@@ -463,7 +463,7 @@ export default class Device extends AABBDevice {
                     platform: 'sensor',
                     unique_id: '$deviceid-course',
                     state_topic: '$this/course',
-                    name: 'Course',
+                    name: 'course',
                     icon: 'mdi:playlist-check',
                 },
                 // The unwrapped raw byte, reconstructed across its mod-256 rolls - see the file
@@ -557,7 +557,7 @@ export default class Device extends AABBDevice {
                     platform: 'binary_sensor',
                     unique_id: '$deviceid-drum_light',
                     state_topic: '$this/drum_light',
-                    name: 'Drum light',
+                    name: 'drumLight',
                     icon: 'mdi:lightbulb-outline',
                 },
                 // See the file header's DRUM LIGHT AUTO-ON section - modelJSON `drumlightAutoOn`,
@@ -582,16 +582,21 @@ export default class Device extends AABBDevice {
                     platform: 'binary_sensor',
                     unique_id: '$deviceid-wrinkle_care',
                     state_topic: '$this/wrinkle_care',
-                    name: 'Wrinkle care',
+                    name: 'wrinkleCare',
                     icon: 'mdi:tshirt-crew-outline',
                 },
-                ironing_alert: {
+                // Renamed from `ironing_alert` (2026-09-23) - modelJSON's real field here is
+                // `handIron`, confirmed via the live cloud snapshot API (`washerDryer.handIron:
+                // "HANDIRON_OFF"`), not `ironingAlert` (zero hits anywhere in the modelJSON text -
+                // that name was invented for this handler and never actually checked).
+                hand_iron: {
                     platform: 'binary_sensor',
-                    unique_id: '$deviceid-ironing_alert',
-                    state_topic: '$this/ironing_alert',
-                    name: 'Ironing alert',
+                    unique_id: '$deviceid-hand-iron',
+                    state_topic: '$this/hand_iron',
+                    name: 'handIron',
                     icon: 'mdi:iron-outline',
                 },
+                ironing_alert: { platform: 'binary_sensor' } as ComponentInfo,
                 // Named to match this model's own modelJSON field (`childLock`), same name
                 // FX___S.ts's own child_lock uses - LG happens to use the identical name on both
                 // models for this one, unlike wrinkle/crease care above.
@@ -599,7 +604,7 @@ export default class Device extends AABBDevice {
                     platform: 'binary_sensor',
                     unique_id: '$deviceid-child_lock',
                     state_topic: '$this/child_lock',
-                    name: 'Child lock',
+                    name: 'childLock',
                     icon: 'mdi:lock-outline',
                 },
                 // See the file header's "FEATURE/OPTION FLAG BYTES" section. 0 when no
@@ -610,7 +615,7 @@ export default class Device extends AABBDevice {
                     platform: 'sensor',
                     unique_id: '$deviceid-reserve-time-minutes',
                     state_topic: '$this/reserve_time_minutes',
-                    name: 'Reservation',
+                    name: 'reserveTimeMinute',
                     icon: 'mdi:timer-plus-outline',
                     device_class: 'duration',
                     unit_of_measurement: 'min',
@@ -625,7 +630,7 @@ export default class Device extends AABBDevice {
                     platform: 'sensor',
                     unique_id: '$deviceid-buzzer',
                     state_topic: '$this/buzzer',
-                    name: 'Buzzer volume',
+                    name: 'buzzer',
                     icon: 'mdi:volume-high',
                     entity_category: 'diagnostic',
                 },
@@ -784,7 +789,7 @@ export default class Device extends AABBDevice {
             const features = buf[FEATURE_FLAGS_OFFSET]
             this.publishProperty('drum_light', features & FEATURE_DRUM_LIGHT ? 'ON' : 'OFF')
             this.publishProperty('wrinkle_care', features & FEATURE_ANTI_WRINKLE ? 'ON' : 'OFF')
-            this.publishProperty('ironing_alert', features & FEATURE_IRONING_ALERT ? 'ON' : 'OFF')
+            this.publishProperty('hand_iron', features & FEATURE_IRONING_ALERT ? 'ON' : 'OFF')
 
             // See the file header's DRUM LIGHT AUTO-ON section's READ-BACK note. Read alongside the
             // optimistic publish in setProperty() - not replacing it, so the UI still updates

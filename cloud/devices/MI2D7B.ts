@@ -185,7 +185,7 @@ export default class Device extends AABBDevice {
                     platform: 'sensor',
                     unique_id: '$deviceid-remain-time-minutes',
                     state_topic: '$this/remain_time_minutes',
-                    name: 'Remaining time',
+                    name: 'remainTimeMinute',
                     icon: 'mdi:timer-outline',
                     device_class: 'duration',
                     unit_of_measurement: 'min',

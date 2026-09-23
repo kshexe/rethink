@@ -802,28 +802,26 @@ describe('FX___S entity names', () => {
     const nameOf = (HA: MockHAConnection, key: string) =>
         (HA.devices[DEVICE_ID].config!.components[key] as unknown as { name: string }).name
 
-    test('the seven writable cycle settings are grouped under one prefix', () => {
+    test('the seven writable cycle settings are named for their modelJSON field, not grouped under a prefix', () => {
+        // Renamed 2026-09-23: these used to share a "Course - " prefix so Home Assistant's
+        // alphabetical entity sort kept them together in the list - traded away for matching
+        // modelJSON's own literal field names exactly, per the same policy the 2026-09-22 renames
+        // followed. The grouping is gone; nothing else about these controls changed.
         const { HA } = setup()
         assert.deepEqual(
             ['course', 'soil_wash', 'temp', 'rinse', 'spin', 'steam', 'turbo_wash'].map((k) => nameOf(HA, k)),
-            [
-                'Course - Select',
-                'Course - Wash',
-                'Course - Water temperature',
-                'Course - Rinse',
-                'Course - Spin',
-                'Course - Steam',
-                'Course - TurboShot',
-            ],
+            ['course', 'soilWash', 'temp', 'rinse', 'spin', 'steam', 'turboWash'],
         )
     })
 
     test('the readings that describe the cycle keep their own names', () => {
         const { HA } = setup()
-        // These report what the appliance is doing rather than setting it, so grouping them with the
-        // controls would say they are adjustable.
+        // current_course has no modelJSON field of its own to match - it is this fork's own read
+        // side of the same course concept the writable `course` select above sets, split out
+        // because a single entity cannot be a setting and a live reading at once (see its own
+        // component comment). remain_time_minutes does have one, and is named for it.
         assert.equal(nameOf(HA, 'current_course'), 'Current course')
-        assert.equal(nameOf(HA, 'remain_time_minutes'), 'Remaining time')
+        assert.equal(nameOf(HA, 'remain_time_minutes'), 'remainTimeMinute')
     })
 
     test('the 2026-09-22 renames withdraw all nine old names as removal stubs', () => {

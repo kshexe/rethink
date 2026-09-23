@@ -192,6 +192,7 @@ describe(MODEL_ID, () => {
             'drumlight_auto_on',
             'drum_light_auto',
             'wrinkle_care',
+            'hand_iron',
             'ironing_alert',
             'child_lock',
             'reserve_time_minutes',
@@ -202,9 +203,9 @@ describe(MODEL_ID, () => {
         assert.equal(components.drumlight_auto_on.command_topic, '$this/drumlight_auto_on/set')
         assert.equal(components.remain_time_minutes.platform, 'sensor')
         assert.equal(components.remain_time_minutes.unit_of_measurement, 'min')
-        // The 2026-09-22 renames withdraw their four old names as removal stubs, same mechanism
-        // as energy_total/alarm_volume/anti_wrinkle/button_lock above.
-        for (const old of ['remaining_minutes', 'status', 'drum_light_auto', 'reservation_minutes']) {
+        // The 2026-09-22/23 renames withdraw their old names as removal stubs, same mechanism as
+        // energy_total/alarm_volume/anti_wrinkle/button_lock above.
+        for (const old of ['remaining_minutes', 'status', 'drum_light_auto', 'reservation_minutes', 'ironing_alert']) {
             assert.deepEqual(Object.keys(components[old]), ['platform'], old)
         }
     })
@@ -414,12 +415,12 @@ describe(MODEL_ID, () => {
         assert.equal(ha.devices[DEVICE_ID].properties.drum_light, 'ON')
     })
 
-    test('ironing_alert reads buf[87] 0x40, confirmed by a real on/off reversal', () => {
+    test('hand_iron reads buf[87] 0x40, confirmed by a real on/off reversal', () => {
         const { ha, thinq } = makeDevice()
         thinq.emit('data', IRONING_ALERT_ON)
-        assert.equal(ha.devices[DEVICE_ID].properties.ironing_alert, 'ON')
+        assert.equal(ha.devices[DEVICE_ID].properties.hand_iron, 'ON')
         thinq.emit('data', IRONING_ALERT_OFF)
-        assert.equal(ha.devices[DEVICE_ID].properties.ironing_alert, 'OFF')
+        assert.equal(ha.devices[DEVICE_ID].properties.hand_iron, 'OFF')
     })
 
     test('wrinkle_care reads buf[87] 0x08, confirmed by a real on/off reversal', () => {

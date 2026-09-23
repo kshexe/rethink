@@ -357,14 +357,20 @@ export default class Device extends AABBDevice {
                     device_class: 'door',
                     state_topic: '$this/top_door_open',
                 },
-                any_door_open: {
+                // Renamed from `any_door_open` (2026-09-23) - modelJSON's real field is
+                // `atLeastOneDoorOpen`, not "any" - confirmed via the raw modelJSON text (the
+                // `compartment`/`deodorize`-style names this file's other entities use turned out
+                // not to appear anywhere in it under those spellings either; those remain
+                // unconfirmed, see the memory note this rename shipped with).
+                at_least_one_door_open: {
                     platform: 'binary_sensor',
-                    unique_id: '$deviceid-any_door_open',
-                    name: 'Any door open',
+                    unique_id: '$deviceid-at-least-one-door-open',
+                    name: 'atLeastOneDoorOpen',
                     icon: 'mdi:fridge-alert-outline',
                     device_class: 'door',
-                    state_topic: '$this/any_door_open',
+                    state_topic: '$this/at_least_one_door_open',
                 },
+                any_door_open: { platform: 'binary_sensor' } as ComponentInfo,
                 // See the file header's NOTIFICATION section.
                 notification: {
                     platform: 'event',
@@ -488,7 +494,7 @@ export default class Device extends AABBDevice {
         const anyDoorOpen = record[RECORD_ANY_DOOR_OPEN] === 1
         if (anyDoorOpen !== this.anyDoorOpen) {
             this.anyDoorOpen = anyDoorOpen
-            this.publishProperty('any_door_open', anyDoorOpen ? 'ON' : 'OFF')
+            this.publishProperty('at_least_one_door_open', anyDoorOpen ? 'ON' : 'OFF')
         }
     }
 

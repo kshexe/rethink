@@ -322,7 +322,7 @@ export default class Device extends AABBDevice {
                 fridge_temp: {
                     platform: 'number',
                     unique_id: '$deviceid-fridge_temp',
-                    name: 'Fridge temperature',
+                    name: 'fridgeTemp',
                     icon: 'mdi:fridge-outline',
                     device_class: 'temperature',
                     unit_of_measurement: '°C',
@@ -336,7 +336,7 @@ export default class Device extends AABBDevice {
                 freezer_temp: {
                     platform: 'number',
                     unique_id: '$deviceid-freezer_temp',
-                    name: 'Freezer temperature',
+                    name: 'freezerTemp',
                     icon: 'mdi:fridge-industrial-outline',
                     device_class: 'temperature',
                     unit_of_measurement: '°C',
@@ -350,7 +350,7 @@ export default class Device extends AABBDevice {
                 express_mode: {
                     platform: 'switch',
                     unique_id: '$deviceid-express_mode',
-                    name: 'Express mode',
+                    name: 'expressMode',
                     icon: 'mdi:snowflake',
                     state_topic: '$this/express_mode',
                     command_topic: '$this/express_mode/set',
@@ -358,7 +358,7 @@ export default class Device extends AABBDevice {
                 smart_care_v2: {
                     platform: 'switch',
                     unique_id: '$deviceid-smart_care_v2',
-                    name: 'Smart Care+',
+                    name: 'smartCareV2',
                     icon: 'mdi:shield-check-outline',
                     state_topic: '$this/smart_care_v2',
                     command_topic: '$this/smart_care_v2/set',
@@ -366,7 +366,7 @@ export default class Device extends AABBDevice {
                 fridge_door_open: {
                     platform: 'binary_sensor',
                     unique_id: '$deviceid-fridge_door_open',
-                    name: 'Fridge door open',
+                    name: 'fridgeDoorOpen',
                     icon: 'mdi:fridge-outline',
                     device_class: 'door',
                     state_topic: '$this/fridge_door_open',
@@ -374,7 +374,7 @@ export default class Device extends AABBDevice {
                 freezer_door_open: {
                     platform: 'binary_sensor',
                     unique_id: '$deviceid-freezer_door_open',
-                    name: 'Freezer door open',
+                    name: 'freezerDoorOpen',
                     icon: 'mdi:fridge-industrial-outline',
                     device_class: 'door',
                     state_topic: '$this/freezer_door_open',

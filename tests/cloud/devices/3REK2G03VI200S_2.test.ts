@@ -122,7 +122,9 @@ describe(MODEL_ID, () => {
         const { ha } = makeDevice()
         const components = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
         assert.deepEqual(Object.keys(components).sort(), [
+            // Withdrawal stub for the pre-2026-09-23 name - see the component's own comment.
             'any_door_open',
+            'at_least_one_door_open',
             'bottom_compartment',
             'energy_day',
             'energy_hour',
@@ -187,7 +189,7 @@ describe(MODEL_ID, () => {
         assert.equal(ha.devices[DEVICE_ID].properties.bottom_compartment, '맛지킴 김치 (중)')
         assert.equal(ha.devices[DEVICE_ID].properties.one_touch_deodorize, 'OFF')
         assert.equal(ha.devices[DEVICE_ID].properties.top_door_open, 'OFF')
-        assert.equal(ha.devices[DEVICE_ID].properties.any_door_open, 'OFF')
+        assert.equal(ha.devices[DEVICE_ID].properties.at_least_one_door_open, 'OFF')
     })
 
     test("start() sends the query frame once, byte for byte, and never again - see the file header's note on QUERY_FRAME", (t) => {
@@ -231,15 +233,15 @@ describe(MODEL_ID, () => {
 
         thinq.emit('data', TOP_DOOR_OPEN)
         assert.equal(ha.devices[DEVICE_ID].properties.top_door_open, 'ON')
-        assert.equal(ha.devices[DEVICE_ID].properties.any_door_open, 'ON')
+        assert.equal(ha.devices[DEVICE_ID].properties.at_least_one_door_open, 'ON')
 
         thinq.emit('data', TOP_DOOR_CLOSE)
         assert.equal(ha.devices[DEVICE_ID].properties.top_door_open, 'OFF')
-        assert.equal(ha.devices[DEVICE_ID].properties.any_door_open, 'OFF')
+        assert.equal(ha.devices[DEVICE_ID].properties.at_least_one_door_open, 'OFF')
 
         thinq.emit('data', MIDDLE_DOOR_OPEN)
         assert.equal(ha.devices[DEVICE_ID].properties.top_door_open, 'OFF', '중칸 has no bit of its own - unaffected')
-        assert.equal(ha.devices[DEVICE_ID].properties.any_door_open, 'ON')
+        assert.equal(ha.devices[DEVICE_ID].properties.at_least_one_door_open, 'ON')
     })
 
     test("a real state push reflects a mode changed from the appliance's own physical panel (상칸 냉동 -> 유산균 김치+)", () => {
