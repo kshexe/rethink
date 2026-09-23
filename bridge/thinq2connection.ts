@@ -1,9 +1,7 @@
 import * as mqtt from 'mqtt'
-import type { ConnectionOptions } from 'node:tls'
 import { Thinq2Device } from './thinqApi'
 import { TypedEmitter } from 'tiny-typed-emitter'
 import log from '@/util/logging'
-import { lookup } from './resolver'
 
 type ConnectionEvents = {
     ready: () => void
@@ -77,16 +75,13 @@ export class Connection extends TypedEmitter<ConnectionEvents> {
         super()
         const state = this.device.state!
         log('bridge', `${this.device.deviceId} connecting to ${state.mqttServer}`)
-        // mqtt.js passes the options on to tls.connect, but its typings don't list `lookup`
-        const options: mqtt.IClientOptions & Pick<ConnectionOptions, 'lookup'> = {
+        this.mqtt = mqtt.connect(state.mqttServer.replace('ssl', 'mqtts'), {
             ca: state.caCertificate,
             key: state.privateKey,
             cert: state.certificate,
             clientId: this.device.deviceId,
             reconnectPeriod: 0, // no auto-reconnect
-            lookup,
-        }
-        this.mqtt = mqtt.connect(state.mqttServer.replace('ssl', 'mqtts'), options)
+        })
 
         this.mqtt.on('message', (topic, message, packet) => {
             try {

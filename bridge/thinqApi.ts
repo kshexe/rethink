@@ -5,7 +5,6 @@ import { createCertificateRequest } from '@/util/pki'
 import fetch, { type RequestInit } from 'node-fetch'
 import { Metadata } from '@/cloud/thinq'
 import log from '@/util/logging'
-import { agent } from './resolver'
 
 export const IOT_BASE_URL = 'https://common.lgthinq.com'
 const GATEWAY_URL = 'https://route.lgthinq.com:46030/v1/service/application/gateway-uri'
@@ -28,7 +27,6 @@ export async function apiFetch<T = unknown>(url: string, options: RequestInit): 
     for (let i = 0; ; i++) {
         try {
             const resp = await fetch(url, {
-                agent,
                 ...options,
                 headers: {
                     ...(options.headers ?? {}),
@@ -280,7 +278,7 @@ export class Client {
         const { modelJsonUri } = await apiFetch<ModelJsonResponse>(url.toString(), { headers: this.headers })
 
         try {
-            const resp = await fetch(modelJsonUri, { agent })
+            const resp = await fetch(modelJsonUri)
             if (!resp.ok) throw new Error(`Can't download the modelJSON: HTTP ${resp.status}`)
 
             return await resp.text()
