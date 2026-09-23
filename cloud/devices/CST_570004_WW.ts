@@ -1177,6 +1177,19 @@ export default class Device extends TLVDevice {
      * Entity names follow this model's own modelJSON (fetched via rethink's bridge mode - LG's
      * own field-name schema): air_clean matches airState.wMode.airClean, and power_save matches
      * airState.powerSave.basic - not "energySave", which does not appear anywhere in the schema.
+     *
+     * The display `name` on both this pass and the 2026-09-23 one below follows the same policy
+     * FX___S.ts/RD20_S.ts's own 2026-09-22/23 renames use: literal modelJSON spelling
+     * (`autoDry`), not a human-friendly label - the keys themselves stay as they already were
+     * (`autodry`/`autodry_setting`/`autodryremain`, no underscore inserted at the camelCase word
+     * boundary) since nothing about them was actually wrong, just the display text.
+     *
+     * `sleep_time` (0x21a, decoded locally off a TLV tag) was checked against this same modelJSON
+     * and NOT renamed: the closest match, `airState.reservation.sleepTime`, is a 1-7 *hour*
+     * cloud-side schedule ("취침예약") - the same family of feature already confirmed unusable
+     * through the bridge (see the AC 예약 note in rethink-migration-status). Different unit,
+     * different mechanism, almost certainly a different feature that happens to share a name -
+     * left alone rather than assumed to match.
      */
     addFeatureEntities(config: ClimateConfig) {
         if (this.hasAirPurify()) {
@@ -1230,7 +1243,7 @@ export default class Device extends TLVDevice {
                 config,
                 'autodry_setting',
                 TAG_AUTO_DRY,
-                'Auto dry',
+                'autoDry',
                 'mdi:hair-dryer',
                 this.autoDryLevels,
             )
@@ -1251,7 +1264,7 @@ export default class Device extends TLVDevice {
             config['components']['autodry'] = allowExtendedType({
                 platform: 'binary_sensor',
                 unique_id: '$deviceid-autodry',
-                name: 'Auto dry',
+                name: 'autoDry',
                 icon: 'mdi:hair-dryer',
                 entity_category: 'diagnostic',
             })
