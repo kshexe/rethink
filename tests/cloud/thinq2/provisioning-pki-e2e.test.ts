@@ -28,13 +28,15 @@ const DEVICE_SUBJECT = 'CN=*.clip.com, O=LGE, C=KR'
 const BOOT_TIMEOUT_MS = 5_000
 
 // This fork has no thinq1 support at all (see bridge/index.ts) - dropped from the upstream
-// version of this suite, along with the ports and test that exercised it.
-type Ports = { https: number; mqtts: number; mqtt: number; management: number }
+// version of this suite, along with the ports and test that exercised it. The plain-TCP MQTT
+// port is gone too (see util/config.ts) - never exposed by the add-on's own port mapping, so
+// nothing could ever reach it from outside the container.
+type Ports = { https: number; mqtts: number; management: number }
 
 /** Bind ephemeral ports, note which ones we got, and hand them over. */
 async function reservePorts(): Promise<Ports> {
     const servers = await Promise.all(
-        Array.from({ length: 4 }, () => {
+        Array.from({ length: 3 }, () => {
             return new Promise<net.Server>((resolve, reject) => {
                 const server = net.createServer()
                 server.on('error', reject)
@@ -42,9 +44,9 @@ async function reservePorts(): Promise<Ports> {
             })
         }),
     )
-    const [https, mqtts, mqtt, management] = servers.map((server) => (server.address() as net.AddressInfo).port)
+    const [https, mqtts, management] = servers.map((server) => (server.address() as net.AddressInfo).port)
     await Promise.all(servers.map((server) => new Promise((done) => server.close(done))))
-    return { https, mqtts, mqtt, management }
+    return { https, mqtts, management }
 }
 
 function request(
@@ -157,7 +159,6 @@ class Instance {
                 // the bound port, so the two have to match here regardless.
                 https_port: { bind: ports.https, advertise: ports.https, address: '127.0.0.1' },
                 mqtts_port: { bind: ports.mqtts, advertise: ports.mqtts, address: '127.0.0.1' },
-                mqtt_port: { bind: ports.mqtt, advertise: ports.mqtt, address: '127.0.0.1' },
                 management_port: { bind: ports.management, advertise: ports.management, address: '127.0.0.1' },
                 log: ['status'],
             }),

@@ -107,14 +107,6 @@ function t2setup(manager: DeviceManager) {
             config.mqtts_port.bind,
             config.mqtts_port.address,
         )
-
-        // Optional plain-TCP MQTT, for connecting a local test client to the broker without a TLS
-        // handshake - real ThinQ2 appliances only ever speak MQTTS (mqtts_port above).
-        if (config.mqtt_port)
-            net.createServer({}, withKeepalive(broker.accept.bind(broker))).listen(
-                config.mqtt_port.bind,
-                config.mqtt_port.address,
-            )
     }
 
     const acceptor = new T2Acceptor(broker)

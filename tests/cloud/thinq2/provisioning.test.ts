@@ -27,7 +27,6 @@ function makeConfig(overrides: Partial<RawConfig> = {}) {
         ca_cert_file: 'ca.cert',
         https_port: 443,
         mqtts_port: 8883,
-        mqtt_port: 1884,
         ...overrides,
     })
 }
