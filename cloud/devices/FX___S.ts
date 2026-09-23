@@ -1130,7 +1130,7 @@ export default class Device extends AABBDevice {
                     unique_id: '$deviceid-drumlight-auto-on',
                     state_topic: '$this/drumlight_auto_on',
                     command_topic: '$this/drumlight_auto_on/set',
-                    name: 'Drum light auto-on',
+                    name: 'drumlightAutoOn',
                     icon: 'mdi:lightbulb-auto-outline',
                     entity_category: 'config',
                 },
