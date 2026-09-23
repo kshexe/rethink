@@ -1,5 +1,5 @@
 import { Device as Thinq2Device } from '../thinq2/device'
-import { type Connection, type DeviceDiscovery } from '../homeassistant'
+import { type ComponentInfo, type Connection, type DeviceDiscovery } from '../homeassistant'
 import { type Metadata } from '../thinq'
 import { allowExtendedType } from '@/util/casting'
 import HADevice from './base'
@@ -254,7 +254,7 @@ export default class Device extends AABBDevice {
                     platform: 'binary_sensor',
                     unique_id: '$deviceid-steam',
                     state_topic: '$this/steam',
-                    name: 'Steam',
+                    name: 'steam',
                     icon: 'mdi:kettle-steam',
                 },
                 intensive_wash_top: {
@@ -271,50 +271,71 @@ export default class Device extends AABBDevice {
                     name: 'Intensive wash (bottom rack)',
                     icon: 'mdi:tray-arrow-down',
                 },
-                high_temp_sterilize: {
+                // Renamed from `high_temp_sterilize` (2026-09-23) - modelJSON's real field is
+                // `highTemp`, confirmed via `GET /bridge/<id>/modeljson`'s `Monitoring.protocol`
+                // table (the authoritative field-name list this fork had not actually checked this
+                // key against before). "Sterilize" was this handler's own gloss on the bit, not
+                // part of the field's real name.
+                high_temp: {
                     platform: 'binary_sensor',
-                    unique_id: '$deviceid-high_temp_sterilize',
-                    state_topic: '$this/high_temp_sterilize',
-                    name: 'High-temp sterilize',
+                    unique_id: '$deviceid-high-temp',
+                    state_topic: '$this/high_temp',
+                    name: 'highTemp',
                     icon: 'mdi:thermometer-high',
                 },
+                high_temp_sterilize: { platform: 'binary_sensor' } as ComponentInfo,
                 extra_rinse: {
                     platform: 'binary_sensor',
                     unique_id: '$deviceid-extra_rinse',
                     state_topic: '$this/extra_rinse',
-                    name: 'Extra rinse',
+                    name: 'extraRinse',
                     icon: 'mdi:water-check',
                 },
-                hot_air_dry_minutes: {
+                // Renamed from `hot_air_dry_minutes` (2026-09-23) - modelJSON's real field is
+                // `heatDry`, same source as high_temp above. Still publishes the same
+                // DRY_TIER_MINUTES-decoded minutes number; only the name changed.
+                heat_dry: {
                     platform: 'sensor',
-                    unique_id: '$deviceid-hot_air_dry_minutes',
-                    state_topic: '$this/hot_air_dry_minutes',
-                    name: 'Hot air dry',
+                    unique_id: '$deviceid-heat-dry',
+                    state_topic: '$this/heat_dry',
+                    name: 'heatDry',
                     icon: 'mdi:air-filter',
                     device_class: 'duration',
                     unit_of_measurement: 'min',
                 },
+                hot_air_dry_minutes: { platform: 'sensor' } as ComponentInfo,
                 // See the file header's SETTINGS BITFIELD WRITE section for all six below. Only
                 // writable while the appliance is powered on - confirmed by the app itself greying
                 // these out while off.
-                end_melody: {
+                //
+                // Renamed 2026-09-23 against the same `Monitoring.protocol` table: `end_melody`
+                // was invented for this handler and never checked - modelJSON's real field is
+                // `endAlarmSound`. `air_filter_reminder`'s real field is `airFilter` (no
+                // "Reminder"). `time_display`'s real field is `timeIndicator`. `auto_select` and
+                // `cool_dry` (below) already matched (`autoSelect`/`coolDry`) - only their display
+                // names needed the same literal-spelling treatment. `wash_complete_light` does not
+                // appear anywhere in the modelJSON text under any spelling tried - left alone,
+                // still an invented name, now known to be unconfirmed rather than assumed correct.
+                end_alarm_sound: {
                     platform: 'switch',
-                    unique_id: '$deviceid-end_melody',
-                    state_topic: '$this/end_melody',
-                    command_topic: '$this/end_melody/set',
-                    name: 'End melody',
+                    unique_id: '$deviceid-end-alarm-sound',
+                    state_topic: '$this/end_alarm_sound',
+                    command_topic: '$this/end_alarm_sound/set',
+                    name: 'endAlarmSound',
                     icon: 'mdi:bell-ring-outline',
                     entity_category: 'config',
                 },
-                air_filter_reminder: {
+                end_melody: { platform: 'switch' } as ComponentInfo,
+                air_filter: {
                     platform: 'switch',
-                    unique_id: '$deviceid-air_filter_reminder',
-                    state_topic: '$this/air_filter_reminder',
-                    command_topic: '$this/air_filter_reminder/set',
-                    name: 'Air filter reminder',
+                    unique_id: '$deviceid-air-filter',
+                    state_topic: '$this/air_filter',
+                    command_topic: '$this/air_filter/set',
+                    name: 'airFilter',
                     icon: 'mdi:air-filter',
                     entity_category: 'config',
                 },
+                air_filter_reminder: { platform: 'switch' } as ComponentInfo,
                 wash_complete_light: {
                     platform: 'switch',
                     unique_id: '$deviceid-wash_complete_light',
@@ -324,21 +345,22 @@ export default class Device extends AABBDevice {
                     icon: 'mdi:led-on',
                     entity_category: 'config',
                 },
-                time_display: {
+                time_indicator: {
                     platform: 'switch',
-                    unique_id: '$deviceid-time_display',
-                    state_topic: '$this/time_display',
-                    command_topic: '$this/time_display/set',
-                    name: 'Front time display',
+                    unique_id: '$deviceid-time-indicator',
+                    state_topic: '$this/time_indicator',
+                    command_topic: '$this/time_indicator/set',
+                    name: 'timeIndicator',
                     icon: 'mdi:clock-outline',
                     entity_category: 'config',
                 },
+                time_display: { platform: 'switch' } as ComponentInfo,
                 auto_select: {
                     platform: 'switch',
                     unique_id: '$deviceid-auto_select',
                     state_topic: '$this/auto_select',
                     command_topic: '$this/auto_select/set',
-                    name: 'Auto select',
+                    name: 'autoSelect',
                     icon: 'mdi:auto-fix',
                     entity_category: 'config',
                 },
@@ -347,7 +369,7 @@ export default class Device extends AABBDevice {
                     unique_id: '$deviceid-cool_dry',
                     state_topic: '$this/cool_dry',
                     command_topic: '$this/cool_dry/set',
-                    name: 'Cool dry (storage)',
+                    name: 'coolDry',
                     icon: 'mdi:snowflake-melt',
                     entity_category: 'config',
                 },
@@ -378,14 +400,14 @@ export default class Device extends AABBDevice {
                 this.publishProperty('power', on ? 'ON' : 'OFF')
                 return
             }
-            case 'end_melody':
-                return this.setSetting('end_melody', 'endMelody', mqttValue === 'ON')
-            case 'air_filter_reminder':
-                return this.setSetting('air_filter_reminder', 'airFilterReminder', mqttValue === 'ON')
+            case 'end_alarm_sound':
+                return this.setSetting('end_alarm_sound', 'endAlarmSound', mqttValue === 'ON')
+            case 'air_filter':
+                return this.setSetting('air_filter', 'airFilter', mqttValue === 'ON')
             case 'wash_complete_light':
                 return this.setSetting('wash_complete_light', 'washCompleteLight', mqttValue === 'ON')
-            case 'time_display':
-                return this.setSetting('time_display', 'timeDisplay', mqttValue === 'ON')
+            case 'time_indicator':
+                return this.setSetting('time_indicator', 'timeIndicator', mqttValue === 'ON')
             case 'auto_select':
                 return this.setSetting('auto_select', 'autoSelect', mqttValue === 'ON')
             case 'cool_dry':
@@ -403,7 +425,7 @@ export default class Device extends AABBDevice {
      *  to keep this in step with `power`'s own optimistic publish). */
     private setSetting(
         prop: string,
-        field: 'endMelody' | 'airFilterReminder' | 'washCompleteLight' | 'timeDisplay' | 'autoSelect' | 'coolDry',
+        field: 'endAlarmSound' | 'airFilter' | 'washCompleteLight' | 'timeIndicator' | 'autoSelect' | 'coolDry',
         on: boolean,
     ) {
         const record = this.lastRecord
@@ -418,20 +440,20 @@ export default class Device extends AABBDevice {
         const current = {
             autoSelect: (settingsA & SETTINGS_A_AUTO_SELECT) !== 0,
             washCompleteLight: (settingsA & SETTINGS_A_WASH_COMPLETE_LIGHT) !== 0,
-            timeDisplay: (dry & DRY_TIME_DISPLAY_BIT) !== 0,
+            timeIndicator: (dry & DRY_TIME_DISPLAY_BIT) !== 0,
             coolDry: (settingsB & SETTINGS_B_COOL_DRY) !== 0,
-            endMelody: (settingsB & SETTINGS_B_END_MELODY) !== 0,
-            airFilterReminder: (settingsB & SETTINGS_B_AIR_FILTER_REMINDER) !== 0,
+            endAlarmSound: (settingsB & SETTINGS_B_END_MELODY) !== 0,
+            airFilter: (settingsB & SETTINGS_B_AIR_FILTER_REMINDER) !== 0,
         }
         current[field] = on
 
         const byte4 =
             (current.washCompleteLight ? WRITE_WASH_COMPLETE_LIGHT : 0) |
-            (current.timeDisplay ? WRITE_TIME_DISPLAY : 0) |
+            (current.timeIndicator ? WRITE_TIME_DISPLAY : 0) |
             (current.autoSelect ? WRITE_AUTO_SELECT : 0) |
-            (current.endMelody ? WRITE_END_MELODY : 0) |
+            (current.endAlarmSound ? WRITE_END_MELODY : 0) |
             (current.coolDry ? WRITE_COOL_DRY : 0)
-        const byte5 = (current.airFilterReminder ? WRITE_AIR_FILTER_REMINDER : 0) | WRITE_BYTE5_UNKNOWN_BIT
+        const byte5 = (current.airFilter ? WRITE_AIR_FILTER_REMINDER : 0) | WRITE_BYTE5_UNKNOWN_BIT
 
         this.send(buildSettingsWrite(byte4, byte5))
         this.publishProperty(prop, on ? 'ON' : 'OFF')
@@ -456,12 +478,12 @@ export default class Device extends AABBDevice {
         this.publishProperty('steam', opts & OPT_STEAM ? 'ON' : 'OFF')
         this.publishProperty('intensive_wash_top', opts & OPT_INTENSIVE_TOP ? 'ON' : 'OFF')
         this.publishProperty('intensive_wash_bottom', opts & OPT_INTENSIVE_BOTTOM ? 'ON' : 'OFF')
-        this.publishProperty('high_temp_sterilize', opts & OPT_HIGH_TEMP_STERILIZE ? 'ON' : 'OFF')
+        this.publishProperty('high_temp', opts & OPT_HIGH_TEMP_STERILIZE ? 'ON' : 'OFF')
 
         const dry = record[REC_DRY]
         this.publishProperty('extra_rinse', dry & DRY_EXTRA_RINSE_BIT ? 'ON' : 'OFF')
-        this.publishProperty('hot_air_dry_minutes', DRY_TIER_MINUTES[(dry >> 4) & 0x03])
-        this.publishProperty('time_display', dry & DRY_TIME_DISPLAY_BIT ? 'ON' : 'OFF')
+        this.publishProperty('heat_dry', DRY_TIER_MINUTES[(dry >> 4) & 0x03])
+        this.publishProperty('time_indicator', dry & DRY_TIME_DISPLAY_BIT ? 'ON' : 'OFF')
 
         const settingsA = record[REC_SETTINGS_A]
         this.publishProperty('auto_select', settingsA & SETTINGS_A_AUTO_SELECT ? 'ON' : 'OFF')
@@ -469,8 +491,8 @@ export default class Device extends AABBDevice {
 
         const settingsB = record[REC_SETTINGS_B]
         this.publishProperty('cool_dry', settingsB & SETTINGS_B_COOL_DRY ? 'ON' : 'OFF')
-        this.publishProperty('end_melody', settingsB & SETTINGS_B_END_MELODY ? 'ON' : 'OFF')
-        this.publishProperty('air_filter_reminder', settingsB & SETTINGS_B_AIR_FILTER_REMINDER ? 'ON' : 'OFF')
+        this.publishProperty('end_alarm_sound', settingsB & SETTINGS_B_END_MELODY ? 'ON' : 'OFF')
+        this.publishProperty('air_filter', settingsB & SETTINGS_B_AIR_FILTER_REMINDER ? 'ON' : 'OFF')
     }
 
     processAABB(buf: Buffer) {

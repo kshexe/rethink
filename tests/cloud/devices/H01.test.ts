@@ -78,22 +78,28 @@ describe(MODEL_ID, () => {
             'steam',
             'intensive_wash_top',
             'intensive_wash_bottom',
+            'high_temp',
+            // Withdrawal stub for the pre-2026-09-23 name - see the component's own comment.
             'high_temp_sterilize',
             'extra_rinse',
+            'heat_dry',
             'hot_air_dry_minutes',
+            'end_alarm_sound',
             'end_melody',
+            'air_filter',
             'air_filter_reminder',
             'wash_complete_light',
+            'time_indicator',
             'time_display',
             'auto_select',
             'cool_dry',
         ])
         const writable = [
             'power',
-            'end_melody',
-            'air_filter_reminder',
+            'end_alarm_sound',
+            'air_filter',
             'wash_complete_light',
-            'time_display',
+            'time_indicator',
             'auto_select',
             'cool_dry',
         ]
@@ -144,16 +150,16 @@ describe(MODEL_ID, () => {
         assert.equal(props.steam, 'OFF')
         assert.equal(props.intensive_wash_top, 'OFF')
         assert.equal(props.intensive_wash_bottom, 'OFF')
-        assert.equal(props.high_temp_sterilize, 'OFF')
+        assert.equal(props.high_temp, 'OFF')
         assert.equal(props.extra_rinse, 'OFF')
-        assert.equal(props.hot_air_dry_minutes, 0)
+        assert.equal(props.heat_dry, 0)
         // See the file header's SETTINGS BITFIELD WRITE section - this fixture's baseline state.
         assert.equal(props.auto_select, 'ON')
         assert.equal(props.wash_complete_light, 'ON')
-        assert.equal(props.time_display, 'ON')
+        assert.equal(props.time_indicator, 'ON')
         assert.equal(props.cool_dry, 'ON')
-        assert.equal(props.end_melody, 'OFF')
-        assert.equal(props.air_filter_reminder, 'ON')
+        assert.equal(props.end_alarm_sound, 'OFF')
+        assert.equal(props.air_filter, 'ON')
     })
 
     test('a real 0xEB query response decodes the same way as an 0xEC record', () => {
@@ -168,13 +174,13 @@ describe(MODEL_ID, () => {
     describe('the six settings toggles', () => {
         // Each real capture below is the frame right after turning that one control off, with
         // every other control left at the STATUS_EC_STANDARD_55MIN baseline (auto_select/
-        // wash_complete_light/time_display/cool_dry/air_filter_reminder all ON, end_melody OFF) -
+        // wash_complete_light/time_indicator/cool_dry/air_filter all ON, end_alarm_sound OFF) -
         // see H01.ts's file header SETTINGS BITFIELD WRITE section.
         const cases: [string, ReturnType<typeof buf>, string][] = [
-            ['end_melody', SETTINGS_END_MELODY_ON, 'ON'],
-            ['air_filter_reminder', SETTINGS_AIR_FILTER_OFF, 'OFF'],
+            ['end_alarm_sound', SETTINGS_END_MELODY_ON, 'ON'],
+            ['air_filter', SETTINGS_AIR_FILTER_OFF, 'OFF'],
             ['wash_complete_light', SETTINGS_WASH_COMPLETE_LIGHT_OFF, 'OFF'],
-            ['time_display', SETTINGS_TIME_DISPLAY_OFF, 'OFF'],
+            ['time_indicator', SETTINGS_TIME_DISPLAY_OFF, 'OFF'],
             ['auto_select', SETTINGS_AUTO_SELECT_OFF, 'OFF'],
             ['cool_dry', SETTINGS_COOL_DRY_OFF, 'OFF'],
         ]
@@ -198,14 +204,14 @@ describe(MODEL_ID, () => {
             // (byte4=0xb8/byte5=0x82) exactly, whichever one control changes for that write - see
             // H01.ts's file header.
             const writeCases: [string, string, string][] = [
-                ['end_melody', 'ON', 'aa0ef0260000f882000000001dbb'],
-                ['end_melody', 'OFF', 'aa0ef0260000b882000000005dbb'],
-                ['air_filter_reminder', 'OFF', 'aa0ef0260000b8800000000053bb'],
-                ['air_filter_reminder', 'ON', 'aa0ef0260000b882000000005dbb'],
+                ['end_alarm_sound', 'ON', 'aa0ef0260000f882000000001dbb'],
+                ['end_alarm_sound', 'OFF', 'aa0ef0260000b882000000005dbb'],
+                ['air_filter', 'OFF', 'aa0ef0260000b8800000000053bb'],
+                ['air_filter', 'ON', 'aa0ef0260000b882000000005dbb'],
                 ['wash_complete_light', 'OFF', 'aa0ef0260000b0820000000055bb'],
                 ['wash_complete_light', 'ON', 'aa0ef0260000b882000000005dbb'],
-                ['time_display', 'OFF', 'aa0ef0260000a88200000000adbb'],
-                ['time_display', 'ON', 'aa0ef0260000b882000000005dbb'],
+                ['time_indicator', 'OFF', 'aa0ef0260000a88200000000adbb'],
+                ['time_indicator', 'ON', 'aa0ef0260000b882000000005dbb'],
                 ['auto_select', 'OFF', 'aa0ef0260000988200000000bdbb'],
                 ['auto_select', 'ON', 'aa0ef0260000b882000000005dbb'],
                 ['cool_dry', 'OFF', 'aa0ef0260000388200000000ddbb'],

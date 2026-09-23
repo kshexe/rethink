@@ -523,10 +523,13 @@ export default class Device extends AABBDevice {
                     state_topic: '$this/cook_time_seconds',
                     command_topic: '$this/cook_time_seconds/set',
                 },
+                // Named for modelJSON's own field (`Monitoring.protocol[].value: "CookTemperature_C"`,
+                // superSet `ovenState.LWOTargetTemperatureC`), confirmed 2026-09-23 via
+                // `GET /bridge/<id>/modeljson` - see the memory note this shipped with.
                 target_temperature: {
                     platform: 'number',
                     unique_id: '$deviceid-target_temperature',
-                    name: 'Target temperature',
+                    name: 'CookTemperature_C',
                     icon: 'mdi:thermometer',
                     device_class: 'temperature',
                     unit_of_measurement: '°C',
@@ -551,11 +554,13 @@ export default class Device extends AABBDevice {
                     name: 'Cancel',
                     icon: 'mdi:cancel',
                 },
+                // Named for modelJSON's own field (`value: "OvenState"`, superSet
+                // `ovenState.LWOState`) - see target_temperature's own comment above.
                 current_status: {
                     platform: 'sensor',
                     unique_id: '$deviceid-current_status',
                     state_topic: '$this/current_status',
-                    name: 'Status',
+                    name: 'OvenState',
                     icon: 'mdi:information-outline',
                 },
                 oven_temperature: {
