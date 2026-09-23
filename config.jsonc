@@ -32,11 +32,6 @@
   "https_port": 4433,
   "mqtts_port": 8886,
 
-  // optional plain HTTP alongside https_port, for running behind a reverse HTTPS/TLS proxy that
-  // terminates TLS itself - never used by a real ThinQ2 appliance, which always speaks TLS
-  // directly, so leave this unset for normal operation
-  // "http_port": 80,
-
   // useful for local testing & debugging, not used by Thinq2
   "mqtt_port": 1884,
 
