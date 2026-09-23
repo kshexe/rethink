@@ -4,6 +4,9 @@ export type RawConfig = {
     homeassistant: HAConfig
     ca_key_file: string
     ca_cert_file: string
+    /** What devices are told to trust in place of the builtin CA - see rethink-cloud.ts's own
+     *  loadRootCertificate(). Relative to the config file, same as ca_key_file/ca_cert_file. */
+    custom_root_cert_file?: string
     http_port?: Port | number
     https_port: Port | number
     mqtts_port: Port | number
@@ -26,6 +29,7 @@ export type Config = {
     homeassistant: HAConfig
     ca_key_file: string
     ca_cert_file: string
+    custom_root_cert_file?: string
     /** Optional plain HTTP listener alongside https_port, for running behind a reverse HTTPS/TLS
      *  proxy that terminates TLS itself - not used by real ThinQ2 appliances, which always speak
      *  TLS directly (upstream anszom/rethink#3ca8efa, closes anszom/rethink#174). */
