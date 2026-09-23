@@ -6,7 +6,9 @@ export type RawConfig = {
     ca_cert_file: string
     https_port: Port | number
     mqtts_port: Port | number
-    mqtt_port: Port | number
+    /** Optional plain-TCP MQTT listener alongside mqtts_port, for local testing without a TLS
+     *  handshake - real ThinQ2 appliances only ever speak MQTTS (mqtts_port). */
+    mqtt_port?: Port | number
     management_port?: Port | number
     mqtt?: boolean
     bridge?: {
@@ -26,7 +28,7 @@ export type Config = {
     ca_cert_file: string
     https_port: Port
     mqtts_port: Port
-    mqtt_port: Port
+    mqtt_port?: Port
     management_port?: Port
     mqtt: boolean
     bridge?: {

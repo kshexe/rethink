@@ -32,8 +32,9 @@
   "https_port": 4433,
   "mqtts_port": 8886,
 
-  // useful for local testing & debugging, not used by Thinq2
-  "mqtt_port": 1884,
+  // optional plain-TCP MQTT alongside mqtts_port, for connecting a local test client without a
+  // TLS handshake - never used by a real ThinQ2 appliance, which always speaks MQTTS
+  // "mqtt_port": 1884,
 
   // specify anything you like. Removing this parameter disables the management interface
   "management_port": 44401,

@@ -45,7 +45,6 @@ jq -n \
     ca_cert_file: "/data/ca.cert",
     https_port: 4433,
     mqtts_port: 8886,
-    mqtt_port: 1884,
     management_port: 44401,
     bridge: { storage_path: "/data/state" },
     log: ($logtopics | split(" ") | map(select(length > 0))),
