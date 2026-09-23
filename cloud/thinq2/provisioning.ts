@@ -1,6 +1,7 @@
 import { Router } from 'express'
-import { CA, Config } from '@/util/config'
-import { isPlausibleHostname, signCsr } from '@/util/pki'
+import { Config } from '@/util/config'
+import { CA } from '@/util/ca'
+import { isPlausibleHostname } from '@/util/sni'
 import log from '@/util/logging'
 import { ClipDeployMessage } from './clip'
 
@@ -24,7 +25,7 @@ export function advertisedHost(config: Config, requestedHost: string | undefined
 
     // An address would be stored by the appliance and pin it to one machine, and anything that is
     // not a hostname has no business on a command line or in a URL.
-    if (!isPlausibleHostname(requestedHost)) return config.hostname
+    if (requestedHost === undefined || !isPlausibleHostname(requestedHost)) return config.hostname
 
     return requestedHost
 }
@@ -50,7 +51,7 @@ export function routes(config: Config, ca: CA) {
         }
     })
 
-    router.post('/device/:deviceId/certificate', (req, res) => {
+    router.post('/device/:deviceId/certificate', async (req, res) => {
         // Whatever CSR the appliance sends is signed as it stands: the otp is not checked and the
         // subject is not tied to :deviceId. That is deliberate - this is the appliance's own local
         // cloud, and the CA it pins here is one we made for it. What is checked is that a CSR
@@ -64,14 +65,16 @@ export function routes(config: Config, ca: CA) {
         }
 
         try {
-            const certificatePem = signCsr({ certFile: config.ca_cert_file, keyFile: config.ca_key_file }, csr)
+            // 0x64 is what openssl made of the `-set_serial 0100` we used to pass (it reads
+            // unprefixed values as decimal). Every device gets the same serial, as before.
+            const certificatePem = await ca.signCertificateRequest(csr, '64')
 
             // Warning: we don't supply MQTT topics at this point. Maybe we should?
             // OTOH, the firmware seems to ignore it outright...
             res.json({ resultCode: '0000', result: { certificatePem } })
         } catch (err) {
             log('status', `Could not sign the CSR for ${req.params.deviceId}: ${err}`)
-            res.json({ resultCode: '9999' })
+            res.status(500).json({ resultCode: '9999', result: {} })
         }
     })
     return router

@@ -27,12 +27,14 @@ const HOSTNAME = 'localhost'
 const DEVICE_SUBJECT = 'CN=*.clip.com, O=LGE, C=KR'
 const BOOT_TIMEOUT_MS = 5_000
 
-type Ports = { https: number; mqtts: number; thinq1Https: number; thinq1: number; management: number }
+// This fork has no thinq1 support at all (see bridge/index.ts) - dropped from the upstream
+// version of this suite, along with the ports and test that exercised it.
+type Ports = { https: number; mqtts: number; mqtt: number; management: number }
 
 /** Bind ephemeral ports, note which ones we got, and hand them over. */
 async function reservePorts(): Promise<Ports> {
     const servers = await Promise.all(
-        Array.from({ length: 5 }, () => {
+        Array.from({ length: 4 }, () => {
             return new Promise<net.Server>((resolve, reject) => {
                 const server = net.createServer()
                 server.on('error', reject)
@@ -40,11 +42,9 @@ async function reservePorts(): Promise<Ports> {
             })
         }),
     )
-    const [https, mqtts, thinq1Https, thinq1, management] = servers.map(
-        (server) => (server.address() as net.AddressInfo).port,
-    )
+    const [https, mqtts, mqtt, management] = servers.map((server) => (server.address() as net.AddressInfo).port)
     await Promise.all(servers.map((server) => new Promise((done) => server.close(done))))
-    return { https, mqtts, thinq1Https, thinq1, management }
+    return { https, mqtts, mqtt, management }
 }
 
 function request(
@@ -151,11 +151,14 @@ class Instance {
                 },
                 ca_key_file: 'ca.key',
                 ca_cert_file: 'ca.cert',
-                https_port: { bind: ports.https, address: '127.0.0.1' },
-                mqtts_port: { bind: ports.mqtts, address: '127.0.0.1' },
-                thinq1_https_port: { bind: ports.thinq1Https, address: '127.0.0.1' },
-                thinq1_port: { bind: ports.thinq1, address: '127.0.0.1' },
-                management_port: { bind: ports.management, address: '127.0.0.1' },
+                // `advertise` explicit and equal to `bind`, not left to default: normalize()
+                // only derives one from the other when the raw value is a plain number, not
+                // when it is already a {bind, address} object - the test connects straight to
+                // the bound port, so the two have to match here regardless.
+                https_port: { bind: ports.https, advertise: ports.https, address: '127.0.0.1' },
+                mqtts_port: { bind: ports.mqtts, advertise: ports.mqtts, address: '127.0.0.1' },
+                mqtt_port: { bind: ports.mqtt, advertise: ports.mqtt, address: '127.0.0.1' },
+                management_port: { bind: ports.management, advertise: ports.management, address: '127.0.0.1' },
                 log: ['status'],
             }),
         )
@@ -258,9 +261,11 @@ describe('thinq2 provisioning PKI', () => {
 
     test('/route/certificate hands out a CA certificate for the configured hostname', () => {
         assert.equal(ca.ca, true)
-        assert.equal(ca.subject, `CN=${HOSTNAME}`)
+        // Not HOSTNAME: the CA is a fixed name (see util/pki.ts's CA_COMMON_NAME), not the
+        // configured hostname - it no longer doubles as a server certificate, so its subject
+        // does not have to match anything a client checks a hostname against.
+        assert.equal(ca.subject, 'CN=Rethink CA')
         assert.equal(ca.issuer, ca.subject)
-        assert.equal(ca.checkHost(HOSTNAME), HOSTNAME)
         assert.equal(ca.verify(ca.publicKey), true, 'the CA must be self-signed')
 
         const lifetimeDays = (Date.parse(ca.validTo) - Date.parse(ca.validFrom)) / 86_400_000
@@ -284,16 +289,11 @@ describe('thinq2 provisioning PKI', () => {
 
             assert.equal(presented.checkHost(HOSTNAME), HOSTNAME)
             assert.equal(presented.verify(ca.publicKey), true, 'presented certificate is not signed by the CA')
-            assert.equal(presented.fingerprint256, ca.fingerprint256)
+            // Not equal to the CA's own fingerprint: this is deliberately a distinct leaf, not
+            // the CA served directly - see util/sni.ts's file header for why.
+            assert.notEqual(presented.fingerprint256, ca.fingerprint256)
         })
     }
-
-    test('the thinq1 ports present the same CA-backed certificate', async () => {
-        for (const port of [ports.thinq1Https, ports.thinq1]) {
-            const presented = await peerCertificateOf(HOSTNAME, port, { ca: [caPem], rejectUnauthorized: true })
-            assert.equal(presented.fingerprint256, ca.fingerprint256)
-        }
-    })
 
     test('a strict client can re-fetch the CA over a verified connection', async () => {
         const result = await getResult<{ certificatePem: string }>(

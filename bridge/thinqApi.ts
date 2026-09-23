@@ -1,7 +1,7 @@
 import { createHash, publicEncrypt, randomBytes } from 'node:crypto'
 import * as OAuth2 from './oauth2'
 import { RSA_PKCS1_PADDING } from 'node:constants'
-import { generateKeyAndCsr } from '@/util/pki'
+import { createCertificateRequest } from '@/util/pki'
 import fetch, { type RequestInit } from 'node-fetch'
 import { Metadata } from '@/cloud/thinq'
 import log from '@/util/logging'
@@ -399,7 +399,7 @@ export class Thinq2Device implements Device {
 
         console.log('Trying to generate a certificate with otp', otpResponse.otp)
 
-        const { privateKey, publicKey, csr } = generateKeyAndCsr('/CN=*.clip.com/O=LGE/C=KR', 'ec')
+        const { privateKey, publicKey, csr } = await createCertificateRequest('CN=*.clip.com, O=LGE, C=KR', 'ec-p256')
 
         const ciphertext = publicEncrypt(
             { key: otpResponse.publicKey, padding: RSA_PKCS1_PADDING },

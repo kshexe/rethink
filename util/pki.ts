@@ -1,187 +1,186 @@
-import { spawnSync } from 'node:child_process'
-import { randomBytes } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { isIP } from 'node:net'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-
-// Every certificate rethink handles is made by shelling out to openssl. node:crypto can generate a
-// key and parse a certificate, but it cannot build a CSR or sign one, and a crypto library is a
-// heavier dependency than the openssl binary the Dockerfile already installs.
+// Certificate/key generation, done in-process instead of by spawning `openssl`.
 //
-// This module exists because the call sites that shell out - the CA, the appliance certificates the
-// provisioning route signs, the key a bridged appliance registers with, the monitor's AWS-IoT
-// subscription - each grew their own way of doing it, and disagreed on the parts that matter:
-// whether a failure is noticed at all, whether the serial is unique, whether a name reaches the
-// command line unchecked. They now share one implementation of each.
+// Everything here goes through @peculiar/x509, which builds the ASN.1 structures and
+// delegates the actual signing to node's WebCrypto. Node has no CSR or certificate
+// *issuance* API of its own (`crypto.X509Certificate` only parses), hence the library.
 //
-// Everything openssl reads or writes here is a file in a temporary directory. Two openssl habits
-// make that the only reliable option: `req` cannot take a key on stdin, and writing two outputs to
-// stdout fails when stdout is a pipe - which is exactly what node hands a child process. The
-// previous workaround was to wrap the call in `sh -c 'cat | openssl ... /dev/stdin'`, which also
-// meant a shell had to exist in the image.
+// On node 16/17 there is no global `crypto`, so the provider has to be set explicitly;
+// without this every call below throws.
 
-/** Runs openssl, reporting whatever it wrote to stderr rather than leaving a failure silent. */
-export function openssl(args: string[]) {
-    const result = spawnSync('openssl', args)
-    if (result.error) throw new Error(`openssl ${args[0]} could not be run: ${result.error.message}`)
-    if (result.status !== 0)
-        throw new Error(
-            `openssl ${args[0]} failed: ${result.stderr?.toString('utf-8').trim() || `exit ${result.status}`}`,
-        )
+import * as x509 from '@peculiar/x509'
+import { createPrivateKey, webcrypto } from 'node:crypto'
+
+x509.cryptoProvider.set(webcrypto)
+
+const DAY_MS = 24 * 60 * 60 * 1000
+
+const RSA_SHA256 = { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' } as const
+const EC_SHA256 = { name: 'ECDSA', hash: 'SHA-256' } as const
+
+export type KeyAlgorithm = 'rsa-2048' | 'rsa-4096' | 'ec-p256'
+
+export type KeyPair = { privateKey: string; publicKey: string }
+export type CertificateRequest = KeyPair & { csr: string }
+
+/** A private key and the certificate for it, both PEM, as node's tls wants them. */
+export type Certificate = { key: string; cert: string }
+
+/**
+ * A CA in the form the signing calls need it: the subject and key material parsed out of
+ * its PEMs. Building one costs an RSA key import, so callers keep it rather than pass PEMs.
+ */
+export type Issuer = {
+    subject: string
+    publicKey: x509.PublicKey
+    signingKey: webcrypto.CryptoKey
 }
 
-function inTempDir<T>(fn: (dir: string) => T): T {
-    const dir = mkdtempSync(join(tmpdir(), 'rethink-pki-'))
-    try {
-        return fn(dir)
-    } finally {
-        rmSync(dir, { recursive: true, force: true })
+function webcryptoAlgorithm(algorithm: KeyAlgorithm) {
+    if (algorithm === 'ec-p256') return { ...EC_SHA256, namedCurve: 'P-256' }
+    return {
+        ...RSA_SHA256,
+        modulusLength: algorithm === 'rsa-2048' ? 2048 : 4096,
+        publicExponent: new Uint8Array([1, 0, 1]),
     }
 }
 
-const HOSTNAME = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/i
-
-/**
- * Whether a name may be used as a certificate subject or advertised to an appliance.
- *
- * Addresses are refused along with everything else that is not a hostname. An address in a
- * certificate has to be carried as an IP: subjectAltName - a DNS: one is simply not checked against
- * it - and an address advertised to an appliance would be stored and pin it to one machine.
- */
-export function isPlausibleHostname(name: string | undefined): name is string {
-    if (!name || name.length > 253) return false
-    if (isIP(name)) return false
-    return HOSTNAME.test(name)
+// x509.PemConverter omits the trailing newline that openssl emits; keep it, both
+// because the files on disk are nicer that way and because the ThinQ cloud is fed
+// these PEMs verbatim.
+function pem(der: ArrayBuffer, label: string): string {
+    return x509.PemConverter.encode(der, label) + '\n'
 }
 
-/** The CA on disk. openssl needs both as files, so they are kept as paths rather than as PEM. */
-export type CaFiles = { certFile: string; keyFile: string }
+/** A 20-byte serial, as hex, the same shape `openssl req -x509` used to pick. */
+function randomSerial(): string {
+    return Buffer.from(webcrypto.getRandomValues(new Uint8Array(20))).toString('hex')
+}
 
-/** A private key and the certificate that goes with it, shaped for tls.createServer. */
-export type KeyAndCert = { key: string; cert: string }
+async function generateKeyPair(algorithm: KeyAlgorithm): Promise<webcrypto.CryptoKeyPair> {
+    return (await webcrypto.subtle.generateKey(webcryptoAlgorithm(algorithm), true, [
+        'sign',
+        'verify',
+    ])) as webcrypto.CryptoKeyPair
+}
 
-export type KeyAndCsr = { privateKey: string; publicKey: string; csr: string }
+async function exportKeyPair(keys: webcrypto.CryptoKeyPair): Promise<KeyPair> {
+    return {
+        // PKCS#8, i.e. `BEGIN PRIVATE KEY`. openssl's `ecparam -genkey` produced SEC1
+        // (`BEGIN EC PRIVATE KEY`) instead; node's tls accepts either, and keys stored
+        // by older versions keep working.
+        privateKey: pem(await webcrypto.subtle.exportKey('pkcs8', keys.privateKey), 'PRIVATE KEY'),
+        publicKey: pem(await webcrypto.subtle.exportKey('spki', keys.publicKey), 'PUBLIC KEY'),
+    }
+}
+
+// Accepts any PEM form node can parse (PKCS#8, PKCS#1, SEC1) and hands WebCrypto the
+// PKCS#8 it insists on, so CA keys written by earlier openssl-based versions still load.
+async function importPrivateKey(keyPem: string, algorithm: KeyAlgorithm): Promise<webcrypto.CryptoKey> {
+    const pkcs8 = createPrivateKey(keyPem).export({ type: 'pkcs8', format: 'der' })
+    return webcrypto.subtle.importKey('pkcs8', pkcs8, webcryptoAlgorithm(algorithm), false, ['sign'])
+}
+
+export async function loadIssuer(ca: Certificate): Promise<Issuer> {
+    const certificate = new x509.X509Certificate(ca.cert)
+    return {
+        subject: certificate.subject,
+        publicKey: certificate.publicKey,
+        signingKey: await importPrivateKey(ca.key, 'rsa-4096'),
+    }
+}
+
+const CA_COMMON_NAME = 'Rethink CA'
 
 /**
- * A fresh key and a CSR for it. `ec` is what an appliance registration uses and `rsa` what the
- * AWS-IoT subscription and our own server certificates use; both are what the LG cloud accepted
- * from the code this replaced.
+ * A self-signed RSA-4096 CA. Mirrors what `openssl req -x509 -newkey rsa:4096 -nodes`
+ * used to emit: a CN-only subject, a random 20-byte serial, and the v3_ca extensions
+ * (no keyUsage — this certificate used to double as the TLS server certificate, and
+ * appliances provisioned back then still carry it as their trust anchor).
  */
-export function generateKeyAndCsr(subject: string, algorithm: 'ec' | 'rsa' = 'ec'): KeyAndCsr {
-    return inTempDir((dir) => {
-        const key = join(dir, 'key.pem')
-        const pub = join(dir, 'pub.pem')
-        const csr = join(dir, 'csr.pem')
-
-        if (algorithm === 'ec') openssl(['ecparam', '-name', 'prime256v1', '-genkey', '-noout', '-out', key])
-        else openssl(['genrsa', '-out', key, '2048'])
-
-        openssl(['req', '-new', '-key', key, '-subj', subject, '-out', csr])
-        openssl(['pkey', '-in', key, '-pubout', '-out', pub])
-
-        return {
-            privateKey: readFileSync(key, 'utf-8'),
-            publicKey: readFileSync(pub, 'utf-8'),
-            csr: readFileSync(csr, 'utf-8'),
-        }
+export async function createSelfSignedCA(days = 3650): Promise<Certificate> {
+    const keys = await generateKeyPair('rsa-4096')
+    const cert = await x509.X509CertificateGenerator.createSelfSigned({
+        serialNumber: randomSerial(),
+        name: `CN=${CA_COMMON_NAME}`,
+        notBefore: new Date(),
+        notAfter: new Date(Date.now() + days * DAY_MS),
+        signingAlgorithm: RSA_SHA256,
+        keys,
+        extensions: [
+            new x509.BasicConstraintsExtension(true, undefined, true),
+            await x509.SubjectKeyIdentifierExtension.create(keys.publicKey),
+            await x509.AuthorityKeyIdentifierExtension.create(keys.publicKey),
+        ],
     })
+
+    const { privateKey } = await exportKeyPair(keys)
+    return { key: privateKey, cert: cert.toString('pem') + '\n' }
 }
 
 /**
- * A serial no other certificate of ours will carry. Certificates from one issuer are identified by
- * their serial, so the fixed one this replaced meant every appliance held a certificate claiming to
- * be the same one. The top bit is cleared to keep the value positive.
- */
-function serialNumber() {
-    const bytes = randomBytes(16)
-    bytes[0] &= 0x7f
-    return '0x' + bytes.toString('hex')
-}
-
-export type SignOptions = {
-    days?: number
-    /** An openssl subjectAltName value, e.g. `DNS:rethink.lan`. See altNameFor(). */
-    subjectAltName?: string
-}
-
-/**
- * Signs a CSR with our CA.
+ * A TLS server certificate for `hostname`, with a fresh key, signed by the CA.
  *
- * Signing is `x509 -req` rather than `req -x509 -CA` on purpose: combining -x509 with -CA changes
- * what -key means between OpenSSL versions, while `x509 -req` behaves the same everywhere.
+ * The CA itself used to be served as the server certificate. Some appliances reject that
+ * (a certificate cannot be both the trust anchor and the leaf for them), and a leaf per
+ * name is also what lets us answer for whatever hostname a redirected appliance asks for.
  */
-export function signCsr(ca: CaFiles, csrPem: string, options: SignOptions = {}): string {
-    return inTempDir((dir) => {
-        const csr = join(dir, 'csr.pem')
-        const cert = join(dir, 'cert.pem')
-        writeFileSync(csr, csrPem)
+export async function createServerCertificate(hostname: string, issuer: Issuer, days = 3650): Promise<Certificate> {
+    const keys = await generateKeyPair('rsa-2048')
 
-        const args = [
-            'x509',
-            '-req',
-            '-in',
-            csr,
-            '-CA',
-            ca.certFile,
-            '-CAkey',
-            ca.keyFile,
-            '-set_serial',
-            serialNumber(),
-            '-days',
-            String(options.days ?? 3650),
-            '-out',
-            cert,
-        ]
-
-        if (options.subjectAltName) {
-            const ext = join(dir, 'ext.cnf')
-            writeFileSync(ext, `subjectAltName=${options.subjectAltName}\n`)
-            args.push('-extfile', ext)
-        }
-
-        openssl(args)
-        return readFileSync(cert, 'utf-8').replace(/\r/g, '')
+    const cert = await x509.X509CertificateGenerator.create({
+        serialNumber: randomSerial(),
+        subject: `CN=${hostname}`,
+        issuer: issuer.subject,
+        notBefore: new Date(),
+        notAfter: new Date(Date.now() + days * DAY_MS),
+        signingAlgorithm: RSA_SHA256,
+        publicKey: keys.publicKey,
+        signingKey: issuer.signingKey,
+        extensions: [
+            new x509.BasicConstraintsExtension(false, undefined, true),
+            new x509.KeyUsagesExtension(x509.KeyUsageFlags.digitalSignature | x509.KeyUsageFlags.keyEncipherment, true),
+            new x509.ExtendedKeyUsageExtension([x509.ExtendedKeyUsage.serverAuth]),
+            new x509.SubjectAlternativeNameExtension([{ type: 'dns', value: hostname }]),
+            await x509.SubjectKeyIdentifierExtension.create(keys.publicKey),
+            await x509.AuthorityKeyIdentifierExtension.create(issuer.publicKey),
+        ],
     })
+
+    const { privateKey } = await exportKeyPair(keys)
+    return { key: privateKey, cert: cert.toString('pem') + '\n' }
 }
 
-/** A subjectAltName for one name, of the type a client will actually check it against. */
-export function altNameFor(name: string) {
-    return isIP(name) ? `IP:${name}` : `DNS:${name}`
+/** A fresh key plus a PKCS#10 certificate request for it, all as PEM. */
+export async function createCertificateRequest(subject: string, algorithm: KeyAlgorithm): Promise<CertificateRequest> {
+    const keys = await generateKeyPair(algorithm)
+    const csr = await x509.Pkcs10CertificateRequestGenerator.create({
+        name: subject,
+        keys,
+        signingAlgorithm: algorithm === 'ec-p256' ? EC_SHA256 : RSA_SHA256,
+    })
+    return { ...(await exportKeyPair(keys)), csr: csr.toString('pem') + '\n' }
 }
 
 /**
- * A leaf certificate for one server name, signed by our CA.
- *
- * The name goes in a subjectAltName, not only in the subject: a certificate carrying just a CN is
- * accepted today because the clients involved fall back to it, but nothing modern is obliged to.
+ * Sign someone else's CSR with the CA. Like `openssl x509 -req`, only the subject and
+ * public key are taken from the request; any extensions it asks for are ignored.
  */
-export function issueServerCertificate(ca: CaFiles, hostname: string, days = 3650): KeyAndCert {
-    const { privateKey, csr } = generateKeyAndCsr('/CN=' + hostname, 'rsa')
-    return { key: privateKey, cert: signCsr(ca, csr, { days, subjectAltName: altNameFor(hostname) }) }
-}
-
-/**
- * Creates the CA, which is the trust anchor an appliance pins when it fetches /route/certificate.
- *
- * Its subject is not used to match a hostname - the certificates we serve are leaves issued by
- * issueServerCertificate() - so this runs once, when there is no CA on disk yet.
- */
-export function createCa(hostname: string, ca: CaFiles) {
-    openssl([
-        'req',
-        '-x509',
-        '-newkey',
-        'rsa:4096',
-        '-keyout',
-        ca.keyFile,
-        '-out',
-        ca.certFile,
-        '-sha256',
-        '-days',
-        '3650',
-        '-nodes',
-        '-subj',
-        '/CN=' + hostname,
-    ])
+export async function signCertificateRequest(
+    csrPem: string,
+    issuer: Issuer,
+    serialNumber: string,
+    days = 3650,
+): Promise<string> {
+    const request = new x509.Pkcs10CertificateRequest(csrPem)
+    const cert = await x509.X509CertificateGenerator.create({
+        serialNumber,
+        subject: request.subject,
+        issuer: issuer.subject,
+        notBefore: new Date(),
+        notAfter: new Date(Date.now() + days * DAY_MS),
+        signingAlgorithm: RSA_SHA256,
+        publicKey: request.publicKey,
+        signingKey: issuer.signingKey,
+    })
+    return cert.toString('pem') + '\n'
 }

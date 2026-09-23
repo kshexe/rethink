@@ -20,7 +20,7 @@ RUN npm run build && npm prune --omit=dev
 FROM $BUILD_FROM
 WORKDIR /app
 
-RUN apk add --no-cache nodejs openssl
+RUN apk add --no-cache nodejs
 
 COPY --from=build /app/package.json /app/package-lock.json ./
 COPY --from=build /app/node_modules ./node_modules
