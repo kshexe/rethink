@@ -1184,12 +1184,14 @@ export default class Device extends TLVDevice {
      * (`autodry`/`autodry_setting`/`autodryremain`, no underscore inserted at the camelCase word
      * boundary) since nothing about them was actually wrong, just the display text.
      *
-     * `sleep_time` (0x21a, decoded locally off a TLV tag) was checked against this same modelJSON
-     * and NOT renamed: the closest match, `airState.reservation.sleepTime`, is a 1-7 *hour*
-     * cloud-side schedule ("취침예약") - the same family of feature already confirmed unusable
-     * through the bridge (see the AC 예약 note in rethink-migration-status). Different unit,
-     * different mechanism, almost certainly a different feature that happens to share a name -
-     * left alone rather than assumed to match.
+     * `sleep_time` (0x21a, decoded locally off a TLV tag): the only modelJSON match is
+     * `airState.reservation.sleepTime`, catalogued under the cloud API's `reservationCtrl`
+     * command group alongside the weekly on/off schedule fields - the same command group already
+     * confirmed unusable through the bridge (see the AC 예약 note in rethink-migration-status).
+     * That grouping describes the CLOUD API's own organization, not this local TLV protocol's -
+     * this tag already works locally (read and write both confirmed), so whatever gate blocks the
+     * cloud reservation microservice does not apply to it. Renamed to the literal `sleepTime`
+     * spelling on that basis.
      */
     addFeatureEntities(config: ClimateConfig) {
         if (this.hasAirPurify()) {
@@ -1212,7 +1214,7 @@ export default class Device extends TLVDevice {
 
         if (this.hasSleepTimer()) {
             // 15h by default - displayed in hex as "FH"
-            this.addTimerField(config, 0x21a, 'sleep_time', 'Sleep timer', 'mdi:bed-clock', this.sleepTimerMaxMinutes)
+            this.addTimerField(config, 0x21a, 'sleep_time', 'sleepTime', 'mdi:bed-clock', this.sleepTimerMaxMinutes)
         }
 
         if (this.hasEnergySave()) {
