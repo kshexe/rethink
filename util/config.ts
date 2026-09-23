@@ -12,6 +12,7 @@ export type RawConfig = {
     mqtt?: boolean
     bridge?: {
         storage_path: string
+        dns?: string[]
     }
     log?: string[]
     /** Raw-frame recorder: keep this many days of per-day JSONL under frame_log_dir. 0 = off. */
@@ -36,6 +37,8 @@ export type Config = {
     mqtt: boolean
     bridge?: {
         storage_path: string
+        /** Resolvers for the bridge's upstream connections, see bridge/resolver.ts. */
+        dns?: string[]
     }
     log: string[]
     frame_log_days: number

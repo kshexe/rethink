@@ -22,6 +22,7 @@ import { DeviceManager } from './cloud/devmgr'
 import { Bridge } from './bridge'
 import { JSONStorage } from './bridge/state'
 import { configure as configureFrameRecorder } from './cloud/frame-recorder'
+import { setServers as setResolverServers } from './bridge/resolver'
 
 const configPath = resolve(process.argv[2] ?? './config.json')
 const configDir = dirname(configPath)
@@ -148,6 +149,7 @@ const manager = new DeviceManager()
 let bridge: Bridge | undefined
 if (config.bridge) {
     mkdirSync(config.bridge.storage_path, { recursive: true })
+    setResolverServers(config.bridge.dns)
     const storage = new JSONStorage(config.bridge.storage_path)
     bridge = new Bridge(storage, manager)
     // Refresh the ThinQ-account names once at startup regardless of whether the management panel
