@@ -30,12 +30,7 @@ export function advertisedHost(config: Config, requestedHost: string | undefined
     return requestedHost
 }
 
-/**
- * `rootCertificate` is what devices are told to trust: our CA, unless a reverse TLS proxy
- * in front of us presents a certificate from some other chain and its root was configured.
- * Nothing else changes - we still sign the devices' certificates with our own CA.
- */
-export function routes(config: Config, ca: CA, rootCertificate = ca.cert) {
+export function routes(config: Config, ca: CA) {
     const router = Router()
     router.get('/route', (req, res) => {
         const host = advertisedHost(config, req.hostname)
@@ -50,7 +45,7 @@ export function routes(config: Config, ca: CA, rootCertificate = ca.cert) {
 
     router.get('/route/certificate', (req, res) => {
         if (req.query.name) {
-            res.json({ resultCode: '0000', result: { certificatePem: rootCertificate } })
+            res.json({ resultCode: '0000', result: { certificatePem: ca.cert } })
         } else {
             res.json({ resultCode: '0000', result: ['common-server', 'aws-iot'] })
         }

@@ -7,7 +7,6 @@ import { dirname, resolve } from 'node:path'
 import { Broker } from './cloud/mqtt-broker'
 import * as tls from 'node:tls'
 import * as net from 'node:net'
-import { X509Certificate } from 'node:crypto'
 import { routes as thinq2Routes } from './cloud/thinq2/provisioning'
 import { DeviceAcceptor as T2Acceptor } from './cloud/thinq2/device'
 import { Connection as HA_connection } from './cloud/homeassistant'
@@ -30,7 +29,6 @@ const config = normalizeConfig(JSON.parse(stripJsonComments(readFileSync(configP
 
 config.ca_key_file = resolve(configDir, config.ca_key_file)
 config.ca_cert_file = resolve(configDir, config.ca_cert_file)
-if (config.custom_root_cert_file) config.custom_root_cert_file = resolve(configDir, config.custom_root_cert_file)
 if (config.bridge) config.bridge.storage_path = resolve(configDir, config.bridge.storage_path)
 
 if (!config.log) config.log = ['status', 'incoming', 'HTTPS']
@@ -61,21 +59,6 @@ const issuer = new CertificateIssuer(ca, config.hostname)
 // carries a subjectAltName. The CA has only a subject, which clients are free to stop honouring.
 const tlsOptions = await issuer.listenerOptions()
 
-// Read now, not per request: a missing or unusable file should stop us at startup rather
-// than hand out a broken trust anchor once a device asks. It is served verbatim, and only
-// its first block is parsed, as a check.
-function loadRootCertificate(file: string): string {
-    const pem = readFileSync(file).toString('utf-8')
-    try {
-        new X509Certificate(pem)
-    } catch (err) {
-        throw new Error(`${file} is not a certificate: ${err}`)
-    }
-    return pem
-}
-
-const rootCertificate = config.custom_root_cert_file ? loadRootCertificate(config.custom_root_cert_file) : ca.cert
-
 // Thinq2
 function t2setup(manager: DeviceManager) {
     // Thinq2 HTTPS server
@@ -87,10 +70,9 @@ function t2setup(manager: DeviceManager) {
         next()
     })
 
-    // `ca`, not `tlsOptions`: these routes sign appliance certificates with the CA. What they
-    // hand out for a device to pin is `rootCertificate` - the CA itself, unless a reverse proxy
-    // in front of us needs devices to trust something else instead (see loadRootCertificate).
-    app.use(thinq2Routes(config, ca, rootCertificate))
+    // `ca`, not `tlsOptions`: these routes hand out the CA itself and sign appliance certificates
+    // with it. An appliance pins what it gets here, so it has to be the CA, never a per-name leaf.
+    app.use(thinq2Routes(config, ca))
 
     // fallback
     app.use((req, res) => {
