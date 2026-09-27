@@ -170,11 +170,8 @@ export class Client {
         })
 
         if (profile.status !== 1) {
-            console.log(profile)
             throw new Error("Can't query user information")
         }
-
-        console.log(`Welcome ${profile.account.userID}!`)
 
         this.headers['x-user-no'] = profile.account.userNo
         this.headers['x-emp-token'] = accessToken
