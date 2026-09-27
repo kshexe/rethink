@@ -53,6 +53,13 @@ export class Device extends TypedEmitter<DeviceEvents> {
         // is safe for every other device too (upstream anszom/rethink#50a033f).
         this.send('packet', 1, buf.toString('hex').toUpperCase())
     }
+
+    // Delivery acks travel under their own MQTT command, not `packet` (upstream anszom/rethink#203).
+    send_ack(buf: Buffer) {
+        recordFrame(this.id, this.meta, 'to-device', buf)
+        this.emit('sendData', buf)
+        this.send('ack', 1, buf.toString('hex').toUpperCase())
+    }
 }
 
 function trimNull(buf: Buffer) {
