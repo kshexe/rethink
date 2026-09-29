@@ -368,10 +368,13 @@ export class Bridge extends TypedEmitter<BridgeEvents> {
             this.emit('namesChanged')
         }
 
-        if (removeFirst) {
-            statusCallback('Removing device from home')
-            await client.removeDevice(device.id)
-        }
+        // rethink never removes an appliance from the home before registering it (removeFirst,
+        // above, is used only to decide whether to seed deviceNames, not acted on here). A fork
+        // of this project hit exactly this path - removeFirst true from a listDevices() that
+        // didn't happen to show a device that should have been there - and lost four air
+        // conditioners' real LG-account names to the "Rethink xxxxxxxx" fallback permanently.
+        // addDevice() already handles "already registered" gracefully on its own (see its own
+        // comment), so there was nothing this pre-emptive removal bought that was worth that risk.
 
         let clientDevice: Thinq2Device
 
