@@ -411,7 +411,7 @@ export default class Device extends AABBDevice {
     private energy: energyAccumulator.EnergyTracker | undefined
 
     constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
-        super(HA, thinq)
+        super(HA, thinq, false)
 
         // NAMING AUDIT (2026-09-22): see FX___S.ts's own note of the same date for the full
         // reasoning - both models' modelJSON were compared field by field. Renamed here to match:

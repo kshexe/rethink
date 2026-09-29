@@ -19,6 +19,7 @@ type DeviceEvents = {
 export class Device extends TypedEmitter<DeviceEvents> {
     // this could be a stream but why bother...
     readonly platform = 'thinq2'
+    managed: boolean = false // set to true if any rethink handler is assigned to the device
 
     // The device's real provisioning info, verbatim from its deploy message. The bridge
     // forwards these upstream so the real LG cloud sees the device's true firmware/protocol

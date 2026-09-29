@@ -899,7 +899,7 @@ export default class Device extends AABBDevice {
     private energy: energyAccumulator.EnergyTracker | undefined
 
     constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
-        super(HA, thinq)
+        super(HA, thinq, false)
         // Optional chaining on purpose: nothing else in a profile reads the connection's config, so a
         // caller that does not supply one still gets a working device in the default language.
         const korean = HA.config?.language === 'ko'
