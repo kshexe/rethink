@@ -15,6 +15,15 @@ const DEVICE_ID = 'test-id'
 const META: Metadata = { modelId: 'RD20_S', modelName: 'TEST', swVersion: '1.0' }
 const SAMPLE_STATUS = buf('aa083000e50000bb') // RD20_S's power-write ack shape
 
+class AvailabilityRecordingHA extends MockHAConnection {
+    availabilityHistory: string[] = []
+
+    override publishProperty(id: string, property: string, value: string | number | undefined) {
+        super.publishProperty(id, property, value)
+        if (property === 'availability') this.availabilityHistory.push(String(value))
+    }
+}
+
 function state(): BridgeState {
     return {
         getCredentials: () => undefined,
@@ -194,3 +203,77 @@ describe('HA_bridge applies the panel-chosen autoAck setting', () => {
         }
     })
 })
+
+describe('HA_bridge avoids an availability flicker across a reconnect', () => {
+    const GRACE_MS = 20
+
+    test('a replacement that connects before the old close event fires never goes offline', async () => {
+        const ha = new AvailabilityRecordingHA()
+        const bridge = new HA_bridge(ha.asConnection(), undefined, 5000, GRACE_MS)
+
+        const oldConnection = new MockThinq2Device(DEVICE_ID, META)
+        await makeMappedDevice2(bridge, oldConnection)
+        ha.availabilityHistory = []
+
+        const newConnection = new MockThinq2Device(DEVICE_ID, META)
+        await makeMappedDevice2(bridge, newConnection)
+        assert.deepEqual(ha.availabilityHistory, ['online'])
+
+        // The superseded connection's close, arriving late, must not touch the replacement.
+        oldConnection.emit('close')
+        assert.deepEqual(ha.availabilityHistory, ['online'])
+
+        try {
+            // A genuine close of the now-active connection still goes offline, once the grace
+            // period passes with nothing reconnecting.
+            newConnection.emit('close')
+            await new Promise((resolve) => setTimeout(resolve, GRACE_MS * 2))
+            assert.deepEqual(ha.availabilityHistory, ['online', 'offline'])
+        } finally {
+            bridge.haDevices.get(DEVICE_ID)?.drop()
+        }
+    })
+
+    test('a replacement that connects shortly after the old one closed suppresses the blip', async () => {
+        const ha = new AvailabilityRecordingHA()
+        const bridge = new HA_bridge(ha.asConnection(), undefined, 5000, GRACE_MS)
+
+        const oldConnection = new MockThinq2Device(DEVICE_ID, META)
+        await makeMappedDevice2(bridge, oldConnection)
+        ha.availabilityHistory = []
+
+        oldConnection.emit('close')
+        await new Promise((resolve) => setTimeout(resolve, GRACE_MS / 4)) // well inside the grace window
+
+        const newConnection = new MockThinq2Device(DEVICE_ID, META)
+        try {
+            await makeMappedDevice2(bridge, newConnection)
+            await new Promise((resolve) => setTimeout(resolve, GRACE_MS * 2))
+            assert.deepEqual(ha.availabilityHistory, ['online'])
+        } finally {
+            bridge.haDevices.get(DEVICE_ID)?.drop()
+        }
+    })
+
+    test('a disconnect nothing reconnects to still goes offline, just after the grace period', async () => {
+        const ha = new AvailabilityRecordingHA()
+        const bridge = new HA_bridge(ha.asConnection(), undefined, 5000, GRACE_MS)
+
+        const connection = new MockThinq2Device(DEVICE_ID, META)
+        await makeMappedDevice2(bridge, connection)
+        ha.availabilityHistory = []
+
+        connection.emit('close')
+        assert.deepEqual(ha.availabilityHistory, [], 'not yet - still inside the grace period')
+
+        await new Promise((resolve) => setTimeout(resolve, GRACE_MS * 2))
+        assert.deepEqual(ha.availabilityHistory, ['offline'])
+    })
+})
+
+/** Like makeMappedDevice, but for a caller supplying its own MockThinq2Device instance. */
+async function makeMappedDevice2(bridge: HA_bridge, thinq: MockThinq2Device) {
+    await bridge.newDevice(thinq)
+    thinq.emit('data', SAMPLE_STATUS)
+    return thinq
+}

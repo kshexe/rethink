@@ -32,12 +32,19 @@ const t2deviceTypes: Record<string, T2Factory> = {
 class Bridge {
     haDevices = new Map<string, HADevice>()
 
+    // A close-then-(re)register pair within disconnectGraceMs of each other never reaches HA as
+    // an availability flicker - see dropDevice()'s own comment for the case this covers, and
+    // newDevice()'s for the other (already-handled) ordering.
+    pendingDrops = new Map<string, { device: HADevice; timer: ReturnType<typeof setTimeout> }>()
+
     constructor(
         readonly HA: Connection,
         readonly lgBridge?: LgCloudBridge,
         // Overridable only so a test can use a short wait instead of actually waiting out the
         // real default - see newDevice() for what this bounds.
         private readonly nameLookupTimeoutMs = 5000,
+        // Also overridable for the same reason - see dropDevice().
+        private readonly disconnectGraceMs = 2000,
     ) {
         HA.on('discovery', () => {
             this.haDevices.forEach((ha) => ha.publishConfig())
@@ -100,8 +107,6 @@ class Bridge {
      */
     async newDevice(thinqdev: AnyDevice) {
         const meta = thinqdev.meta
-        const oldDevice = this.haDevices.get(thinqdev.id)
-        if (oldDevice) oldDevice.drop()
 
         if (this.lgBridge && !this.lgBridge.name(thinqdev.id)) {
             await Promise.race([
@@ -128,9 +133,20 @@ class Bridge {
          * event fires - notably right after a washer powers itself off and back on. The new
          * handler publishes online during start() below, so dropping the superseded handler here
          * would only cost every entity a brief unavailable -> available flicker for no reason: the
-         * map entry is about to be replaced. Its timers/listeners still need releasing though.
+         * map entry is about to be replaced. Its timers/listeners still need releasing though - and
+         * this is the *only* thing done to it: no drop(), so no availability publish, ever, for a
+         * device this bridge is about to immediately replace.
          */
         this.haDevices.get(thinqdev.id)?.cancelPendingWork()
+
+        // The other ordering: the old connection's close already fired and dropDevice() below
+        // scheduled the actual drop (offline publish + map removal) for after disconnectGraceMs,
+        // in case this was a real disconnect rather than a reconnect. It wasn't - cancel it.
+        const pending = this.pendingDrops.get(thinqdev.id)
+        if (pending) {
+            clearTimeout(pending.timer)
+            this.pendingDrops.delete(thinqdev.id)
+        }
 
         this.haDevices.set(thinqdev.id, hadevice)
 
@@ -145,11 +161,32 @@ class Bridge {
         hadevice.start()
     }
 
+    /*
+     * Runs on a device's own 'close' - which fires for a genuine disconnect just as much as for
+     * the appliance's own reconnect (a washer's brief power-cycle, a flaky connection recovering
+     * on its own): the two look identical from here, and only the *next* newDevice() call for
+     * this id - or its absence - tells them apart. Publishing offline immediately would flicker
+     * every entity for the reconnect case, which is the common one; waiting disconnectGraceMs
+     * before actually dropping costs the genuine-disconnect case that same delay before HA shows
+     * it, which is the one case this ever matters for.
+     */
     dropDevice(ha: HADevice) {
-        if (this.haDevices.get(ha.id) === ha) {
-            this.haDevices.delete(ha.id)
-            ha.drop()
+        if (this.haDevices.get(ha.id) !== ha) return
+
+        const previous = this.pendingDrops.get(ha.id)
+        if (previous) clearTimeout(previous.timer)
+
+        const pending: { device: HADevice; timer: ReturnType<typeof setTimeout> } = {
+            device: ha,
+            timer: setTimeout(() => {
+                if (this.haDevices.get(ha.id) === ha) {
+                    this.haDevices.delete(ha.id)
+                    ha.drop()
+                }
+                if (this.pendingDrops.get(ha.id) === pending) this.pendingDrops.delete(ha.id)
+            }, this.disconnectGraceMs),
         }
+        this.pendingDrops.set(ha.id, pending)
     }
 }
 
