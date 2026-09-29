@@ -65,7 +65,7 @@ function t2setup(manager: DeviceManager) {
     app.use(express.json())
 
     app.use(function (req, res, next) {
-        log('HTTPS', req.hostname, req.url)
+        log('HTTPS', req.method, req.hostname, req.url)
         next()
     })
 
