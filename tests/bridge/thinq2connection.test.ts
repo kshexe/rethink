@@ -33,6 +33,10 @@ class FakeState implements BridgeState {
         return {}
     }
     setDeviceNames() {}
+    getAutoAck(): Record<string, boolean> {
+        return {}
+    }
+    setAutoAck() {}
 }
 
 async function until(cond: () => boolean, what: string, ms = 2000) {

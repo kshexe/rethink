@@ -6,6 +6,7 @@ import { DeviceManager } from '@/cloud/devmgr'
 import type { BridgeState } from '@/bridge/state'
 import { MockHAConnection, MockThinq2Device, buf } from '@/tests/helpers/mocks'
 import type { Metadata } from '@/cloud/thinq'
+import AABBDevice from '@/cloud/devices/aabb_device'
 
 const DEVICE_ID = 'test-id'
 // An RD20_S dryer - picked only because it publishes its config synchronously from the
@@ -22,6 +23,8 @@ function state(): BridgeState {
         setDeviceState: () => {},
         getDeviceNames: () => ({}),
         setDeviceNames: () => {},
+        getAutoAck: () => ({}),
+        setAutoAck: () => {},
     }
 }
 
@@ -135,6 +138,57 @@ describe('HA_bridge device naming from the linked LG account', () => {
         try {
             await makeMappedDevice(bridge)
             assert.equal(ha.devices[DEVICE_ID].config!.device.name, '거실에어컨')
+        } finally {
+            bridge.haDevices.get(DEVICE_ID)?.drop()
+        }
+    })
+})
+
+describe('HA_bridge applies the panel-chosen autoAck setting', () => {
+    test('a device with no saved choice starts with autoAck off, same as its own hardcoded default', async () => {
+        const ha = new MockHAConnection()
+        const lgBridge = new LgCloudBridge(state(), new DeviceManager())
+        const bridge = new HA_bridge(ha.asConnection(), lgBridge)
+        await makeMappedDevice(bridge)
+        try {
+            const handler = bridge.haDevices.get(DEVICE_ID)
+            assert.ok(handler instanceof AABBDevice)
+            assert.equal(handler.autoAck, false)
+        } finally {
+            bridge.haDevices.get(DEVICE_ID)?.drop()
+        }
+    })
+
+    test('a device already opted in picks that back up on (re)connect', async () => {
+        const ha = new MockHAConnection()
+        const lgBridge = new LgCloudBridge(state(), new DeviceManager())
+        lgBridge.setAutoAck(DEVICE_ID, true)
+        const bridge = new HA_bridge(ha.asConnection(), lgBridge)
+        await makeMappedDevice(bridge)
+        try {
+            const handler = bridge.haDevices.get(DEVICE_ID)
+            assert.ok(handler instanceof AABBDevice)
+            assert.equal(handler.autoAck, true)
+        } finally {
+            bridge.haDevices.get(DEVICE_ID)?.drop()
+        }
+    })
+
+    test('toggling it from the panel flips the live handler with no reconnect', async () => {
+        const ha = new MockHAConnection()
+        const lgBridge = new LgCloudBridge(state(), new DeviceManager())
+        const bridge = new HA_bridge(ha.asConnection(), lgBridge)
+        await makeMappedDevice(bridge)
+        try {
+            const handler = bridge.haDevices.get(DEVICE_ID)
+            assert.ok(handler instanceof AABBDevice)
+            assert.equal(handler.autoAck, false)
+
+            lgBridge.setAutoAck(DEVICE_ID, true)
+            assert.equal(handler.autoAck, true, 'the same live instance, not a new one')
+
+            lgBridge.setAutoAck(DEVICE_ID, false)
+            assert.equal(handler.autoAck, false)
         } finally {
             bridge.haDevices.get(DEVICE_ID)?.drop()
         }

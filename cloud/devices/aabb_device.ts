@@ -2,6 +2,7 @@
 import HADevice from './base'
 import { Device as Thinq2Device } from '../thinq2/device'
 import { type Connection } from '../homeassistant'
+import log from '@/util/logging'
 
 // Frame types the cloud does not ack: the appliance's own acks, the c3 heartbeat, and the eb/ec status
 // records outside an envelope. Checked against the cloud, bridged as FAFXU22007 and Y_VB_Y___W.B32QEUK.
@@ -26,10 +27,20 @@ export default class AABBDevice extends HADevice {
         readonly thinq: Thinq2Device,
         // Ack every frame as the cloud would. Unacked, some appliances repeat each frame up to ten times and
         // the content sync never completes. Recommended: `true` for all new devices.
-        readonly autoAck: boolean,
+        //
+        // Mutable (not the constructor-only default it looks like): the management panel can flip this on a
+        // live device via setAutoAck(), to try it against one real appliance without a restart. cloud/ha_bridge.ts
+        // applies the persisted per-device choice right after construction, and again on every later change.
+        public autoAck: boolean,
     ) {
         super(HA, thinq.id)
         thinq.on('data', (data) => this.processData(data))
+    }
+
+    setAutoAck(enabled: boolean) {
+        if (this.autoAck === enabled) return
+        this.autoAck = enabled
+        log('status', this.id, `autoAck ${enabled ? 'enabled' : 'disabled'}`)
     }
 
     // AA [length] ...inner [checksum] BB

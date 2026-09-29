@@ -10,6 +10,7 @@ import KimchiFridge_3REK2G03VI200S_2 from './devices/3REK2G03VI200S_2'
 import { Device as T2Device } from './thinq2/device'
 import { type Connection } from './homeassistant'
 import HADevice from './devices/base'
+import AABBDevice from './devices/aabb_device'
 import { type Metadata } from './thinq'
 import { AnyDevice } from './devmgr'
 import { type Bridge as LgCloudBridge } from '@/bridge'
@@ -51,6 +52,13 @@ class Bridge {
         // publishConfig() so it rides along on every publish, whenever that turns out to be,
         // instead of a static "LG Air Conditioner"/"LG Washer"/etc.
         this.lgBridge?.on('namesChanged', () => this.refreshAllNames())
+
+        // A management-panel toggle flips AABBDevice.autoAck on the live handler directly - no
+        // restart needed, so this takes effect on the very next frame the appliance sends.
+        this.lgBridge?.on('autoAckChanged', (id, enabled) => {
+            const hadevice = this.haDevices.get(id)
+            if (hadevice instanceof AABBDevice) hadevice.setAutoAck(enabled)
+        })
     }
 
     private refreshAllNames() {
@@ -109,6 +117,11 @@ class Bridge {
             console.warn(`${thinqdev.platform} device type ${meta.modelId} unknown`)
             return
         }
+
+        // Every AABBDevice subclass hardcodes autoAck:false at its own super() call - apply
+        // whatever the panel has actually chosen for this device instead, the same way a fresh
+        // reconnect (this same code path) needs to pick a previously-saved choice back up.
+        if (hadevice instanceof AABBDevice && this.lgBridge) hadevice.setAutoAck(this.lgBridge.autoAck(thinqdev.id))
 
         /*
          * A ThinQ appliance may open its replacement MQTT connection before the old one's close

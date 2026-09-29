@@ -62,6 +62,11 @@
                 width: 11.5em;
             }
 
+            .dev-autoack {
+                width: 5em;
+                text-align: center;
+            }
+
             /* The switch and the cloud-link indicator share one line. */
             .bridge-cell {
                 display: flex;
@@ -97,12 +102,12 @@
 
                 #devices_table tbody tr {
                     display: grid;
-                    grid-template-columns: minmax(0, 1fr) auto auto;
+                    grid-template-columns: minmax(0, 1fr) auto auto auto;
                     grid-template-areas:
-                        'name     bridge actions'
-                        'model    bridge actions'
-                        'platform bridge actions'
-                        'id       bridge actions';
+                        'name     bridge autoack actions'
+                        'model    bridge autoack actions'
+                        'platform bridge autoack actions'
+                        'id       bridge autoack actions';
                     gap: 0 0.5rem;
                     align-items: center;
                     padding: 0.5rem 0;
@@ -129,6 +134,10 @@
                 }
                 #devices_table .dev-bridge {
                     grid-area: bridge;
+                    width: auto;
+                }
+                #devices_table .dev-autoack {
+                    grid-area: autoack;
                     width: auto;
                 }
                 #devices_table .dev-actions {
@@ -201,6 +210,13 @@
                         <th>Model</th>
                         <th>Platform</th>
                         <th>Bridge</th>
+                        <th
+                            class="tooltipped"
+                            data-position="bottom"
+                            data-tooltip="Have this device ack every AABB frame itself, the way the LG cloud does. Off by default; try it on one device at a time."
+                        >
+                            Auto ACK
+                        </th>
                         <th>Actions</th>
                     </tr>
                 </thead>

@@ -164,6 +164,29 @@ class DeviceEntry {
             }
         }
 
+        // Have the device ack every AABB frame itself, the way the LG cloud does (AABBDevice's
+        // own autoAck) - only meaningful for that class of handler, so a device without one (the
+        // AC, on TLVDevice) gets a plain dash instead of a control that would do nothing.
+        td = document.createElement('td')
+        td.className = 'dev-autoack'
+        if (this.remoteState.autoAckSupported) {
+            td.innerHTML = `<label><input type="checkbox"></label>`
+            this.autoAckSwitch = td.getElementsByTagName('input')[0]
+            this.autoAckSwitch.onchange = async () => {
+                const enabled = this.autoAckSwitch.checked
+                this.autoAckSwitch.disabled = true
+                try {
+                    await fetchWrapper(`bridge/${this.id}/autoAck`, { enabled }, { method: 'POST' })
+                    this.remoteState.autoAck = enabled
+                } finally {
+                    this.autoAckSwitch.disabled = false
+                }
+            }
+        } else {
+            td.innerText = '—'
+        }
+        children.push(td)
+
         td = document.createElement('td')
         // Materialize disables a button with pointer-events: none, which would swallow the hover
         // that opens its tooltip - so the tooltip lives on a wrapper instead of on the button.
@@ -206,6 +229,11 @@ class DeviceEntry {
             this.bridgeDiv.classList.remove('hide')
             this.bridgeSwitch.checked = enabled
         }
+
+        // The markup is rebuilt from scratch on every update() (see updateDom()'s own comment on
+        // the bridge switch above) - re-apply the actual autoAck choice the same way. Absent for
+        // a device with no AABBDevice handler at all (autoAckSwitch is never created there).
+        if (this.autoAckSwitch) this.autoAckSwitch.checked = !!this.remoteState.autoAck
 
         // Two different facts, so two different controls: the switch is what bridge mode has been
         // set to, this is whether the connection to LG behind it is actually up. A device with the

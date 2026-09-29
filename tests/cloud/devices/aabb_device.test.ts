@@ -214,4 +214,19 @@ describe('AABBDevice auto-ack', () => {
         assert.deepEqual(acks(), [])
         assert.equal(dev.processed.length, 2)
     })
+
+    test('setAutoAck flips behavior on the same live instance, no reconstruction needed', () => {
+        const { thinq, acks, dev } = makeAckingDevice(false)
+
+        thinq.emit('data', AABBDevice.frame(buf('304d01')))
+        assert.deepEqual(acks(), [], 'still off for this first frame')
+
+        dev.setAutoAck(true)
+        thinq.emit('data', AABBDevice.frame(buf('304d01')))
+        assert.deepEqual(acks(), [CLOUD_ACK_4D], 'acks from here on')
+
+        dev.setAutoAck(false)
+        thinq.emit('data', AABBDevice.frame(buf('304d01')))
+        assert.deepEqual(acks(), [CLOUD_ACK_4D], 'back off - no new ack appended')
+    })
 })

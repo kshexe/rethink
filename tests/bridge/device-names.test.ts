@@ -21,6 +21,8 @@ function state(credentials?: Credentials, storedNames: Record<string, string> = 
         setDeviceNames: (value) => {
             names = value
         },
+        getAutoAck: () => ({}),
+        setAutoAck: () => {},
     }
 }
 

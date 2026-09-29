@@ -15,6 +15,10 @@ export type BridgeState = {
     // restart already carries the real name instead of the model-name fallback.
     getDeviceNames(): Record<string, string>
     setDeviceNames(names: Record<string, string>): void
+    // Per-device opt-in to AABBDevice.autoAck (management panel toggle), persisted so a restart
+    // doesn't silently turn it back off for a device it was already confirmed safe on.
+    getAutoAck(): Record<string, boolean>
+    setAutoAck(state: Record<string, boolean>): void
 }
 
 export class JSONStorage implements BridgeState {
@@ -30,6 +34,10 @@ export class JSONStorage implements BridgeState {
 
     namesPath() {
         return `${this.basePath}/names.json`
+    }
+
+    autoAckPath() {
+        return `${this.basePath}/autoack.json`
     }
 
     getCredentials() {
@@ -68,5 +76,17 @@ export class JSONStorage implements BridgeState {
 
     setDeviceNames(names: Record<string, string>) {
         writeFileSync(this.namesPath(), JSON.stringify(names))
+    }
+
+    getAutoAck(): Record<string, boolean> {
+        try {
+            return JSON.parse(readFileSync(this.autoAckPath()).toString('utf-8')) as Record<string, boolean>
+        } catch (err) {
+            return {}
+        }
+    }
+
+    setAutoAck(state: Record<string, boolean>) {
+        writeFileSync(this.autoAckPath(), JSON.stringify(state))
     }
 }

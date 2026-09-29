@@ -123,6 +123,7 @@ type BridgeEvents = {
     loggedIn: () => void
     loggedOut: () => void
     namesChanged: () => void
+    autoAckChanged: (id: string, enabled: boolean) => void
     started: (id: string) => void
     stopped: (id: string) => void
     stateChanged: (id: string, connected: boolean) => void
@@ -144,12 +145,20 @@ export class Bridge extends TypedEmitter<BridgeEvents> {
      */
     deviceNames = new Map<string, string>()
 
+    /*
+     * Per-device opt-in to AABBDevice.autoAck (see its own comment) - a management-panel toggle,
+     * tried against one real appliance rather than assumed safe for all of them at once. Seeded
+     * from disk so a restart doesn't quietly turn a confirmed-safe device back off.
+     */
+    autoAckEnabled = new Map<string, boolean>()
+
     constructor(
         readonly state: BridgeState,
         readonly manager: DeviceManager,
     ) {
         super()
         this.deviceNames = new Map(Object.entries(this.state.getDeviceNames()))
+        this.autoAckEnabled = new Map(Object.entries(this.state.getAutoAck()))
         this.manager.on('newDevice', this.#start.bind(this))
         this.manager.on('dropDevice', this.#stop.bind(this))
         Object.values(this.manager.allDevices).forEach(this.#start.bind(this))
@@ -161,6 +170,17 @@ export class Bridge extends TypedEmitter<BridgeEvents> {
 
     #persistNames() {
         this.state.setDeviceNames(Object.fromEntries(this.deviceNames))
+    }
+
+    autoAck(id: string): boolean {
+        return this.autoAckEnabled.get(id) ?? false
+    }
+
+    setAutoAck(id: string, enabled: boolean) {
+        if (this.autoAck(id) === enabled) return
+        this.autoAckEnabled.set(id, enabled)
+        this.state.setAutoAck(Object.fromEntries(this.autoAckEnabled))
+        this.emit('autoAckChanged', id, enabled)
     }
 
     /*

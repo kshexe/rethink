@@ -10,6 +10,7 @@ import { AnyDevice, DeviceManager } from '@/cloud/devmgr'
 import { Bridge } from '@/bridge'
 import { Request, Response } from 'express'
 import { Device as T2Device } from '@/cloud/thinq2/device'
+import AABBDevice from '@/cloud/devices/aabb_device'
 
 // refresh bridged device names policy:
 // - only if a websocket subscriber is connected
@@ -106,6 +107,9 @@ export function app(ha: HA_bridge, manager: DeviceManager, bridge: Bridge | unde
         for (const id in manager.allDevices) {
             const dev = manager.allDevices[id]
             const meta = dev.meta
+            // Only an AABBDevice handler has autoAck at all - a TLVDevice one (the AC) has no
+            // such control, and the panel shouldn't offer a toggle that would do nothing.
+            const autoAckSupported = ha.haDevices.get(id) instanceof AABBDevice
             allDevices[id] = {
                 // What the owner calls it, when the bridge has been able to ask the account
                 name: bridge?.name(id),
@@ -114,6 +118,8 @@ export function app(ha: HA_bridge, manager: DeviceManager, bridge: Bridge | unde
                 platform: dev.platform,
                 mapped: dev.managed,
                 bridgeState: bridge ? bridge.status(id) : 'disabled',
+                autoAckSupported,
+                autoAck: autoAckSupported && (bridge?.autoAck(id) ?? false),
             }
         }
         return allDevices
@@ -202,6 +208,19 @@ export function app(ha: HA_bridge, manager: DeviceManager, bridge: Bridge | unde
             }),
         )
 
+        // Opt a single AABBDevice into generating its own frame acks locally (see that class's
+        // own comment) - tried against one real appliance at a time, not assumed safe for every
+        // device at once. Takes effect immediately on the live handler; persisted so it survives
+        // a restart. A device with no AABBDevice handler (the AC, on TLVDevice) just has nothing
+        // to flip - the panel doesn't offer the control there, but nothing stops the call either.
+        app.post(
+            '/bridge/:deviceId/autoAck',
+            asyncHandler(async (req, res) => {
+                bridge.setAutoAck(req.params.deviceId, !!req.body.enabled)
+                res.status(204).end()
+            }),
+        )
+
         // Reverse-engineering aid: relay an arbitrary control-sync body to the LG cloud as the
         // app would, so the resulting on-wire frame can be studied in the frame recorder.
         app.post(
@@ -239,6 +258,7 @@ export function app(ha: HA_bridge, manager: DeviceManager, bridge: Bridge | unde
         bridge.on('stopped', refreshDevices)
         bridge.on('stateChanged', refreshDevices)
         bridge.on('namesChanged', refreshDevices)
+        bridge.on('autoAckChanged', refreshDevices)
         disposers.push(() => {
             bridge.removeListener('loggedIn', refreshBridgeStatus)
             bridge.removeListener('loggedOut', refreshBridgeStatus)
@@ -246,6 +266,7 @@ export function app(ha: HA_bridge, manager: DeviceManager, bridge: Bridge | unde
             bridge.removeListener('stopped', refreshDevices)
             bridge.removeListener('stateChanged', refreshDevices)
             bridge.removeListener('namesChanged', refreshDevices)
+            bridge.removeListener('autoAckChanged', refreshDevices)
         })
     }
 
