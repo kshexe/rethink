@@ -47,8 +47,11 @@ export default class TLVDevice extends HADevice {
         thinq.on('data', (data) => this.processData(data))
         // Every frame pushed to the appliance, whether this handler built it or the LG-cloud
         // bridge forwarded it. Ours only carry tags we know; a bridged one that carries a tag
-        // with no FieldDefinition is a command this handler cannot parse - note it.
-        thinq.on('sendData', (buf) => this.inspectOutboundTLV(buf))
+        // with no FieldDefinition is a command this handler cannot parse - note it. `ack` frames
+        // are the cloud's raw AABB delivery acks, not TLV - nothing to inspect there.
+        thinq.on('sendData', (type, buf) => {
+            if (type === 'packet') this.inspectOutboundTLV(buf)
+        })
 
         // initial capabilities query
         this.queryCaps()

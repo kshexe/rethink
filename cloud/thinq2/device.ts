@@ -12,7 +12,7 @@ import { record as recordFrame } from '../frame-recorder'
 
 type DeviceEvents = {
     data: (packet: Buffer) => void
-    sendData: (buf: Buffer) => void
+    sendData: (type: 'packet' | 'ack', buf: Buffer) => void
     close: () => void
 }
 
@@ -48,7 +48,7 @@ export class Device extends TypedEmitter<DeviceEvents> {
 
     send_packet(buf: Buffer) {
         recordFrame(this.id, this.meta, 'to-device', buf)
-        this.emit('sendData', buf)
+        this.emit('sendData', 'packet', buf)
         // Uppercase: at least one appliance's firmware (F_C__Y___W.A__QEUK) silently ignores a
         // lowercase-hex packet payload. Hex is case-insensitive on the wire either way, so this
         // is safe for every other device too (upstream anszom/rethink#50a033f).
@@ -58,7 +58,7 @@ export class Device extends TypedEmitter<DeviceEvents> {
     // Delivery acks travel under their own MQTT command, not `packet` (upstream anszom/rethink#203).
     send_ack(buf: Buffer) {
         recordFrame(this.id, this.meta, 'to-device', buf)
-        this.emit('sendData', buf)
+        this.emit('sendData', 'ack', buf)
         this.send('ack', 1, buf.toString('hex').toUpperCase())
     }
 }

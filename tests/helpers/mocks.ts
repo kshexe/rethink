@@ -97,7 +97,7 @@ export class MockThinq2Device extends Thinq2Device {
     }
 
     override send_packet(buf: Buffer) {
-        this.emit('sendData', buf)
+        this.emit('sendData', 'packet', buf)
         this.outbox.push(buf)
     }
 

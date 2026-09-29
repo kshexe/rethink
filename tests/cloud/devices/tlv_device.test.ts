@@ -212,7 +212,7 @@ test('a relayed write carrying a known field schedules a confirmatory query, not
     const { thinq, dev, config } = makeDevice()
     dev.addField(config, { id: 0x1f7, name: 'power', comp: 'c' })
 
-    thinq.emit('sendData', outboundValuesFrame(0x1f7, 1))
+    thinq.emit('sendData', 'packet', outboundValuesFrame(0x1f7, 1))
     assert.equal(thinq.outbox.length, 0, 'not sent synchronously - see the file header')
 
     tickMockTimers(t, 1000)
@@ -225,7 +225,7 @@ test('a relayed write with no known field does not schedule a query', (t) => {
     enableMockTimers(t)
     const { thinq } = makeDevice()
 
-    thinq.emit('sendData', outboundValuesFrame(0x2fe, 0))
+    thinq.emit('sendData', 'packet', outboundValuesFrame(0x2fe, 0))
     tickMockTimers(t, 5000)
     assert.equal(thinq.outbox.length, 0)
 })
@@ -239,9 +239,9 @@ test('several relayed writes within the debounce window schedule one query, time
     // the debounce window. A true debounce resets on the second write, so the query fires
     // BRIDGE_REFRESH_DELAY_MS after IT, not after the first - confirmed below by checking it has
     // not fired yet at the old (first-write-relative) deadline.
-    thinq.emit('sendData', outboundValuesFrame(0x1f7, 1))
+    thinq.emit('sendData', 'packet', outboundValuesFrame(0x1f7, 1))
     tickMockTimers(t, 480)
-    thinq.emit('sendData', outboundValuesFrame(0x1f7, 1))
+    thinq.emit('sendData', 'packet', outboundValuesFrame(0x1f7, 1))
     assert.equal(thinq.outbox.length, 0, 'still debounced, no query yet')
 
     tickMockTimers(t, 500) // 480+500 = 980ms since the first write - short of the OLD deadline (1000ms after it)
@@ -266,10 +266,10 @@ test('a burst spread wider than the debounce window fires one query per gap, not
     // either way - this pattern doesn't distinguish the two implementations, see the dedicated
     // reset test above for that.
     const gapsMs = [479, 4307, 528, 1916, 8016]
-    thinq.emit('sendData', outboundValuesFrame(0x1f7, 1))
+    thinq.emit('sendData', 'packet', outboundValuesFrame(0x1f7, 1))
     for (const gap of gapsMs) {
         tickMockTimers(t, gap)
-        thinq.emit('sendData', outboundValuesFrame(0x1f7, 1))
+        thinq.emit('sendData', 'packet', outboundValuesFrame(0x1f7, 1))
     }
     tickMockTimers(t, 1000) // let the last scheduled query fire
     assert.equal(thinq.outbox.length, 4)
@@ -280,7 +280,7 @@ test('a query fired from a normal read still works after a relayed write already
     const { thinq, dev, config } = makeDevice()
     dev.addField(config, { id: 0x1f7, name: 'power', comp: 'c' })
 
-    thinq.emit('sendData', outboundValuesFrame(0x1f7, 1))
+    thinq.emit('sendData', 'packet', outboundValuesFrame(0x1f7, 1))
     tickMockTimers(t, 1000)
     assert.equal(thinq.outbox.length, 1)
 
@@ -293,7 +293,7 @@ test('the self-sent 0x1f5 caps/values poll never schedules its own confirmatory 
     enableMockTimers(t)
     const { thinq } = makeDevice()
 
-    thinq.emit('sendData', outboundValuesFrame(0x1f5, 2))
+    thinq.emit('sendData', 'packet', outboundValuesFrame(0x1f5, 2))
     tickMockTimers(t, 5000)
     assert.equal(thinq.outbox.length, 0)
 })
@@ -307,7 +307,7 @@ test('inspectOutboundTLV notes an unknown tag in a frame pushed to the appliance
         const body = [0x04, 0x00, 0x00, 0x00, 0x65, 0x02, 0x01, 0x00, 0x02]
         const tlv = TLV.build([{ t: 0x2fe, v: 0 }])
         const frame = Buffer.from([0x01, 0x01, ...body, ...tlv, 0x00, 0x00])
-        thinq.emit('sendData', frame)
+        thinq.emit('sendData', 'packet', frame)
         const notes = (await recorderLines(dir)).filter((l) => l.kind === 'unmodelled-tlv-tag')
         assert.equal(notes.length, 1)
         assert.equal(notes[0].dir, 'to-device')
