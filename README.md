@@ -17,6 +17,12 @@ model is reverse-engineered. For the broader community device list (many more AC
 dryer/dehumidifier/hood/styler models) this fork branched from, see upstream
 [anszom/rethink](https://github.com/anszom/rethink).
 
+Kept in sync with upstream on a regular basis, including every commit that went into its first
+tagged release, [v0.1.0](https://github.com/anszom/rethink/releases/tag/v0.1.0) (2026-09-22) -
+anything from there judged relevant to this household's own appliances gets ported over (see git
+log for the individual pick-overs), while device handlers for models outside this fleet are left
+upstream rather than carried here unused.
+
 - Air Conditioners:
     - 👍 CST_570004_WW, LG ceiling-cassette IDU (multi-split) - full command coverage, no known gaps. Setpoint range falls back to the model's real min/max (per-unit, live-confirmed on the wire) when a unit never sends its own capability tags, instead of Home Assistant's generic 7-35°C default. Vertical swing is one merged control (fixed 1-6단 positions plus continuous 자동), matching how the panel actually presents it. Remaining unmodelled telemetry tags are read-only (filter hours, coil temps).
 - Fridges:
@@ -110,6 +116,9 @@ A simple web interface is available on a user-defined port (default: 44401). The
 - listing the devices connected to rethink
 - monitoring their communications (with packet injection)
 - configuring the bridge mode
+- toggling per-device **Auto ACK** (have rethink acknowledge AABB frames itself, the way the LG
+  cloud normally would) live, with no restart needed - off by default; some appliances otherwise
+  retransmit a frame up to 10x waiting for an ack that never comes once nothing's left to send it
 
 ### Logging into your LG account
 
