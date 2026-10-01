@@ -126,7 +126,7 @@ function t2setup(manager: DeviceManager) {
     // reconnect on every restart, not just most of them.
     const shutdown = (signal: string) => {
         log('status', `${signal} received - closing ${broker.clients.size} appliance connection(s) before exit`)
-        for (const client of broker.clients) client.destroy()
+        for (const client of broker.clients) client.destroy(`server shutdown (${signal})`)
         process.exit(0)
     }
     process.on('SIGTERM', () => shutdown('SIGTERM'))

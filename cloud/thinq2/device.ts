@@ -8,7 +8,7 @@ import { ClipDeployMessage, ClipMessage } from './clip'
 
 import log from '@/util/logging'
 import { Metadata } from '../thinq'
-import { record as recordFrame } from '../frame-recorder'
+import { record as recordFrame, note as recordNote } from '../frame-recorder'
 
 type DeviceEvents = {
     data: (packet: Buffer) => void
@@ -149,7 +149,7 @@ export class DeviceAcceptor extends TypedEmitter<DeviceAcceptorEvents> {
     completeProvisioning(deviceId: string, deployMsg: ClipDeployMessage, client: ClientWithExtra) {
         if (this.clientsById[deviceId]) {
             console.warn(`device ${deviceId} already connected, dropping the old one`)
-            this.clientsById[deviceId].destroy()
+            this.clientsById[deviceId].destroy('replaced by a new connection for the same device id')
         }
 
         this.clientsById[deviceId] = client
@@ -200,9 +200,19 @@ export class DeviceAcceptor extends TypedEmitter<DeviceAcceptorEvents> {
         )
     }
 
-    disconnected(_client: Client) {
+    disconnected(_client: Client, reason: string) {
         let client = _client as ClientWithExtra
         if (client.deviceObj) {
+            // Only line that records *why* a device dropped - every other exit from here was
+            // silent before this, which is exactly what made 2026-09-29's 안방에어컨 stall
+            // (and whatever the next one of these turns out to be) impossible to diagnose after
+            // the fact: the live log's rolling window was long gone by the time anyone looked,
+            // and the frame log - which does last - had nothing but the final frame, with no way
+            // to tell a clean close from a timeout from a dead socket that was never told so.
+            // Written to the frame log (note(), not just the ephemeral console) so it survives.
+            log('status', client.deviceObj.id, `disconnected: ${reason}`)
+            recordNote(client.deviceObj.id, client.deviceObj.meta, 'disconnected', { reason })
+
             delete this.clientsById[client.deviceObj.id]
             this.emit('dropDevice', client.deviceObj.id)
             client.deviceObj.emit('close')

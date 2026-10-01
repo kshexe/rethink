@@ -20,7 +20,7 @@ class Subscription {
 
 type LWT = IConnectPacket['will']
 type ClientEvents = {
-    destroy: (will: LWT) => void
+    destroy: (will: LWT, reason: string) => void
 }
 
 export class Client extends TypedEmitter<ClientEvents> {
@@ -95,23 +95,28 @@ export class Client extends TypedEmitter<ClientEvents> {
         })
 
         mqtt.on('close', () => {
-            this.destroy()
+            this.destroy('close')
         })
         mqtt.on('error', (err) => {
             console.warn(err)
-            this.destroy()
+            this.destroy(`error: ${err}`)
         })
         mqtt.on('disconnect', () => {
-            this.destroy()
+            this.destroy('disconnect packet')
         })
     }
 
-    destroy() {
+    // `reason` names why this connection is ending - a close/error/disconnect straight off the
+    // raw socket (see the constructor), the broker's own idle timeout (see Broker.accept()), or
+    // whatever a caller passes - so a later diagnostic log (DeviceAcceptor.disconnected()) can
+    // tell a clean hangup from a timeout from a genuine error, instead of every disconnect
+    // looking the same the way they all did before this.
+    destroy(reason = 'unknown') {
         if (!this.mqtt) return
 
         this.mqtt.destroy()
         this.mqtt = null
-        this.emit('destroy', this.will)
+        this.emit('destroy', this.will, reason)
     }
 
     try_publish(packet: PublishPacket) {
@@ -128,7 +133,7 @@ export class Client extends TypedEmitter<ClientEvents> {
 
 type BrokerEvents = {
     connect: (packet: IConnectPacket, client: Client) => void
-    disconnect: (client: Client) => void
+    disconnect: (client: Client, reason: string) => void
     publish: (packet: PublishPacket, client: Client | null) => void
 }
 
@@ -156,10 +161,10 @@ export class Broker extends TypedEmitter<BrokerEvents> {
 
         stream.setTimeout(1000 * 60 * 5)
         stream.on('timeout', function () {
-            client.destroy()
+            client.destroy('idle timeout (5 min)')
         })
 
-        client.on('destroy', (lwt: LWT) => {
+        client.on('destroy', (lwt: LWT, reason: string) => {
             if (lwt)
                 this.publish(
                     {
@@ -172,7 +177,7 @@ export class Broker extends TypedEmitter<BrokerEvents> {
                     client,
                 )
 
-            this.emit('disconnect', client)
+            this.emit('disconnect', client, reason)
             this.clients.delete(client)
         })
     }
