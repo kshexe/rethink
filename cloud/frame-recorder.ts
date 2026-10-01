@@ -81,6 +81,21 @@ export function note(id: string, meta: Metadata | undefined, kind: string, extra
 /** Appends run through one chain so the file order matches the call order. */
 let writeChain: Promise<void> = Promise.resolve()
 
+/**
+ * Waits for every record()/note() call made so far to actually land on disk. `write()` below is
+ * fire-and-forget by design - record()/note() return before the append completes - which is fine
+ * for the normal case (the process keeps running, so the chain catches up on its own) and wrong
+ * for the one case it was added for: a disconnect note logged right before `process.exit()` on
+ * shutdown. Node does not wait for pending fs work on exit, so without this the note is queued and
+ * then thrown away with the rest of the process - which is exactly what happened the first time
+ * this shipped (2026-10-01, deployed as v1.4.55: the restart-loop reproduction that was supposed to
+ * prove the new logging works landed zero notes, because every one of them was still sitting in
+ * writeChain when exit() cut it off). The caller awaits this before exiting, not after.
+ */
+export function flush(): Promise<void> {
+    return writeChain
+}
+
 function write(line: string): void {
     writeChain = writeChain.then(async () => {
         if (!enabled) return

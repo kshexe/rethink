@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { configure, record } from '@/cloud/frame-recorder'
+import { configure, record, note, flush } from '@/cloud/frame-recorder'
 
 const dirs: string[] = []
 function freshDir() {
@@ -37,7 +37,10 @@ describe('frame recorder', () => {
         assert.equal(files.length, 1)
         assert.match(files[0], /^\d{4}-\d{2}-\d{2}\.jsonl$/)
 
-        const lines = readFileSync(join(dir, files[0]), 'utf-8').trim().split('\n').map((l) => JSON.parse(l))
+        const lines = readFileSync(join(dir, files[0]), 'utf-8')
+            .trim()
+            .split('\n')
+            .map((l) => JSON.parse(l))
         assert.equal(lines.length, 2)
         assert.deepEqual(
             lines.map((l) => [l.id, l.model, l.dir, l.hex]),
@@ -75,7 +78,12 @@ describe('frame recorder', () => {
     async function linesIn(dir: string) {
         await new Promise((r) => setTimeout(r, 50))
         const f = readdirSync(dir)[0]
-        return f ? readFileSync(join(dir, f), 'utf-8').trim().split('\n').map((l) => JSON.parse(l)) : []
+        return f
+            ? readFileSync(join(dir, f), 'utf-8')
+                  .trim()
+                  .split('\n')
+                  .map((l) => JSON.parse(l))
+            : []
     }
 
     test('identical from-device frames are recorded once; a change is recorded again', async () => {
@@ -88,7 +96,10 @@ describe('frame recorder', () => {
         record('id-1', meta, 'from-device', a)
         record('id-1', meta, 'from-device', b)
         record('id-1', meta, 'from-device', a) // changed back - kept
-        assert.deepEqual((await linesIn(dir)).map((l) => l.hex), ['AA0100BB', 'AA0102BB', 'AA0100BB'])
+        assert.deepEqual(
+            (await linesIn(dir)).map((l) => l.hex),
+            ['AA0100BB', 'AA0102BB', 'AA0100BB'],
+        )
     })
 
     test('dedup is per device', async () => {
@@ -96,7 +107,10 @@ describe('frame recorder', () => {
         configure({ dir, days: 7 })
         record('id-1', meta, 'from-device', Buffer.from('AA00BB', 'hex'))
         record('id-2', meta, 'from-device', Buffer.from('AA00BB', 'hex'))
-        assert.deepEqual((await linesIn(dir)).map((l) => l.id), ['id-1', 'id-2'])
+        assert.deepEqual(
+            (await linesIn(dir)).map((l) => l.id),
+            ['id-1', 'id-2'],
+        )
     })
 
     test('to-device commands are always recorded, even identical ones', async () => {
@@ -106,5 +120,28 @@ describe('frame recorder', () => {
         record('id-1', meta, 'to-device', cmd)
         record('id-1', meta, 'to-device', cmd)
         assert.equal((await linesIn(dir)).filter((l) => l.dir === 'to-device').length, 2)
+    })
+
+    // Added alongside flush() itself (2026-10-01): a disconnect note logged right before
+    // process.exit() was being thrown away, queued but never written, because write() is
+    // fire-and-forget and node does not wait for pending fs work on exit. The every other test
+    // above papers over exactly this with a blind `setTimeout(50)`; this one proves the real fix -
+    // that awaiting flush() is sufficient on its own, with no arbitrary wait at all.
+    test('flush() resolves only once every note before it has actually reached disk', async () => {
+        const dir = freshDir()
+        configure({ dir, days: 7 })
+        note('id-1', meta, 'disconnected', { reason: 'idle timeout (5 min)' })
+
+        await flush()
+
+        assert.deepEqual(
+            (await linesIn(dir)).map((l) => [l.kind, l.reason]),
+            [['disconnected', 'idle timeout (5 min)']],
+        )
+    })
+
+    test('flush() while disabled resolves immediately rather than hanging', async () => {
+        configure({ days: 0 })
+        await assert.doesNotReject(flush())
     })
 })

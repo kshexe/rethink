@@ -20,7 +20,7 @@ import log, { setFilter as setLogFilter } from './util/logging'
 import { DeviceManager } from './cloud/devmgr'
 import { Bridge } from './bridge'
 import { JSONStorage } from './bridge/state'
-import { configure as configureFrameRecorder } from './cloud/frame-recorder'
+import { configure as configureFrameRecorder, flush as flushFrameRecorder } from './cloud/frame-recorder'
 
 const configPath = resolve(process.argv[2] ?? './config.json')
 const configDir = dirname(configPath)
@@ -127,7 +127,11 @@ function t2setup(manager: DeviceManager) {
     const shutdown = (signal: string) => {
         log('status', `${signal} received - closing ${broker.clients.size} appliance connection(s) before exit`)
         for (const client of broker.clients) client.destroy(`server shutdown (${signal})`)
-        process.exit(0)
+        // The destroy() calls above already ran their disconnect notes into frame-recorder's
+        // write queue synchronously - but queued, not written: node does not wait for pending fs
+        // work on exit(), so without this every one of those notes is thrown away with the
+        // process instead of reaching disk. See flush()'s own comment for how this was found.
+        void flushFrameRecorder().finally(() => process.exit(0))
     }
     process.on('SIGTERM', () => shutdown('SIGTERM'))
     process.on('SIGINT', () => shutdown('SIGINT'))
