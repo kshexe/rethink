@@ -2,6 +2,7 @@ import * as mqtt from 'mqtt'
 import { Thinq2Device } from './thinqApi'
 import { TypedEmitter } from 'tiny-typed-emitter'
 import log from '@/util/logging'
+import { note as recordNote } from '@/cloud/frame-recorder'
 
 type ConnectionEvents = {
     ready: () => void
@@ -68,6 +69,19 @@ export class Connection extends TypedEmitter<ConnectionEvents> {
     mqtt: mqtt.MqttClient
     mid = 10000
 
+    // Whether the MQTT-level CONNACK (the 'connect' event below) has ever actually landed, so a
+    // later close/error note can say which side of that line this connection died on. The two are
+    // different failures with different fixes: a certificate AWS IoT no longer honours is
+    // rejected before 'connect' ever fires (this needs a fresh pair() - see register() in
+    // bridge/index.ts), while a transport hiccup after a real CONNACK is the ordinary case the
+    // existing close-triggered reconnect in bridge/index.ts already handles with the same
+    // credentials. Found missing the hard way (2026-10-01): 안방에어컨's bridge connection died
+    // with nothing but an ephemeral console line, which the add-on's own rolling log had long
+    // since dropped by the time anyone went looking - a manual bridge disable+enable (which does
+    // go through register()) fixed it, but which of the two failures that actually was is still
+    // unconfirmed. This records it for the next one instead of guessing again.
+    connectedOnce = false
+
     constructor(
         readonly device: Thinq2Device,
         // The physical device's real deploy appInfo/platformInfo (from cloud/thinq2 Device).
@@ -127,6 +141,7 @@ export class Connection extends TypedEmitter<ConnectionEvents> {
 
         this.mqtt.on('connect', async () => {
             log('bridge', `${this.device.deviceId} connected`)
+            this.connectedOnce = true
             this.emit('ready')
 
             // subscribe/publish can reject (e.g. the connection drops mid-handshake) - an
@@ -150,13 +165,26 @@ export class Connection extends TypedEmitter<ConnectionEvents> {
                 )
             } catch (err) {
                 log('bridge', `${this.device.deviceId} preDeploy failed: ${err}`)
+                recordNote(this.device.deviceId, this.device.meta, 'bridge-connection-failed', {
+                    stage: 'preDeploy',
+                    message: String(err),
+                })
                 this.emit('error', err instanceof Error ? err : new Error(String(err)))
             }
         })
 
-        this.mqtt.on('close', () => this.emit('close'))
+        this.mqtt.on('close', () => {
+            recordNote(this.device.deviceId, this.device.meta, 'bridge-connection-closed', {
+                connectedOnce: this.connectedOnce,
+            })
+            this.emit('close')
+        })
         this.mqtt.on('error', (err) => {
             log('bridge', `Error communicating with ${state.mqttServer}: ${err}`)
+            recordNote(this.device.deviceId, this.device.meta, 'bridge-connection-failed', {
+                stage: this.connectedOnce ? 'post-connect' : 'connect',
+                message: String(err),
+            })
             this.emit('error', err)
         })
     }
