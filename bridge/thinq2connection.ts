@@ -82,6 +82,9 @@ export class Connection extends TypedEmitter<ConnectionEvents> {
     // unconfirmed. This records it for the next one instead of guessing again.
     connectedOnce = false
 
+    // Guards against ending an already-ended mqtt client twice - see destroy().
+    private destroyed = false
+
     constructor(
         readonly device: Thinq2Device,
         // The physical device's real deploy appInfo/platformInfo (from cloud/thinq2 Device).
@@ -169,6 +172,16 @@ export class Connection extends TypedEmitter<ConnectionEvents> {
                     stage: 'preDeploy',
                     message: String(err),
                 })
+                // The CONNACK already arrived, so the underlying socket is still open and healthy
+                // at this point - left alone, it never emits 'close', and bridge/index.ts's
+                // close-triggered reconnect (the only thing that ever retries a bridge
+                // connection) never runs. This was exactly the shape of 안방에어컨's 2026-10-01
+                // bridge stall (see connectedOnce's comment above): a manual disable+enable was
+                // the only thing that ever brought it back, because that's the only path that
+                // tears the connection down. Forcing it closed here instead lets the existing
+                // reconnect do that automatically. Ported from anszom/rethink#110, which
+                // diagnosed and fixed this same class of bug upstream.
+                this.destroy()
                 this.emit('error', err instanceof Error ? err : new Error(String(err)))
             }
         })
@@ -209,6 +222,10 @@ export class Connection extends TypedEmitter<ConnectionEvents> {
     }
 
     destroy() {
-        this.mqtt.end()
+        if (this.destroyed) return
+        this.destroyed = true
+        // Forced (skips flushing any in-flight QoS publish): a preDeploy failure can mean the
+        // connection is unresponsive in a way a graceful end() would just hang waiting on.
+        this.mqtt.end(true)
     }
 }

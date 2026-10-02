@@ -262,4 +262,55 @@ describe('Thinq2Connection records why a bridge connection died', () => {
 
         connection.destroy()
     })
+
+    // The actual 2026-10-01 bug (anszom/rethink#110): preDeploy failing at the application level
+    // used to leave the socket itself untouched - still open, CONNACK already received - so
+    // 'close' never fired and bridge/index.ts's close-triggered reconnect never ran. Simulated
+    // here by monkey-patching the live mqtt client's subscribe() to reject without the real
+    // connection ever actually dropping, which `until()`'s synchronous setup reliably beats the
+    // real async TCP handshake to do.
+    test('a preDeploy failure forces the connection closed instead of leaving it to rot', async () => {
+        const broker = new Broker()
+        const sockets = new Set<Socket>()
+        const server = createServer((s) => {
+            sockets.add(s)
+            broker.accept(s)
+        })
+        await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+
+        const device = new Thinq2ClientDevice(DEVICE_ID, META, {
+            countryCode: 'US',
+            apiServer: 'http://127.0.0.1:1',
+            mqttServer: `mqtt://127.0.0.1:${(server.address() as AddressInfo).port}`,
+            caCertificate: '',
+            privateKey: '',
+            certificate: '',
+            pubTopic: `clip/message/devices/${DEVICE_ID}/pub`,
+            provTopic: PROV_TOPIC,
+            subTopic: SUB_TOPIC,
+        })
+
+        const connection = new Thinq2Connection(device)
+        connection.mqtt.subscribe = (() =>
+            Promise.reject(new Error('simulated preDeploy failure'))) as typeof connection.mqtt.subscribe
+
+        let sawError = false
+        connection.on('error', () => (sawError = true))
+        let sawClose = false
+        connection.on('close', () => (sawClose = true))
+
+        await until(() => sawError, 'the preDeploy error')
+        await untilAsync(
+            async () => (await notes()).some((n) => n.kind === 'bridge-connection-closed'),
+            "'close' firing because destroy() forced it - the actual fix",
+        )
+        assert.equal(sawClose, true)
+
+        const allNotes = await notes()
+        assert.ok(allNotes.some((n) => n.kind === 'bridge-connection-failed' && n.stage === 'preDeploy'))
+        const closeNote = allNotes.find((n) => n.kind === 'bridge-connection-closed')
+        assert.equal(closeNote?.connectedOnce, true)
+
+        await new Promise((resolve) => server.close(resolve))
+    })
 })
