@@ -150,7 +150,16 @@ export class Broker extends TypedEmitter<BrokerEvents> {
         const client = new Client(mqtt, this.retainMap)
 
         mqtt.on('publish', (packet) => {
-            this.publish(packet, client)
+            // this.publish() fans this one packet out to every connected client
+            // (try_publish() below) and runs every registered device's own packet-decode handler
+            // (via the 'publish' event DeviceAcceptor listens on) - one throw here, uncaught,
+            // would propagate out of this synchronous event handler and crash the whole process
+            // over what should be just one device's bad frame.
+            try {
+                this.publish(packet, client)
+            } catch (err) {
+                console.warn('Error handling an incoming publish:', err)
+            }
 
             if (packet.qos > 0) mqtt.puback({ messageId: packet.messageId })
         })

@@ -5,10 +5,9 @@ import { BridgeState } from './state'
 import { Connection as Thinq2Connection } from './thinq2connection'
 import { Device as T2Downstream } from '@/cloud/thinq2/device'
 import { TypedEmitter } from 'tiny-typed-emitter'
+import { ExponentialBackoff } from '@/util/backoff'
 
 type StatusCallback = (status: string) => void
-
-const RECONNECT_PERIOD = 5000
 
 /**
  * Decides how an appliance should be registered before it can be bridged.
@@ -32,6 +31,7 @@ type BridgedDeviceEvents = {
 
 class BridgedDevice extends TypedEmitter<BridgedDeviceEvents> {
     connected: boolean = false
+    private readonly backoff = ExponentialBackoff.forLgCloud()
 
     // upstream - our connection to the ThinQ cloud
     // downstream - the physical device
@@ -78,7 +78,10 @@ class BridgedDevice extends TypedEmitter<BridgedDeviceEvents> {
             return
         }
 
-        this.connection.once('ready', () => this.#reportConnected(true))
+        this.connection.once('ready', () => {
+            this.backoff.reset()
+            this.#reportConnected(true)
+        })
         this.connection.on('close', () => this.disconnect())
         this.connection.on('error', console.log)
     }
@@ -92,7 +95,7 @@ class BridgedDevice extends TypedEmitter<BridgedDeviceEvents> {
             this.connection.destroy()
             this.connection = undefined
             clearTimeout(this.reconnectTimeout)
-            this.reconnectTimeout = setTimeout(() => this.reconnectNow(), RECONNECT_PERIOD)
+            this.reconnectTimeout = setTimeout(() => this.reconnectNow(), this.backoff.nextDelay())
         }
     }
 
