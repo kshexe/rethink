@@ -23,6 +23,17 @@ import { encodePacket, decodePacket, type EncodeInput } from '@/util/packet-code
 import { connect as cloudConnect } from '@/util/lgcloud/monitor'
 import { loadState } from '@/util/lgcloud/state'
 
+// Keep stdout for the protocol only. cloud_start/probe pull in bridge/thinqApi and
+// util/logging, which report progress with console.log — on stdout that line reaches the
+// client as a malformed JSON-RPC message (observed live: a login's "Welcome ...!" line made
+// the client fail with "SyntaxError: Unexpected token 'W' ... is not valid JSON"). Node
+// already sends warn/error to stderr, so only the stdout-bound levels need redirecting.
+// Scoped to this process only, not thinqApi.ts/logging.ts themselves, since those are also
+// used by rethink-cloud, whose stdout logging is intentional there.
+console.log = console.error
+console.info = console.error
+console.debug = console.error
+
 const DEFAULT_MGMT = process.env.RETHINK_MGMT ?? 'localhost:44401'
 
 // Session-level management host[:port] that the device tools connect to. Starts at
