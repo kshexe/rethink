@@ -88,6 +88,13 @@ const PERIODIC_DUMP = buf(
     ),
 )
 
+// Real captures of the ambient temp/humidity frame (see 2REF21EBNSX_3.ts's ambient_temp/
+// ambient_humidity component comment) - 2026-10-06T02:14:27Z (temp=30, humidity=41.9%, confirmed
+// against a nearby Zigbee sensor at the same moment) and an earlier one the same day with
+// different values, to exercise the change-gating.
+const AMBIENT_30_419 = buf('aa0a1018011e01a3cabb')
+const AMBIENT_28_489 = buf('aa0a1018011c01e9b6bb')
+
 function makeDevice(id = DEVICE_ID) {
     const ha = new MockHAConnection()
     const thinq = new MockThinq2Device(id, META)
@@ -100,6 +107,8 @@ describe(MODEL_ID, () => {
         const { ha } = makeDevice()
         const components = ha.devices[DEVICE_ID].config!.components as Record<string, Record<string, unknown>>
         assert.deepEqual(Object.keys(components).sort(), [
+            'ambient_humidity',
+            'ambient_temp',
             // energy_raw_counter/energy_total: withdrawal stubs (platform-only, see the config
             // itself), not real entities - removed 2026-09-18 once energy_hour/day/month covered
             // the need.
@@ -231,6 +240,27 @@ describe(MODEL_ID, () => {
         // @ts-expect-error seenUnknown is private - only reached by the generic unmodelled-frame
         // fallthrough, so its absence here proves the dedicated `10 cf` branch caught it first.
         assert.equal(dev.seenUnknown.has('250:10:cf'), false)
+    })
+
+    test('ambient temp/humidity decode reproduces the two real captures, publishing only on change', () => {
+        const { ha, thinq, dev } = makeDevice()
+
+        thinq.emit('data', AMBIENT_30_419)
+        assert.equal(ha.devices[DEVICE_ID].properties.ambient_temp, 30)
+        assert.equal(ha.devices[DEVICE_ID].properties.ambient_humidity, 41.9)
+        // @ts-expect-error seenUnknown is private - its absence here proves the dedicated `10 18`
+        // branch caught this shape before the generic unmodelled-frame fallthrough could.
+        assert.equal(dev.seenUnknown.has('6:10:18'), false)
+
+        ha.devices[DEVICE_ID].properties.ambient_temp = 'untouched'
+        ha.devices[DEVICE_ID].properties.ambient_humidity = 'untouched'
+        thinq.emit('data', AMBIENT_30_419) // identical values again - no republish
+        assert.equal(ha.devices[DEVICE_ID].properties.ambient_temp, 'untouched')
+        assert.equal(ha.devices[DEVICE_ID].properties.ambient_humidity, 'untouched')
+
+        thinq.emit('data', AMBIENT_28_489) // different values - republishes both
+        assert.equal(ha.devices[DEVICE_ID].properties.ambient_temp, 28)
+        assert.equal(ha.devices[DEVICE_ID].properties.ambient_humidity, 48.9)
     })
 
     test('the energy counter frame is recognised by shape (not gated on byte 2) and tracks the raw big-endian value internally', () => {

@@ -144,8 +144,11 @@ import * as energyAccumulator from '../energy-accumulator'
  * they are read but not asserted on - see the note above 0x39 (57, the food-poisoning-index shown
  * on the Smart Care+ / 스마트 안심 보관 page) not appearing anywhere in this record, nor as any
  * field in modelJSON's MonitoringValue table at all: that value is described in the app as
- * computed from temperature *and* humidity, so it is derived cloud-side rather than transmitted
- * as a single number by the appliance, and was not pursued further. This frame is what actually
+ * computed from temperature *and* humidity, so it was assumed derived entirely cloud-side and not
+ * pursued further - CORRECTION, 2026-10-06: the raw ingredients (ambient temperature + humidity)
+ * turned out to be transmitted after all, just under a completely different opcode (`10 18`, see
+ * ambient_temp/ambient_humidity below) that this record has nothing to do with; the computed
+ * index itself still isn't on the wire anywhere, which stands. This frame is what actually
  * keeps the entities below in sync - `setProperty` also publishes optimistically first, for a
  * snappy UI, but this real reading is what corrects it if anything else (the appliance's own
  * panel, the LG app, ...) changes a setting instead.
@@ -253,6 +256,15 @@ const ENERGY_MAX_PLAUSIBLE_DELTA = 500
 const ENERGY_COUNTER_HI = 3
 const ENERGY_COUNTER_LO = 4
 
+/** `aa 0a 10 18 01 <temp> <hum_hi> <hum_lo> <ck> bb` - see the ambient_temp/ambient_humidity
+ *  component comment above for how this was found and confirmed. */
+const AMBIENT_SUB = 0x10
+const AMBIENT_OPCODE = 0x18
+const AMBIENT_FRAME_LEN = 6
+const AMBIENT_TEMP = 3
+const AMBIENT_HUMIDITY_HI = 4
+const AMBIENT_HUMIDITY_LO = 5
+
 const FRIDGE_TEMP_MIN = 1
 const FRIDGE_TEMP_MAX = 7
 const FREEZER_TEMP_MIN = -23
@@ -308,6 +320,8 @@ export default class Device extends AABBDevice {
     freezerDoorOpen: boolean | undefined
     smartCareV2: boolean | undefined
     energyRawCounter: number | undefined
+    ambientTemp: number | undefined
+    ambientHumidity: number | undefined
 
     /** (dir:tag) pairs already flagged as unrecognised, so a repeating one is noted once. */
     private seenUnknown = new Set<string>()
@@ -410,6 +424,40 @@ export default class Device extends AABBDevice {
                     unit_of_measurement: 'Wh',
                     state_class: 'total',
                     state_topic: '$this/energy_month',
+                },
+                // Ambient (room) temperature/humidity - not in modelJSON's MonitoringValue table at
+                // all (checked), so these names are not LG's own, unlike this file's other fields.
+                // Found 2026-10-06 via the live "unmodelled" log: `<sub=0x10> 18 01 <temp> <hum_hi>
+                // <hum_lo>`, a 6-byte frame sent every ~15 minutes, constant-across-every-capture
+                // enough (2 days) that it looked promising on its own, and confirmed against
+                // 거실온습도 (a Zigbee sensor in the next room) reading within the same minute:
+                // 30.3°C/38.8% there vs this frame's 30°C/41.9% - temperature matches almost
+                // exactly, humidity close enough to explain as a kitchen/living-room difference.
+                // Most likely what feeds the cloud's own foodPoisonIndex (refState), which this
+                // file's header already noted as "computed from temperature *and* humidity... not
+                // transmitted as a single number" - the raw ingredients were just under an opcode
+                // nothing here recognised yet.
+                ambient_temp: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-ambient_temp',
+                    name: 'ambientTemp',
+                    icon: 'mdi:thermometer',
+                    device_class: 'temperature',
+                    unit_of_measurement: '°C',
+                    state_class: 'measurement',
+                    entity_category: 'diagnostic',
+                    state_topic: '$this/ambient_temp',
+                },
+                ambient_humidity: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-ambient_humidity',
+                    name: 'ambientHumidity',
+                    icon: 'mdi:water-percent',
+                    device_class: 'humidity',
+                    unit_of_measurement: '%',
+                    state_class: 'measurement',
+                    entity_category: 'diagnostic',
+                    state_topic: '$this/ambient_humidity',
                 },
                 // Withdrawn 2026-09-18 (hour/day/month above cover the real need) - publishing the
                 // key with nothing but `platform` is what removes the entity from existing
@@ -581,6 +629,23 @@ export default class Device extends AABBDevice {
                     if (delta <= ENERGY_MAX_PLAUSIBLE_DELTA) void this.energy?.recordDelta(delta)
                 }
                 this.energyRawCounter = counter
+            }
+            return
+        }
+
+        // ambient temp/humidity: <sub=0x10> 18 01 <temp> <hum_hi> <hum_lo> - see the
+        // ambient_temp/ambient_humidity component comment above.
+        if (buf.length === AMBIENT_FRAME_LEN && buf[0] === AMBIENT_SUB && buf[1] === AMBIENT_OPCODE) {
+            const ambientTemp = buf[AMBIENT_TEMP]
+            if (ambientTemp !== this.ambientTemp) {
+                this.ambientTemp = ambientTemp
+                this.publishProperty('ambient_temp', ambientTemp)
+            }
+
+            const ambientHumidity = (buf[AMBIENT_HUMIDITY_HI] * 256 + buf[AMBIENT_HUMIDITY_LO]) / 10
+            if (ambientHumidity !== this.ambientHumidity) {
+                this.ambientHumidity = ambientHumidity
+                this.publishProperty('ambient_humidity', ambientHumidity)
             }
             return
         }
