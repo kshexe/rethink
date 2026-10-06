@@ -148,13 +148,17 @@ test('setProperty with write_attach as array sends additional TLVs', () => {
 })
 
 // --- unmodelled-tag notes (frame recorder) ---
-import { configure as configureRecorder } from '@/cloud/frame-recorder'
+import { configure as configureRecorder, flush as flushRecorder } from '@/cloud/frame-recorder'
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 async function recorderLines(dir: string) {
-    await new Promise((r) => setTimeout(r, 40))
+    // Wait for every record()/note() call made so far to actually land, rather than guessing at
+    // a fixed delay - see flush()'s own comment. A fixed sleep here used to flake once under the
+    // full suite's CPU contention: the write was still queued when the sleep ended, so a later
+    // test's reconfigure (changing where new calls write) raced the still-pending one.
+    await flushRecorder()
     const f = readdirSync(dir)[0]
     return f
         ? readFileSync(join(dir, f), 'utf-8')

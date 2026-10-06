@@ -135,8 +135,9 @@ describe('DeviceAcceptor.disconnected() records the reason where it survives', (
         assert.ok(deviceSawClose, "the device's own close handler still runs - this is additive, not a replacement")
 
         // note() appends through frame-recorder's own promise chain (see its file header) rather
-        // than writing synchronously - same wait tests/cloud/frame-recorder.test.ts already uses.
-        await new Promise((r) => setTimeout(r, 50))
+        // than writing synchronously - wait for it to actually land via flush(), the same fix
+        // tests/cloud/frame-recorder.test.ts's own helpers got (2026-10-06).
+        await frameRecorder.flush()
 
         const today = new Date().toISOString().slice(0, 10)
         const lines = readFileSync(join(dir, `${today}.jsonl`), 'utf-8')

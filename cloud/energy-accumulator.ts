@@ -110,10 +110,29 @@ async function save(id: string, stats: EnergyStats): Promise<void> {
     }
 }
 
+// In-flight roll()/addDelta() calls, so flush() below can wait on exactly the ones outstanding
+// when it's called - added/removed synchronously around each one's await-ing body, so a call
+// still in its synchronous prelude (the Promise already exists, nothing has awaited yet) is
+// tracked before control ever returns to whoever just fired it. roll() alone (not just addDelta())
+// matters here: current() calls only roll(), and that is also what scheduleHourlyRefresh's very
+// first (fire-and-forget) firing goes through, publishing the construction-time baseline - a test
+// asserting that baseline landed needs flush() to cover it too, not just a real delta.
+const pending = new Set<Promise<unknown>>()
+
+function track<T>(p: Promise<T>): Promise<T> {
+    pending.add(p)
+    void p.finally(() => pending.delete(p))
+    return p
+}
+
 /** Roll over any calendar bucket the wall clock has moved past since the last call, without
  *  adding a delta - so a poll that finds nothing new still keeps hour/day/month current instead
  *  of carrying a stale bucket's figure into the new hour/day/month. */
-export async function roll(id: string, now = Date.now()): Promise<EnergyStats> {
+export function roll(id: string, now = Date.now()): Promise<EnergyStats> {
+    return track(rollNow(id, now))
+}
+
+async function rollNow(id: string, now: number): Promise<EnergyStats> {
     const stats = await load(id)
     const { date, month, hour } = localParts(now)
     let changed = false
@@ -137,7 +156,11 @@ export async function roll(id: string, now = Date.now()): Promise<EnergyStats> {
 }
 
 /** Add a newly-seen Wh delta to all three buckets and persist immediately. */
-export async function addDelta(id: string, deltaWh: number, now = Date.now()): Promise<EnergyStats> {
+export function addDelta(id: string, deltaWh: number, now = Date.now()): Promise<EnergyStats> {
+    return track(addDeltaNow(id, deltaWh, now))
+}
+
+async function addDeltaNow(id: string, deltaWh: number, now: number): Promise<EnergyStats> {
     const stats = await roll(id, now)
     stats.hourWh += deltaWh
     stats.dayWh += deltaWh
@@ -145,6 +168,17 @@ export async function addDelta(id: string, deltaWh: number, now = Date.now()): P
     cache.set(id, stats)
     await save(id, stats)
     return stats
+}
+
+/** Resolves once every roll()/addDelta() call made so far has actually been persisted - mirrors
+ *  frame-recorder.ts's flush(), for the same reason: every call site (device files' own
+ *  `void tracker.recordDelta(...)`, fired from a synchronous frame handler that cannot itself
+ *  await, and scheduleHourlyRefresh's own fire-and-forget first firing) is fire-and-forget, so a
+ *  test exercising it has no other way to know the write has landed short of guessing a fixed
+ *  delay - which flaked once under the full suite's CPU contention (2026-10-06), the same way
+ *  frame-recorder's own fixed-delay test helper did. */
+export async function flush(): Promise<void> {
+    await Promise.allSettled(pending)
 }
 
 /** Current bucket values without recording a delta - for publishing on every state frame, not

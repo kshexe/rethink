@@ -25,7 +25,12 @@ const repoRoot = fileURLToPath(new URL('../../..', import.meta.url))
 // derived from it; 'localhost' is the one name that is guaranteed to point back at us.
 const HOSTNAME = 'localhost'
 const DEVICE_SUBJECT = 'CN=*.clip.com, O=LGE, C=KR'
-const BOOT_TIMEOUT_MS = 5_000
+// 5000ms was enough running this file alone (solo: ~3.5s for the whole suite's 2 real boots) but
+// flaked once under the full `npm test` run's CPU contention (56 files worth of concurrent node
+// processes) - "rethink did not start in 5000ms", a real child process genuinely taking longer to
+// print its ready line under load, not a logic bug. Generous margin costs nothing on the common
+// path: both this and waitForPort's use of it return as soon as the real condition is observed.
+const BOOT_TIMEOUT_MS = 20_000
 
 // This fork has no thinq1 support at all (see bridge/index.ts) - dropped from the upstream
 // version of this suite, along with the ports and test that exercised it. The plain-TCP MQTT

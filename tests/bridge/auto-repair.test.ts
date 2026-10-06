@@ -224,7 +224,10 @@ describe('Bridge auto-repairs a connection stuck failing before connect', () => 
     })
 
     async function notes(): Promise<{ kind: string; [k: string]: unknown }[]> {
-        await new Promise((r) => setTimeout(r, 50))
+        // Wait for every record()/note() call made so far to actually land, rather than guessing
+        // at a fixed delay - see frame-recorder's flush() and tlv_device.test.ts's identical fix
+        // (2026-10-06) for the race a fixed sleep leaves open.
+        await frameRecorder.flush()
         const today = new Date().toISOString().slice(0, 10)
         try {
             return readFileSync(join(notesDir, `${today}.jsonl`), 'utf-8')

@@ -179,9 +179,10 @@ describe('Thinq2Connection records why a bridge connection died', () => {
     }
 
     async function notes(): Promise<{ kind: string; [k: string]: unknown }[]> {
-        // note() appends through frame-recorder's own promise chain - see its file header -
-        // rather than writing synchronously.
-        await new Promise((r) => setTimeout(r, 50))
+        // note() appends through frame-recorder's own promise chain - see its file header - rather
+        // than writing synchronously. flush() waits for it to actually land, same fix as
+        // tests/cloud/frame-recorder.test.ts's own helpers got (2026-10-06).
+        await frameRecorder.flush()
         const today = new Date().toISOString().slice(0, 10)
         try {
             return readFileSync(join(notesDir, `${today}.jsonl`), 'utf-8')

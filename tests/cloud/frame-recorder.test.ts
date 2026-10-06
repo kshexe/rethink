@@ -31,7 +31,7 @@ describe('frame recorder', () => {
         configure({ dir, days: 7 })
         record('id-1', meta, 'from-device', Buffer.from('AABBCC', 'hex'))
         record('id-1', meta, 'to-device', Buffer.from('0102', 'hex'))
-        await new Promise((r) => setTimeout(r, 50))
+        await flush()
 
         const files = readdirSync(dir)
         assert.equal(files.length, 1)
@@ -71,12 +71,12 @@ describe('frame recorder', () => {
         const dir = freshDir()
         configure({ dir, days: 7 })
         record('id-1', meta, 'to-device', Buffer.alloc(0))
-        await new Promise((r) => setTimeout(r, 50))
+        await flush()
         assert.equal(readdirSync(dir).length, 0)
     })
 
     async function linesIn(dir: string) {
-        await new Promise((r) => setTimeout(r, 50))
+        await flush()
         const f = readdirSync(dir)[0]
         return f
             ? readFileSync(join(dir, f), 'utf-8')

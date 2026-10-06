@@ -97,16 +97,27 @@ export function flush(): Promise<void> {
 }
 
 function write(line: string): void {
+    // Snapshot baseDir now, not inside the chained callback below: write() is fire-and-forget,
+    // so this append can still be sitting in writeChain (behind an earlier call's mkdir/appendFile)
+    // when a later configure() changes baseDir for real - a live reconfiguration in production, or
+    // (what actually surfaced this, 2026-10-06) two back-to-back tests in the same file each
+    // pointing configure() at their own tmp directory. Reading baseDir late meant this append
+    // could land in whichever directory happened to be current when the chain finally got to it,
+    // not the one that was current when record()/note() was actually called - test B would then
+    // see a note that was really test A's, landed in test B's own directory. `enabled` is still
+    // read late (immediately below) on purpose: a write queued while enabled should still be
+    // dropped, not mis-filed, if configure() disables recording entirely before this runs.
+    const dir = baseDir
     writeChain = writeChain.then(async () => {
         if (!enabled) return
         try {
-            await mkdir(baseDir, { recursive: true })
-            await appendFile(join(baseDir, `${dayStamp()}.jsonl`), line)
+            await mkdir(dir, { recursive: true })
+            await appendFile(join(dir, `${dayStamp()}.jsonl`), line)
         } catch (err) {
             // A missing /share (add-on without the share mapping) lands here once per frame; drop
             // to disabled so it is one log line, not a flood.
             enabled = false
-            log('status', `frame recorder disabled - cannot write ${baseDir}: ${err}`)
+            log('status', `frame recorder disabled - cannot write ${dir}: ${err}`)
         }
     })
 }

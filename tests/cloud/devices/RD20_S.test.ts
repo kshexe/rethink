@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import DUT from '@/cloud/devices/RD20_S'
 import type { Metadata } from '@/cloud/thinq'
-import { configure as configureEnergyAccumulator } from '@/cloud/energy-accumulator'
+import { configure as configureEnergyAccumulator, flush as flushEnergyAccumulator } from '@/cloud/energy-accumulator'
 import { MockHAConnection, MockThinq2Device, buf } from '@/tests/helpers/mocks'
 
 const DEVICE_ID = 'test-id'
@@ -23,9 +23,11 @@ function freshEnergyDir() {
 }
 
 /** recordEnergyDelta() is fire-and-forget (`void ...`) from processAABB, so its file I/O has not
- *  necessarily landed yet the instant `thinq.emit` returns - give it a beat. */
+ *  necessarily landed yet the instant `thinq.emit` returns - wait for it to actually land, rather
+ *  than guessing a fixed delay (which flaked once under the full suite's CPU contention,
+ *  2026-10-06 - see energy-accumulator.ts's own flush() comment). */
 async function settle() {
-    await new Promise((r) => setTimeout(r, 50))
+    await flushEnergyAccumulator()
 }
 
 /*
