@@ -66,4 +66,21 @@ export default class HADevice {
     setProperty(prop: string, mqttValue: string) {
         throw new Error('To be overriden')
     }
+
+    // Was AABBDevice-only; TLVDevice called this.HA.publishProperty directly instead (see
+    // tlv_device.ts's processKeyValue), so every values-response republished every readable field
+    // unconditionally even when nothing had changed - CST_570004_WW alone, as of 2026-10-06, had
+    // several fields (0x336/0x357/0x358 among them) doing exactly that on every reconnect. Lifted
+    // here (2026-10-06, following anszom/rethink@e3e2e94) so every device family gets the same
+    // dedup for free; callers that genuinely need to bypass it can still call
+    // `this.HA.publishProperty` directly.
+    publishCache = new Map<string, string | number | undefined>()
+
+    publishProperty(prop: string, value: string | number | undefined) {
+        // has() first: an undefined value on a never-published property must still go out
+        if (this.publishCache.has(prop) && this.publishCache.get(prop) === value) return
+
+        this.publishCache.set(prop, value)
+        this.HA.publishProperty(this.id, prop, value)
+    }
 }

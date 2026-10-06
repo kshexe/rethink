@@ -31,7 +31,12 @@ const META: Metadata = { modelId: 'ST_R_ETH01Y_', modelName: 'ST_R_ETH01Y_', swV
 const SUB_TOPIC = `clip/message/devices/${DEVICE_ID}`
 const PROV_TOPIC = `clip/provisioning/devices/${DEVICE_ID}`
 
-async function until(cond: () => boolean, what: string, ms = 4000) {
+// 4000ms was enough running this file alone (confirmed: 3/3 clean solo runs) but flaked once under
+// the full `npm test` suite's CPU contention (56 files' worth) - "timed out waiting for disconnect
+// #1", a plain socket-close-to-publishProperty propagation delay, not a logic bug. Generous enough
+// margin here costs nothing on the common (fast) path, since `until` returns as soon as `cond()`
+// is true regardless of this ceiling.
+async function until(cond: () => boolean, what: string, ms = 30000) {
     const end = Date.now() + ms
     while (!cond()) {
         if (Date.now() > end) throw new Error(`timed out waiting for ${what}`)
@@ -132,6 +137,9 @@ describe('Bridge auto-repairs a connection stuck failing before connect', () => 
     let attemptCount: number
     let broker: Broker
     let originalForLgCloud: typeof ExponentialBackoff.forLgCloud
+    // Set by each test right after constructing its Bridge, so afterEach can force-clean it up -
+    // see afterEach's own comment for why relying on each test's own close() alone isn't enough.
+    let currentBridge: Bridge | undefined
 
     beforeEach(async () => {
         // BridgedDevice's real backoff (2s doubling to 60s) means accumulating REPAIR_THRESHOLD
@@ -189,6 +197,22 @@ describe('Bridge auto-repairs a connection stuck failing before connect', () => 
     })
 
     afterEach(async () => {
+        // Defensive, found necessary the hard way (2026-10-06): a #rePair() still in flight when a
+        // test ends (racing register()'s async network calls against the test's own close() call)
+        // can resurrect a BridgedDevice after the test function has already returned - enable()
+        // captures `dev` from manager.allDevices once, before its awaits, so removing the device
+        // doesn't retroactively stop an enable() already past that point. The resurrected device's
+        // reconnect loop, sped up by this file's own fast test backoff, then spent the rest of a
+        // whole `npm test` run hammering the by-then-closed cloudServer with ECONNREFUSED -
+        // sometimes also racing frame-recorder's global config against whichever other test file
+        // happened to be mid-write at the time, corrupting its notes. disable() is a no-op if
+        // nothing is bridged, so this is harmless on the common path where nothing resurrects.
+        for (let i = 0; i < 10 && currentBridge && currentBridge.bridgedDevices.size > 0; i++) {
+            currentBridge.disable(DEVICE_ID)
+            await new Promise((r) => setTimeout(r, 50))
+        }
+        currentBridge = undefined
+
         ExponentialBackoff.forLgCloud = originalForLgCloud
         Thinq2Device.prototype.pair = originalPair
         delete Client.gatewayCache[COUNTRY]
@@ -231,6 +255,7 @@ describe('Bridge auto-repairs a connection stuck failing before connect', () => 
         })
 
         const bridge = new Bridge(state, manager)
+        currentBridge = bridge
         const started: string[] = []
         const stopped: string[] = []
         bridge.on('started', (id) => started.push(id))
@@ -278,6 +303,7 @@ describe('Bridge auto-repairs a connection stuck failing before connect', () => 
         })
 
         const bridge = new Bridge(state, manager)
+        currentBridge = bridge
         const started: string[] = []
         const stopped: string[] = []
         bridge.on('started', (id) => started.push(id))
@@ -328,6 +354,7 @@ describe('Bridge auto-repairs a connection stuck failing before connect', () => 
         })
 
         const bridge = new Bridge(state, manager)
+        currentBridge = bridge
         const started: string[] = []
         const stopped: string[] = []
         bridge.on('started', (id) => started.push(id))
@@ -346,7 +373,7 @@ describe('Bridge auto-repairs a connection stuck failing before connect', () => 
         rejectUntilAttempt = 11 // now also reject the post-repair connection's own retries
 
         for (const s of sockets) s.destroy() // kill the just-established connection to start the second failure streak
-        await until(() => attemptCount >= 11, 'five more pre-connect failures to accumulate', 8000)
+        await until(() => attemptCount >= 11, 'five more pre-connect failures to accumulate')
 
         // Give the (would-be, if the cooldown didn't block it) async #rePair plenty of time to run.
         await new Promise((r) => setTimeout(r, 300))
@@ -359,7 +386,13 @@ describe('Bridge auto-repairs a connection stuck failing before connect', () => 
             'only the first repair left a note',
         )
 
-        device.emit('close')
         rejectUntilAttempt = 0 // let the final teardown's socket(s) close cleanly rather than racing more rejects
+        device.emit('close')
+        // Missing here once: without this, the test function returned while the sped-up (10-50ms)
+        // backoff timer was still live, outliving this test - afterEach tore down cloudServer/lgApi
+        // out from under it, and it then spent the rest of the whole test run hammering the now-dead
+        // port as fast as its backoff allowed, racing frame-recorder's global config (shared with
+        // whichever other test file happened to be mid-write at the time) and corrupting its notes.
+        await until(() => [...sockets].every((s) => s.closed), 'the final connection to close')
     })
 })
