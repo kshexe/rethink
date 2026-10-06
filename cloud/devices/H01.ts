@@ -127,9 +127,7 @@ import { note as recordNote } from '../frame-recorder'
 
 const ACK_SUB = 0x32
 const ACK_OPCODE = 0x26
-const STATUS_TYPE = 0xec
 const RECORD_LEN = 26
-const STATUS_MIN_LEN = 2 + RECORD_LEN
 
 /** Offsets within one 26-byte status record - see the file header's STATUS RECORD section. */
 const REC_POWER = 2
@@ -500,18 +498,9 @@ export default class Device extends AABBDevice {
         if (buf.length === 4 && buf[0] === ACK_SUB && buf[1] === 0x00 && buf[2] === ACK_OPCODE && buf[3] === 0x00)
             return
 
-        // 0xEC dual-record status frame - the "new" (current) record is the second half, right
-        // after the "old" one. See the file header's STATUS RECORD section.
-        if (buf[0] === ACK_SUB && buf[1] === STATUS_TYPE && buf.length === 2 + 2 * RECORD_LEN) {
-            this.publishRecord(buf.subarray(2 + RECORD_LEN, 2 + 2 * RECORD_LEN))
-            return
-        }
-
-        // 0xEB single-record response to QUERY_FRAME - same record shape, only one copy.
-        if (buf[0] === ACK_SUB && buf[1] === 0xeb && buf.length === STATUS_MIN_LEN) {
-            this.publishRecord(buf.subarray(2, STATUS_MIN_LEN))
-            return
-        }
+        // 0xEC dual-record status frame (new record last) / 0xEB single-record response to
+        // QUERY_FRAME - same record shape either way. See the file header's STATUS RECORD section.
+        if (this.processCommonStatus(buf, ACK_SUB, RECORD_LEN, this.publishRecord)) return
 
         // Anything else is a frame this handler does not parse yet (the course-name table, etc).
         // Note it once per shape so a future session has something to grep for, the same way

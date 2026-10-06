@@ -79,4 +79,22 @@ export default class AABBDevice extends HADevice {
     processAABB(buf: Buffer) {
         throw new Error('To be overriden')
     }
+
+    // 0xEB/0xEC is a pattern used in nearly all AABB devices (following anszom/rethink@fc3368c):
+    //   <classByte> EB [status block]                     - single-record response to a query
+    //   <classByte> EC [previous block][status block]      - dual-record unsolicited status, new record last
+    // `handler` will commonly be this.publishRecord or similar, so it is called with `this` bound.
+    processCommonStatus(buf: Buffer, classByte: number, statusLength: number, handler: (status: Buffer) => void) {
+        if (buf[0] === classByte && buf[1] === 0xeb && buf.length === 2 + statusLength) {
+            handler.call(this, buf.subarray(2))
+            return true
+        }
+
+        if (buf[0] === classByte && buf[1] === 0xec && buf.length === 2 + statusLength * 2) {
+            handler.call(this, buf.subarray(2 + statusLength, 2 + statusLength * 2))
+            return true
+        }
+
+        return false
+    }
 }
