@@ -591,9 +591,9 @@ export default class Device extends TLVDevice {
             '-' +
             (this.filterChangedDate % 100).toString().padStart(2, '0')
 
-        this.HA.publishProperty(this.id, 'filterused', this.filterUsedTime)
-        this.HA.publishProperty(this.id, 'filterlife', this.filterLifeTime)
-        this.HA.publishProperty(this.id, 'filterchangeddate', changedDate)
+        this.publishProperty('filterused', this.filterUsedTime)
+        this.publishProperty('filterlife', this.filterLifeTime)
+        this.publishProperty('filterchangeddate', changedDate)
     }
 
     processFilterCmdResp(success: boolean, data: Buffer) {
@@ -638,7 +638,7 @@ export default class Device extends TLVDevice {
             increaseQueryInterval = action != null && action !== 'fan'
         }
 
-        if (action != null) this.HA.publishProperty(this.id, 'climate-action', action)
+        if (action != null) this.publishProperty('climate-action', action)
         this.updateQueryInterval(increaseQueryInterval)
     }
 
@@ -1058,16 +1058,21 @@ export default class Device extends TLVDevice {
              * a-real-setpoint before the mode changed - stayed on screen, frozen, because nothing
              * ever told HA to blank it. Caught live comparing this entity side by side with
              * `lg_thinq`'s own after switching 이서 to fan_only from HA: ours held the last
-             * cool-mode 26°C, lg_thinq read `None`. Publishing `undefined` through
-             * `HA.publishProperty` directly (not through read_xform) is what actually clears it -
-             * see that function's own "special case" comment - so this field now always computes
-             * the number and leaves the decision to read_callback below, which is the one place
-             * that can choose between publishing it and clearing it instead.
+             * cool-mode 26°C, lg_thinq read `None`. Publishing `undefined` directly (not through
+             * read_xform) is what actually clears it - see Connection.publishProperty's own
+             * "special case" comment - so this field now always computes the number and leaves the
+             * decision to read_callback below, which is the one place that can choose between
+             * publishing it and clearing it instead. Goes through `this.publishProperty`, not
+             * `this.HA.publishProperty`, so the base publishCache (2026-10-06) actually learns the
+             * clear happened - skipping the cache here would leave it still holding the last real
+             * number, so a later real reading of that exact same number (e.g. back to cool at the
+             * same 26°C) would wrongly no-op against a stale cache entry while HA still shows the
+             * clear ('unknown') from here, stuck until a *different* number came along.
              */
             read_xform: (raw) => raw / 2,
             read_callback: (val) => {
                 if (this.temperatureHiddenInCurrentMode()) {
-                    this.HA.publishProperty(this.id, 'climate-temperature', undefined)
+                    this.publishProperty('climate-temperature', undefined)
                     return false
                 }
                 return true
@@ -1445,9 +1450,9 @@ export default class Device extends TLVDevice {
                         const life = this.raw_clip_state[TAG_FILTER_LIFE]
                         const remaining = this.raw_clip_state[TAG_FILTER_REMAINING]
                         if (life) {
-                            this.HA.publishProperty(this.id, 'filter_remaining', Math.round((remaining / life) * 100))
-                            this.HA.publishProperty(this.id, 'filter_used', life - remaining)
-                            this.HA.publishProperty(this.id, 'filter_life', life)
+                            this.publishProperty('filter_remaining', Math.round((remaining / life) * 100))
+                            this.publishProperty('filter_used', life - remaining)
+                            this.publishProperty('filter_life', life)
                         }
                         return false
                     },
@@ -1874,17 +1879,21 @@ export default class Device extends TLVDevice {
          * while active (e.g. right after a rethink restart, before the unit has been turned on
          * again) - unlike temperature/mode, which always have a value regardless of power state.
          * A fresh real reading (once active again) overrides this the normal way, through
-         * read_callback/publishProperty above.
+         * read_callback/publishProperty above - that other path now goes through the base
+         * publishCache (2026-10-06) too, so this OFF-clear uses `this.publishProperty` rather than
+         * `this.HA.publishProperty` for the same reason as climate-temperature's own clear above:
+         * bypassing the cache here would leave it still holding the last real ON/OFF, so a later
+         * real reading of that same value would wrongly no-op while HA still shows this OFF-clear.
          */
         if (check_mode) {
             const updateAvailability = () => {
                 const ok = this.getPowerTLV() !== 0 && check_mode(this.getModeTLV())
-                this.HA.publishProperty(this.id, name + '-availability', ok ? 'online' : 'offline')
+                this.publishProperty(name + '-availability', ok ? 'online' : 'offline')
                 return ok
             }
             this.modeChangeHooks.push(() => {
                 if (!updateAvailability()) {
-                    this.HA.publishProperty(this.id, name + '-', 'OFF')
+                    this.publishProperty(name + '-', 'OFF')
                     return
                 }
                 if (this[field_name] === undefined) return
@@ -1897,7 +1906,7 @@ export default class Device extends TLVDevice {
         } else {
             this.powerChangeHooks.push(() => {
                 if (this.getPowerTLV() === 0) {
-                    this.HA.publishProperty(this.id, name + '-', 'OFF')
+                    this.publishProperty(name + '-', 'OFF')
                     return
                 }
                 if (this[field_name] === undefined) return
@@ -1983,7 +1992,7 @@ export default class Device extends TLVDevice {
         climate['swing_mode_state_topic'] = '$this/climate-swing_mode'
         climate['swing_mode_command_topic'] = '$this/climate-swing_mode/set'
 
-        const republish = () => this.HA.publishProperty(this.id, 'climate-swing_mode', this.verticalSwingFromState())
+        const republish = () => this.publishProperty('climate-swing_mode', this.verticalSwingFromState())
         this.addField(
             config,
             {
@@ -2045,7 +2054,7 @@ export default class Device extends TLVDevice {
                     readable: false,
                     writable: false,
                     read_callback: () => {
-                        this.HA.publishProperty(this.id, 'wind_mode', this.windModeFromState())
+                        this.publishProperty('wind_mode', this.windModeFromState())
                         return false
                     },
                 },

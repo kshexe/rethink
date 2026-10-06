@@ -283,6 +283,33 @@ describe(MODEL_ID, () => {
         dev.drop()
     })
 
+    /*
+     * Same cache-consistency bug as power_save's own regression test above, for
+     * climate-temperature's clear-to-undefined path instead of power_save's clear-to-OFF one.
+     */
+    test('0x1fe: a real reading after being cleared republishes, not stuck at None', (t) => {
+        const { ha, dev } = buildReadyDevice(t)
+
+        dev.raw_clip_state[0x1f7] = 1
+        dev.processKeyValue(0x1f9, 0) // cool
+        dev.processKeyValue(0x1fe, 52) // real reading: 26°C
+        assert.equal(ha.getProperty(DEVICE_ID, 'climate', 'temperature_state'), 26)
+
+        // Unlike power_save's own OFF-clear (a modeChangeHooks entry, fired by the mode change
+        // itself), this field's clear lives in its own read_callback - it only runs when 0x1fe
+        // itself is next read, same as the pre-existing fan_only test above.
+        dev.processKeyValue(0x1f9, 2) // fan_only
+        dev.processKeyValue(0x1fe, 52) // cleared
+        assert.equal(ha.getProperty(DEVICE_ID, 'climate', 'temperature_state'), 'None')
+
+        dev.processKeyValue(0x1f9, 0) // back to cool
+        // Same raw value as before the clear - a stale cache would wrongly skip this republish.
+        dev.processKeyValue(0x1fe, 52)
+        assert.equal(ha.getProperty(DEVICE_ID, 'climate', 'temperature_state'), 26, 'republished, not stuck at None')
+
+        dev.drop()
+    })
+
     test("0x1fe is actively cleared in dry, per the owner's report of lg_thinq doing the same", (t) => {
         const { ha, dev } = buildReadyDevice(t)
 
@@ -457,6 +484,36 @@ describe(MODEL_ID, () => {
 
         dev.processKeyValue(0x1f9, 0) // cool - now allowed
         assert.equal(ha.devices[DEVICE_ID].properties['power_save-availability'], 'online')
+
+        dev.drop()
+    })
+
+    /*
+     * Regression test for a cache-consistency bug introduced, then fixed, while lifting
+     * publishCache to the base HADevice (2026-10-06, following anszom/rethink@e3e2e94): the
+     * mode-change hook's OFF-clear above used to call `this.HA.publishProperty` directly,
+     * bypassing the new cache - leaving it still holding whatever ON/OFF was last read for real.
+     * A later real reading of that exact same value then wrongly no-op'd against the stale cache
+     * entry, leaving HA stuck on the OFF-clear forever even once the unit came back and reported
+     * ON again. Fixed by routing the OFF-clear through `this.publishProperty` too, so the cache
+     * actually learns the clear happened.
+     */
+    test('power_save: a real ON reading after an OFF-clear republishes, not stuck at OFF', (t) => {
+        const { ha, dev } = buildReadyDevice(t)
+
+        dev.raw_clip_state[0x1f7] = 1 // power on
+        dev.processKeyValue(0x1f9, 0) // cool - power_save allowed
+        dev.processKeyValue(0x20d, 1) // real reading: power_save ON
+        assert.equal(ha.devices[DEVICE_ID].properties['power_save-'], 'ON')
+
+        dev.processKeyValue(0x1f9, 2) // fan_only - power_save cannot run here, OFF-cleared
+        assert.equal(ha.devices[DEVICE_ID].properties['power_save-'], 'OFF')
+
+        dev.processKeyValue(0x1f9, 0) // back to cool
+        // The unit echoes the exact same raw value as before the clear - a stale cache would
+        // wrongly treat this as "already ON, nothing to do" and skip the publish.
+        dev.processKeyValue(0x20d, 1)
+        assert.equal(ha.devices[DEVICE_ID].properties['power_save-'], 'ON', 'republished, not stuck at OFF')
 
         dev.drop()
     })
