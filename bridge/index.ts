@@ -6,6 +6,8 @@ import { Connection as Thinq2Connection } from './thinq2connection'
 import { Device as T2Downstream } from '@/cloud/thinq2/device'
 import { TypedEmitter } from 'tiny-typed-emitter'
 import { ExponentialBackoff } from '@/util/backoff'
+import log from '@/util/logging'
+import { note as recordNote } from '@/cloud/frame-recorder'
 
 type StatusCallback = (status: string) => void
 
@@ -27,11 +29,26 @@ export function registrationPlan(homeDevices: { deviceId: string; alias: string 
 
 type BridgedDeviceEvents = {
     stateChanged: (connected: boolean) => void
+    needsRepair: () => void
 }
 
 class BridgedDevice extends TypedEmitter<BridgedDeviceEvents> {
     connected: boolean = false
     private readonly backoff = ExponentialBackoff.forLgCloud()
+
+    // How many reconnects in a row died without the connection ever reaching a real CONNACK
+    // (Thinq2Connection.connectedOnce stays false - see that field's own comment). A handful of
+    // these back to back is the signature of a certificate AWS IoT no longer honours: retrying
+    // with the same stored credentials can never fix that, only a fresh register()/pair() can
+    // (Bridge.#rePair does that automatically - this used to need someone to notice and do a
+    // manual bridge disable+enable, e.g. 안방에어컨 on 2026-10-01, confirmed again live for
+    // 스타일러 on 2026-10-06: every reconnect closed within ~100ms, connectedOnce always false,
+    // zero 'error' events - rejected at the TLS layer before 'connect' ever had a chance to fire).
+    // One connection that DID connect and then later died doesn't count toward this - that's the
+    // ordinary case the backoff-based reconnect below already handles fine with the same
+    // credentials.
+    private consecutivePreConnectFailures = 0
+    private static readonly REPAIR_THRESHOLD = 5
 
     // upstream - our connection to the ThinQ cloud
     // downstream - the physical device
@@ -80,6 +97,7 @@ class BridgedDevice extends TypedEmitter<BridgedDeviceEvents> {
 
         this.connection.once('ready', () => {
             this.backoff.reset()
+            this.consecutivePreConnectFailures = 0
             this.#reportConnected(true)
         })
         this.connection.on('close', () => this.disconnect())
@@ -92,8 +110,24 @@ class BridgedDevice extends TypedEmitter<BridgedDeviceEvents> {
         this.#reportConnected(false)
 
         if (this.connection) {
+            if (this.connection.connectedOnce) {
+                this.consecutivePreConnectFailures = 0
+            } else if (++this.consecutivePreConnectFailures >= BridgedDevice.REPAIR_THRESHOLD) {
+                this.consecutivePreConnectFailures = 0
+                // Deferred to a microtask: Bridge's listener for this can synchronously tear this
+                // whole BridgedDevice down (#rePair -> disable() -> destroy()) - emitting inline
+                // here was found to do exactly that reentrantly, mid-way through this very method,
+                // nulling this.connection out from under the destroy()/reschedule below before
+                // they ran and crashing on it. Letting the rest of this call finish first avoids
+                // that.
+                queueMicrotask(() => this.emit('needsRepair'))
+            }
             this.connection.destroy()
             this.connection = undefined
+            // Always still scheduled, 'needsRepair' or not: if Bridge#rePair skips this round
+            // (its own cooldown), this is the only thing still retrying in the meantime, and if
+            // it does re-pair, that tears this whole BridgedDevice down anyway (disable() ->
+            // destroy(), which clears this very timer).
             clearTimeout(this.reconnectTimeout)
             this.reconnectTimeout = setTimeout(() => this.reconnectNow(), this.backoff.nextDelay())
         }
@@ -134,6 +168,14 @@ type BridgeEvents = {
 
 export class Bridge extends TypedEmitter<BridgeEvents> {
     bridgedDevices = new Map<string, BridgedDevice>()
+
+    // Per-device cooldown for #rePair, so a real outage that happens to look identical (also
+    // never reaching CONNACK, e.g. AWS IoT itself down) doesn't get hammered with repeated
+    // pair() calls to LG's real cloud - the ordinary backoff-based reconnect in BridgedDevice
+    // keeps retrying regardless of this cooldown, so the device is never left without any retry
+    // at all while it waits out the cooldown.
+    #lastRepairAt = new Map<string, number>()
+    static readonly REPAIR_COOLDOWN_MS = 30 * 60 * 1000
 
     /*
      * What the owner calls each appliance, from the ThinQ account - the same names the app shows.
@@ -233,8 +275,49 @@ export class Bridge extends TypedEmitter<BridgeEvents> {
     #bridgeDevice(clientDevice: ClientDevice, dev: AnyDevice) {
         const bridged = new BridgedDevice(clientDevice, dev)
         bridged.on('stateChanged', (connected) => this.emit('stateChanged', dev.id, connected))
+        bridged.on('needsRepair', () => void this.#rePair(dev.id))
         this.bridgedDevices.set(dev.id, bridged)
         this.emit('started', dev.id)
+    }
+
+    /**
+     * Automatic version of the manual "bridge disable then enable" that has, so far, been the
+     * only thing that ever recovers a connection stuck getting rejected before it ever reaches
+     * 'connect' (see BridgedDevice's own comment on consecutivePreConnectFailures) - disable()
+     * drops the stale saved credentials, enable() runs register()/pair() again for a brand new
+     * certificate. Cooldown-gated per device via #lastRepairAt; silently does nothing within the
+     * cooldown; the normal backoff reconnect keeps running either way.
+     */
+    async #rePair(id: string) {
+        const now = Date.now()
+        const last = this.#lastRepairAt.get(id) ?? 0
+        if (now - last < Bridge.REPAIR_COOLDOWN_MS) {
+            log(
+                'bridge',
+                `${id}: repeated pre-connect failures, but re-paired too recently - leaving it to the normal backoff retry`,
+            )
+            return
+        }
+        this.#lastRepairAt.set(id, now)
+
+        const dev = this.manager.allDevices[id]
+        if (!dev) return
+
+        log('bridge', `${id}: repeated pre-connect failures - re-pairing automatically`)
+        recordNote(id, dev.meta, 'bridge-auto-repaired', {})
+        this.disable(id)
+        try {
+            // register()/enable() reach the real LG cloud - a transient failure there (or any
+            // other register()-time error) must not become an unhandled rejection (this runs
+            // detached, fired from a 'needsRepair' listener with no caller awaiting it) and must
+            // not leave the device un-bridged forever: disable() above already dropped it, so on
+            // failure here it just sits idle until the next restart or a manual enable - worse
+            // than before only in that the stale credentials are now gone too, but those were
+            // already confirmed broken.
+            if (!(await this.enable(id))) log('bridge', `${id}: automatic re-pair did not re-enable the bridge`)
+        } catch (err) {
+            log('bridge', `${id}: automatic re-pair failed: ${err}`)
+        }
     }
 
     #stop(id: string) {
