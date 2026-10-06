@@ -379,6 +379,30 @@ describe(MODEL_ID, () => {
         dev.drop()
     })
 
+    // Regression test for the same gap as above, found 2026-10-06 via the live "unmodelled" log:
+    // both of these are already handled by addModelFields (0x23f deliberately as a no-op, 0x336
+    // as the humidity sensor) but neither was ever added here, so every reconnect kept flagging
+    // them as unmodelled regardless.
+    test('knownTagIds() recognises comfort-energy-saving and humidity, modelled by addModelFields', (t) => {
+        const { dev } = buildReadyDevice(t)
+        const known = dev.knownTagIds()
+        assert.ok(known.has(0x23f), 'comfort energy saving (0x23f)')
+        assert.ok(known.has(0x336), 'humidity (0x336)')
+        dev.drop()
+    })
+
+    // Found 2026-10-06 via the live "unmodelled" log, constant (60/32) across every occurrence on
+    // all four real units and matching the cloud's own airState.tempState.limitMax/limitMin at the
+    // same moment - but deliberately not wired into climateRange() (see their own comment: this is
+    // LG's *declared* range, not necessarily a given unit's real enforced floor).
+    test('knownTagIds() recognises the declared temp-limit tags (0x357/0x358), not wired to climateRange', (t) => {
+        const { dev } = buildReadyDevice(t)
+        const known = dev.knownTagIds()
+        assert.ok(known.has(0x357), 'declared temp limit max (0x357)')
+        assert.ok(known.has(0x358), 'declared temp limit min (0x358)')
+        dev.drop()
+    })
+
     /*
      * Regression test for a real 2026-09-11 report: power_save/air_clean sat on "unknown" in HA
      * forever whenever the unit had been off since rethink last (re)connected to it, because

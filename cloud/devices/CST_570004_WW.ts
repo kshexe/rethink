@@ -91,6 +91,23 @@ const TAG_CAPS_TEMP_MIN = 0x2e1
 const TAG_CAPS_TEMP_MAX = 0x2e2
 
 /*
+ * 2026-10-06, found via the live "unmodelled" log on all four CST_570004_WW units, constant
+ * across every occurrence (2 days / dozens of reconnects): 0x357=60, 0x358=32. Cross-checked
+ * against the cloud's own semantic snapshot (bridge mode, service/devices/:id) for 거실에어컨 at
+ * the same moment - airState.tempState.limitMax=60, limitMin=32, an exact match. raw/2 = 30°C /
+ * 16°C, which is LG's own modelJSON-declared range for this model (see FALLBACK_TEMP_RANGE's own
+ * comment) - NOT necessarily what every real unit's hardware actually enforces: that same comment
+ * found one specific unit's true floor to be 18°C by direct testing, 2°C above the declared 16.
+ * So these are added here only to stop them being flagged as unmodelled (their meaning is no
+ * longer a mystery) - NOT wired into climateRange()/FALLBACK_TEMP_RANGE, which would risk
+ * reintroducing exactly the bug that comment's fallback exists to avoid (offering a temperature
+ * the hardware would just reject). Revisit if a unit is ever confirmed to report 0x2E1/0x2E2 and
+ * 0x357/0x358 differently at the same time - that would settle which one tracks the real floor.
+ */
+const TAG_TEMP_LIMIT_MAX = 0x357
+const TAG_TEMP_LIMIT_MIN = 0x358
+
+/*
  * Fallback for when this unit's own caps never carry 0x2E1/0x2E2 at all - checked against 8 days /
  * 26k recorded frames, not one occurrence, so without this it has no way to get a range and its
  * climate entity was stuck on HA's own 7-35°C default forever.
@@ -489,6 +506,14 @@ export default class Device extends TLVDevice {
             // real 거실 unit, the only one of the three with air-purify hardware
             0x21a, // sleep_time (addTimerField) - same startup-ordering gap, seen on all three units
             0x221, // error code (addOptionalSensorField) - same gap
+            0x23f, // "comfort energy saving" - confirmed 2026-09-09 to do nothing observable and
+            // have no LG-app control, so deliberately not modelled as an entity (see
+            // addModelFields's own comment on it) - kept flagging as unmodelled regardless
+            // because nothing here ever acknowledged seeing it
+            0x336, // humidity (addOptionalSensorField, addModelFields) - same gap as 0x20f/0x21a/
+            // 0x221 above: modelled since 2026-09-09 but never added here, so it kept flagging
+            TAG_TEMP_LIMIT_MAX,
+            TAG_TEMP_LIMIT_MIN, // declared (not necessarily real) temp range - see their own comment
         ]) {
             s.add(t)
         }
