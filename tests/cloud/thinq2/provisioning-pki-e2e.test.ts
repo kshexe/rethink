@@ -184,10 +184,14 @@ class Instance {
         child.stderr.on('data', (chunk: string) => output.push(chunk))
 
         await new Promise<void>((resolve, reject) => {
-            const timer = setTimeout(
-                () => reject(new Error(`rethink did not start in ${BOOT_TIMEOUT_MS}ms:\n${output.join('')}`)),
-                BOOT_TIMEOUT_MS,
-            )
+            // Left running, the child's pipes would keep the test runner alive indefinitely -
+            // following anszom/rethink@e896be2 (2026-10-02): on a busy CI/sandbox runner this
+            // boot timeout rejecting without killing the child turned a slow boot into a hang
+            // that outlasted the whole test run.
+            const timer = setTimeout(() => {
+                child.kill('SIGKILL')
+                reject(new Error(`rethink did not start in ${BOOT_TIMEOUT_MS}ms:\n${output.join('')}`))
+            }, BOOT_TIMEOUT_MS)
             const check = () => {
                 if (!output.join('').includes('Rethink cloud')) return
                 clearTimeout(timer)
