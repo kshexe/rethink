@@ -21,7 +21,12 @@ Kept in sync with upstream on a regular basis, including every commit that went 
 tagged release, [v0.1.0](https://github.com/anszom/rethink/releases/tag/v0.1.0) (2026-09-22) -
 anything from there judged relevant to this household's own appliances gets ported over (see git
 log for the individual pick-overs), while device handlers for models outside this fleet are left
-upstream rather than carried here unused.
+upstream rather than carried here unused. Each sync also walks every upstream issue and PR (open
+and closed) and every fork with commits of its own ahead of upstream, for anything useful beyond
+what a plain commit diff would show - not just new device handlers, but techniques, shared-infra
+fixes, or ideas from a PR that never got merged. **Last such review: 2026-10-10, nothing found
+applicable** - the next one only needs to look at what changed after that date, not redo this
+whole sweep from scratch.
 
 #### Air conditioners
 
