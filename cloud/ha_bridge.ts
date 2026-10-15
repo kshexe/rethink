@@ -43,8 +43,13 @@ class Bridge {
         // Overridable only so a test can use a short wait instead of actually waiting out the
         // real default - see newDevice() for what this bounds.
         private readonly nameLookupTimeoutMs = 5000,
-        // Also overridable for the same reason - see dropDevice().
-        private readonly disconnectGraceMs = 2000,
+        // Also overridable for the same reason - see dropDevice(). Was 2000 (this fork inherited
+        // it, unchanged, from af950833/rethink's original fix - no stated reasoning there either).
+        // Measured against this household's own real reconnects (2026-10-15, 6 days of frame-log
+        // data across 3 ACs): the common case is near-instant (p50 0.4s), but a real, repeated
+        // slow tail reaches 42-45s - well past the old 2s, meaning those were flickering to
+        // "unavailable" in HA despite not being a real problem. 60s covers that tail with margin.
+        private readonly disconnectGraceMs = 60_000,
     ) {
         HA.on('discovery', () => {
             this.haDevices.forEach((ha) => ha.publishConfig())
