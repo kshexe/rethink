@@ -35,6 +35,11 @@ test('device monitor detaches device and manager listeners after a real WebSocke
 
     ws.close()
     await once(ws, 'close')
+    // The client's close event can fire before the server has run its own close handler -
+    // following anszom/rethink@6af682b (seen on Windows there; a CPU-contention variant of the
+    // same race this project has hit repeatedly in its own test suite - see the frame-recorder/
+    // energy-accumulator fixes from 2026-10-06).
+    for (let i = 0; i < 100 && device.listenerCount('data') > 0; i++) await new Promise((r) => setTimeout(r, 10))
 
     assert.equal(device.listenerCount('data'), 0)
     assert.equal(device.listenerCount('sendData'), 0)
