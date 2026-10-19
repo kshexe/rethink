@@ -24,12 +24,12 @@ log for the individual pick-overs), while device handlers for models outside thi
 upstream rather than carried here unused. Each sync also walks every upstream issue and PR (open
 and closed) and every fork with commits of its own ahead of upstream, for anything useful beyond
 what a plain commit diff would show - not just new device handlers, but techniques, shared-infra
-fixes, or ideas from a PR that never got merged. **Last such review: 2026-10-15** - 24 upstream
-commits had landed since 2026-10-12; two were worth porting (an entity-tombstone helper, and a
-device-monitor test race fix this fork's own copy of that test shared) even though neither touched
-a device this fleet owns, the rest were new device handlers or didn't fit this fork's own
-conventions (see that commit's own message for the reasoning on each). The next review only needs
-to look at what changed after this date, not redo this whole sweep from scratch.
+fixes, or ideas from a PR that never got merged. **Last such review: 2026-10-19** - no new upstream
+commits since 2026-10-15; 4 new open PRs, all new device handlers outside this fleet except one
+(`anszom/rethink#245`, unmerged) whose `tools/thinq-control.ts` - a generic LG-cloud control CLI,
+not RAC_056905_WW-specific despite the rest of that PR - was worth porting on its own. Every fork
+with recent activity was 0 commits ahead of upstream (no independent work to check). The next
+review only needs to look at what changed after this date, not redo this whole sweep from scratch.
 
 #### Air conditioners
 
