@@ -28,8 +28,9 @@ fixes, or ideas from a PR that never got merged. **Last such review: 2026-10-19*
 commits since 2026-10-15; 4 new open PRs, all new device handlers outside this fleet except one
 (`anszom/rethink#245`, unmerged) whose `tools/thinq-control.ts` - a generic LG-cloud control CLI,
 not RAC_056905_WW-specific despite the rest of that PR - was worth porting on its own. Every fork
-with recent activity was 0 commits ahead of upstream (no independent work to check). The next
-review only needs to look at what changed after this date, not redo this whole sweep from scratch.
+pushed to since the prior (2026-10-15) review - the full list by push date, not a sample - was 0
+commits ahead of upstream (no independent work to check). The next review only needs to look at
+what changed after this date, not redo this whole sweep from scratch.
 
 #### Air conditioners
 
