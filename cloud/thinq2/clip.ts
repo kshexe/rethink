@@ -9,25 +9,27 @@ export type ClipMessage<Cmd = string, Payload = unknown> = {
     type: number
 }
 
+export type DeployAppInfo = {
+    modelName: string
+    modelLanguage: string
+    softVer: string
+    ruleVer: string
+    countryCode: string
+    subCountryCode: string
+    appVersion: string
+    modemType: string
+    regionalCode: string
+    timezone: string
+    svcCode: string
+    HomeApSsid: string
+    DeviceType: string
+    protocolVer?: string
+    // and some other fields yadda yadda
+    [key: string]: unknown
+}
+
 export type DeployPayload = {
-    appInfo: {
-        modelName: string
-        modelLanguage: string
-        softVer: string
-        ruleVer: string
-        countryCode: string
-        subCountryCode: string
-        appVersion: string
-        modemType: string
-        regionalCode: string
-        timezone: string
-        svcCode: string
-        HomeApSsid: string
-        DeviceType: string
-        protocolVer?: string
-        // and some other fields yadda yadda
-        [key: string]: unknown
-    }
+    appInfo: DeployAppInfo
     // present in real device deploys alongside appInfo; carries provisioningKey/version
     platformInfo?: { provisioningKey?: string; version?: string; [key: string]: unknown }
     // boot/wifi diagnostics the device tacks on; we don't forward these upstream

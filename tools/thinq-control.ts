@@ -8,11 +8,12 @@
 //
 // Diagnostics go to stderr; stdout carries the JSON result only.
 //
-// Ported from anszom/rethink PR #245 (not yet merged there, but depends only on this project's
-// own already-shared bridge/thinqApi.ts + util/lgcloud/state.ts - nothing RAC_056905_WW-specific).
-// This is exactly the kind of cloud cross-check this project has done by hand with one-off
-// scripts on the bots server in the past (e.g. the diagData/스마트진단 trigger, smartCare+ field
-// discovery) - having it in-repo means the next one doesn't need a fresh script.
+// Ported from anszom/rethink PR #245 while still unmerged there (it depended only on this
+// project's own already-shared bridge/thinqApi.ts + util/lgcloud/state.ts, nothing
+// RAC_056905_WW-specific) - since landed upstream as 2cf4f64, byte-identical to this file. This
+// is exactly the kind of cloud cross-check this project has done by hand with one-off scripts on
+// the bots server in the past (e.g. the diagData/스마트진단 trigger, smartCare+ field discovery) -
+// having it in-repo means the next one doesn't need a fresh script.
 
 import { Client, apiFetch } from '@/bridge/thinqApi'
 import { loadState } from '@/util/lgcloud/state'
