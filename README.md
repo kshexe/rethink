@@ -24,13 +24,18 @@ log for the individual pick-overs), while device handlers for models outside thi
 upstream rather than carried here unused. Each sync also walks every upstream issue and PR (open
 and closed) and every fork with commits of its own ahead of upstream, for anything useful beyond
 what a plain commit diff would show - not just new device handlers, but techniques, shared-infra
-fixes, or ideas from a PR that never got merged. **Last such review: 2026-10-19** - no new upstream
-commits since 2026-10-15; 4 new open PRs, all new device handlers outside this fleet except one
-(`anszom/rethink#245`, unmerged) whose `tools/thinq-control.ts` - a generic LG-cloud control CLI,
-not RAC_056905_WW-specific despite the rest of that PR - was worth porting on its own. Every fork
-pushed to since the prior (2026-10-15) review - the full list by push date, not a sample - was 0
-commits ahead of upstream (no independent work to check). The next review only needs to look at
-what changed after this date, not redo this whole sweep from scratch.
+fixes, or ideas from a PR that never got merged. **Last such review: 2026-10-26** - 15 upstream
+commits since 2026-10-19, 3 worth applying despite none touching a device this fleet owns: the
+tsx 3→4 security bump (plus the rest of `npm audit`'s non-breaking fixes - 10 vulnerabilities down
+to 0), and a `sw_version` fallback for modems that leave `softVer` empty (`cloud/thinq2/device.ts`
+is shared, even though the modem it was caught on isn't a device this fleet has). Deliberately did
+_not_ carry over that same tsx commit's `ESBK_DISABLE_CACHE=1` test-script flag - it fixes a tsx
+cache-race flake this fork has no evidence of hitting, and reliably introduced a _different,
+measured_ flake here (reproduced 3/3 with the flag vs 0/3 without). `anszom/rethink#245`
+(`tools/thinq-control.ts`, ported here on 2026-10-19 while still unmerged) has since landed
+upstream unchanged as `2cf4f64`. Every fork pushed to since the prior review - full list by push
+date - had at most device-specific independent work, nothing applicable. The next review only
+needs to look at what changed after this date, not redo this whole sweep from scratch.
 
 #### Air conditioners
 
