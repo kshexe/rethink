@@ -67,6 +67,14 @@
                 text-align: center;
             }
 
+            /* The packageId some devices report, shown under the model name in the device list
+               (anszom/rethink#bfbd227) - secondary info, so it stays visually quieter than the
+               model name itself. */
+            .packageId {
+                font-size: smaller;
+                opacity: 0.8;
+            }
+
             /* The switch and the cloud-link indicator share one line. */
             .bridge-cell {
                 display: flex;

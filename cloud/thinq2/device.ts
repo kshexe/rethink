@@ -20,6 +20,7 @@ export function deployMetadata(deployMsg: ClipDeployMessage): Metadata {
         modelName: appInfo?.modelName,
         swVersion: appInfo?.softVer || appInfo?.appVersion,
         deviceType: appInfo?.DeviceType,
+        packageId: appInfo?.packageId,
     }
 }
 

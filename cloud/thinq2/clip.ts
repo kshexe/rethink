@@ -24,6 +24,9 @@ export type DeployAppInfo = {
     HomeApSsid: string
     DeviceType: string
     protocolVer?: string
+    // Some devices send this; it influences which modelJSON LG's own backend serves them
+    // (anszom/rethink#bfbd227). Shown in the management panel for now.
+    packageId?: string
     // and some other fields yadda yadda
     [key: string]: unknown
 }

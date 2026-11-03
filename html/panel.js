@@ -39,6 +39,13 @@ const baseUrl = new URL(window.location)
 baseUrl.search = ''
 baseUrl.hash = ''
 
+// Device/model identifiers shouldn't ever contain HTML special characters, but these go into
+// innerHTML (for the warning icon / packageId line alongside the model name), so escape them
+// just in case rather than trust that (anszom/rethink#74fdc6c).
+function escapeHtml(string) {
+    return string.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)}`)
+}
+
 class DeviceEntry {
     constructor(id, remoteState, parent) {
         this.id = id
@@ -77,10 +84,12 @@ class DeviceEntry {
 
         td = document.createElement('td')
         td.className = 'dev-model'
-        let model = this.remoteState.model
+        let model = escapeHtml(this.remoteState.model)
         if (!this.remoteState.mapped) {
             model += ` <i class="material-icons tooltipped tiny" data-position="bottom" data-tooltip="This device is not supported by rethink. It will not be mapped to HomeAssistant">warning</i>`
         }
+        if (this.remoteState.packageId)
+            model += `<div class="packageId">packageId: ${escapeHtml(this.remoteState.packageId)}</div>`
         td.innerHTML = model
         children.push(td)
 
@@ -193,7 +202,7 @@ class DeviceEntry {
         td.className = 'dev-actions'
         td.innerHTML = `
             <span class="tooltipped" style="display: inline-block" data-position="bottom" data-tooltip="Monitor">
-                <a class="btn waves-effect waves-light" href="monitor?id=${this.id}"><i class="material-icons">troubleshoot</i></a>
+                <a class="btn waves-effect waves-light" href="monitor?id=${escapeHtml(this.id)}"><i class="material-icons">troubleshoot</i></a>
             </span>
             <span class="tooltipped" style="display: inline-block" data-position="bottom"
                 data-tooltip="Download the modelJSON file. Requires bridge mode.">
