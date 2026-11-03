@@ -15,7 +15,7 @@ import { join } from 'node:path'
 import { Client, Broker, type PublishPacket } from '@/cloud/mqtt-broker'
 import { DeviceAcceptor, Device, deployMetadata } from '@/cloud/thinq2/device'
 import * as frameRecorder from '@/cloud/frame-recorder'
-import type { ClipDeployMessage, DeployAppInfo } from '@/cloud/thinq2/clip'
+import type { ClipDeployMessage, ClipMessage, DeployAppInfo } from '@/cloud/thinq2/clip'
 
 /** Everything `Client` actually calls on the object `mqtt-connection` would normally hand it. */
 class FakeMqttConnection extends EventEmitter {
@@ -160,6 +160,76 @@ describe('DeviceAcceptor.disconnected() records the reason where it survives', (
     })
 })
 
+// anszom/rethink#70e1462: `mqtt()` used to accept a `clip/message/devices/<did>` packet by
+// re-deriving the "expected" topic from that same packet's own `did` field - a tautology, since
+// the comparison is always against a topic built from the value being checked. A payload with a
+// wrong/forged did therefore always passed, as long as the attacker also sent it on the matching
+// topic string. Routing instead by the topic assigned at provisioning (`client.deployMsg.did`)
+// closes that: the topic a client is allowed to deliver on is fixed at provisioning time and no
+// longer follows whatever did happens to be in the incoming payload.
+describe('DeviceAcceptor.mqtt() routes by the provisioned topic, not the payload did', () => {
+    function devicePacket(did: string, data: string): ClipMessage {
+        return { mid: 1, did, kind: 'CST_570004_WW', cmd: 'device_packet', type: 1, data }
+    }
+
+    function setup() {
+        const broker = new Broker()
+        const acceptor = new DeviceAcceptor(broker)
+        const meta = { modelId: 'CST_570004_WW', modelName: 'TEST', swVersion: '1.0' }
+        const deviceId = 'real-device-id'
+        const dev = new Device(broker, `lime/devices/${deviceId}`, deviceId, meta)
+        const client = {
+            deviceObj: dev,
+            deployMsg: { mid: 1, did: deviceId, kind: 'CST_570004_WW', cmd: 'deploy', type: 0, data: {} },
+        } as unknown as Parameters<DeviceAcceptor['mqtt']>[2]
+        return { acceptor, dev, client, deviceId }
+    }
+
+    test('delivers device_packet on the topic assigned at provisioning', () => {
+        const { acceptor, dev, client, deviceId } = setup()
+        let received: Buffer | undefined
+        dev.on('data', (data) => (received = data))
+
+        acceptor.mqtt(`clip/message/devices/${deviceId}`, devicePacket(deviceId, 'aabb'), client)
+
+        assert.deepEqual(received, Buffer.from('aabb', 'hex'))
+    })
+
+    test('still delivers when the payload did is wrong, as long as the topic is the provisioned one', () => {
+        const { acceptor, dev, client, deviceId } = setup()
+        let received: Buffer | undefined
+        dev.on('data', (data) => (received = data))
+
+        acceptor.mqtt(`clip/message/devices/${deviceId}`, devicePacket('some-other-id', 'aabb'), client)
+
+        assert.deepEqual(received, Buffer.from('aabb', 'hex'))
+    })
+
+    test('ignores a wrong topic even though the payload did matches the provisioned device', () => {
+        const { acceptor, dev, client, deviceId } = setup()
+        let received = false
+        dev.on('data', () => (received = true))
+
+        acceptor.mqtt('clip/message/devices/some-other-id', devicePacket(deviceId, 'aabb'), client)
+
+        assert.equal(received, false)
+    })
+
+    test('ignores device_packet before provisioning (no deployMsg yet)', () => {
+        const broker = new Broker()
+        const acceptor = new DeviceAcceptor(broker)
+        const meta = { modelId: 'CST_570004_WW', modelName: 'TEST', swVersion: '1.0' }
+        const dev = new Device(broker, 'lime/devices/unprovisioned', 'unprovisioned', meta)
+        const client = { deviceObj: dev, deployMsg: undefined } as unknown as Parameters<DeviceAcceptor['mqtt']>[2]
+        let received = false
+        dev.on('data', () => (received = true))
+
+        acceptor.mqtt('clip/message/devices/unprovisioned', devicePacket('unprovisioned', 'aabb'), client)
+
+        assert.equal(received, false)
+    })
+})
+
 // anszom/rethink@d52f645: some modems leave softVer empty and only report firmware in
 // appVersion, which used to leave HA with no sw_version at all for that device.
 function deploy(appInfo: Partial<DeployAppInfo>): ClipDeployMessage {
@@ -178,7 +248,13 @@ describe('deployMetadata', () => {
         const meta = deployMetadata(
             deploy({ modelName: 'M', softVer: '1.2.3', appVersion: 'clip_x', DeviceType: '101' }),
         )
-        assert.deepEqual(meta, { modelId: '2REBGLUB_2P__', modelName: 'M', swVersion: '1.2.3', deviceType: '101' })
+        assert.deepEqual(meta, {
+            modelId: '2REBGLUB_2P__',
+            modelName: 'M',
+            swVersion: '1.2.3',
+            deviceType: '101',
+            packageId: undefined,
+        })
     })
 
     // captured from a 2REBGLUB_2P__ (GBBSJ2CCEP) deploy message
@@ -187,5 +263,17 @@ describe('deployMetadata', () => {
             deploy({ modelName: '2REBGLUB_2P__', softVer: '', appVersion: 'clip_bkn_v1.9.238', DeviceType: '101' }),
         )
         assert.equal(meta.swVersion, 'clip_bkn_v1.9.238')
+    })
+
+    // anszom/rethink#bfbd227: some devices send packageId, which influences the modelJSON LG's
+    // backend serves them - recorded here so the management panel can show it.
+    test('records packageId when the modem reports it', () => {
+        const meta = deployMetadata(deploy({ modelName: 'M', DeviceType: '101', packageId: 'abc123' }))
+        assert.equal(meta.packageId, 'abc123')
+    })
+
+    test('leaves packageId undefined when the modem does not report it', () => {
+        const meta = deployMetadata(deploy({ modelName: 'M', DeviceType: '101' }))
+        assert.equal(meta.packageId, undefined)
     })
 })

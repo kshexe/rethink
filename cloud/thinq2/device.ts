@@ -121,12 +121,19 @@ export class DeviceAcceptor extends TypedEmitter<DeviceAcceptorEvents> {
         // experiment: try to support devices which use other topic formats
         topic = topic.replace(/^.*\/clip/, 'clip')
 
-        if (topic === 'clip/message/devices/' + payload.did) {
+        const provisionedId = client.deployMsg?.did
+        const messageTopic = provisionedId && 'clip/message/devices/' + provisionedId
+
+        // Route by the topic assigned at provisioning, not by re-deriving the expected topic from
+        // the payload's own did - that was a tautology (comparing payload.did-derived topic
+        // against payload.did), so a malformed/mismatched did in the payload could never be
+        // caught. Ported from anszom/rethink#70e1462.
+        if (provisionedId && topic === messageTopic) {
             // completeProvisioning_ack, previously the trigger for completeProvisioning() below,
             // is intentionally ignored: some CLIP firmware (e.g. T17A1EFHU_F) never sends it at
             // all and just starts publishing device_packet - registration now happens as soon as
             // preDeploy/deploy is seen instead (upstream anszom/rethink#8f6d19e).
-            if (payload.cmd === 'device_packet' && payload.did === client.deployMsg?.did) {
+            if (payload.cmd === 'device_packet') {
                 if (client.deviceObj) {
                     const buf = Buffer.from(payload.data as string, 'hex')
                     recordFrame(client.deviceObj.id, client.deviceObj.meta, 'from-device', buf)
@@ -134,7 +141,7 @@ export class DeviceAcceptor extends TypedEmitter<DeviceAcceptorEvents> {
                 }
             }
 
-            if (payload.cmd === 'req_timesync' && client.deployMsg && payload.did === client.deployMsg.did) {
+            if (payload.cmd === 'req_timesync') {
                 this.timeSyncRequest(client)
             }
         }
