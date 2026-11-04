@@ -1,12 +1,33 @@
 import { describe, test } from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import DUT from '@/cloud/devices/H01'
 import type { Metadata } from '@/cloud/thinq'
+import { configure as configureEnergyAccumulator, flush as flushEnergyAccumulator } from '@/cloud/energy-accumulator'
 import { MockHAConnection, MockThinq2Device, buf } from '@/tests/helpers/mocks'
 
 const DEVICE_ID = 'test-id'
 const MODEL_ID = 'H01'
 const META: Metadata = { modelId: MODEL_ID, modelName: MODEL_ID, swVersion: '1.0' }
+
+/** energy-accumulator.ts persists to disk and caches by device id - point it at a fresh scratch
+ *  dir (which also clears its cache) so the energy test starts from nothing, the same way
+ *  RD20_S.test.ts/MI2D7B.test.ts isolate themselves, and so this test never touches the real
+ *  /share/rethink/energy path. */
+function freshEnergyDir() {
+    const dir = mkdtempSync(join(tmpdir(), 'h01-energy-test-'))
+    configureEnergyAccumulator(dir)
+    process.on('exit', () => rmSync(dir, { recursive: true, force: true }))
+}
+
+/** recordDelta() is fire-and-forget (`void ...`) from processEnergyReport, so its file I/O has
+ *  not necessarily landed the instant `thinq.emit` returns - see RD20_S.test.ts's identical
+ *  helper for why this waits rather than guessing a fixed delay. */
+async function settle() {
+    await flushEnergyAccumulator()
+}
 
 /*
  * Fixtures. All REAL frames, captured 2026-09-10 against a real unit by clicking the power
@@ -59,12 +80,22 @@ const SETTINGS_COOL_DRY_OFF = buf(
         '00180100000037050000370000500000000b925f00000000000c9ebb',
 )
 
-function makeDevice() {
+function makeDevice(deviceId: string = DEVICE_ID) {
     const ha = new MockHAConnection()
-    const thinq = new MockThinq2Device(DEVICE_ID, META)
+    const thinq = new MockThinq2Device(deviceId, META)
     const dev = new DUT(ha.asConnection(), thinq, META)
     return { ha, thinq, dev }
 }
+
+/*
+ * NOT A REAL CAPTURE - see H01.ts's file header ENERGY section. Constructed per upstream
+ * H11.ts's documented `32 3e <delta:u16BE> <accum:u16BE> <report#>` shape (7-byte inner payload,
+ * matching ENERGY_LEN) purely to exercise this fork's own parsing arithmetic - delta=50 (0x0032),
+ * accum=500 (0x01f4), report#=3. This only tests that processEnergyReport reads the two u16
+ * fields at the right offsets; it proves nothing about whether our actual H01 unit ever sends
+ * this frame at all.
+ */
+const ENERGY_REPORT_SYNTHETIC = buf('aa0b323e003201f4031abb')
 
 describe(MODEL_ID, () => {
     test('declares power and the six settings toggles as writable; the rest are read-only sensors', () => {
@@ -93,6 +124,11 @@ describe(MODEL_ID, () => {
             'time_display',
             'auto_select',
             'cool_dry',
+            // See the file header's ENERGY section - speculative, unverified against our own unit.
+            'energy',
+            'energy_hour',
+            'energy_day',
+            'energy_month',
         ])
         const writable = [
             'power',
@@ -234,6 +270,20 @@ describe(MODEL_ID, () => {
             assert.equal(ha.devices[DEVICE_ID].properties.cool_dry, 'OFF')
             dev.setProperty('cool_dry', 'ON')
             assert.equal(ha.devices[DEVICE_ID].properties.cool_dry, 'ON')
+        })
+    })
+
+    // See the file header's ENERGY section and ENERGY_REPORT_SYNTHETIC's own comment above -
+    // speculative, ported from upstream H11.ts, UNVERIFIED against our own unit. This only
+    // proves the arithmetic; it is not evidence the real appliance sends this frame.
+    describe('energy (speculative, unverified)', () => {
+        test('a 32 3e report publishes the cycle total directly and feeds the hour/day/month accumulator', async () => {
+            freshEnergyDir()
+            const { ha, thinq } = makeDevice('energy-test-1')
+            thinq.emit('data', ENERGY_REPORT_SYNTHETIC)
+            await settle()
+            assert.equal(ha.devices['energy-test-1'].properties.energy, 500, 'accum field published directly')
+            assert.equal(ha.devices['energy-test-1'].properties.energy_hour, 50, 'delta field fed to the accumulator')
         })
     })
 })

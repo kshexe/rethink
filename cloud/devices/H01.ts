@@ -6,6 +6,7 @@ import HADevice from './base'
 import AABBDevice from './aabb_device'
 import log from '@/util/logging'
 import { note as recordNote } from '../frame-recorder'
+import * as energyAccumulator from '../energy-accumulator'
 
 /*
  * LG dishwasher (식기세척기), ThinQ model H01.
@@ -123,6 +124,26 @@ import { note as recordNote } from '../frame-recorder'
  * different offset (`record[2]`, i.e. `buf[4]`/`buf[30]`) - `buf[28]` itself (`record[0]`) turned
  * out to just be independent noise, seen flipping on its own on a schedule unrelated to power or
  * anything else decoded here.
+ *
+ * ENERGY (added 2026-11-04, UNVERIFIED AGAINST OUR OWN UNIT - see the caveat below before trusting
+ * this section): upstream anszom/rethink's `H11.ts` (a different dishwasher model, but the same
+ * AABB envelope family and the same `0x32` sub-byte this file's own ACK_SUB already uses) decodes
+ * a `32 3e` frame:
+ *
+ *   32 3e <delta Wh, u16 BE> <accum Wh, u16 BE> <report #>   (7 bytes total)
+ *
+ * identical in shape to FX___S.ts's (washer) own `0x3E` energy report, which this fork has
+ * independently confirmed against real appliance + smart-plug readings - see that file's
+ * `processEnergyReport` for the full story. On that strength this is ported here on the
+ * assumption our H01 unit speaks the same `32 3e` convention, NOT because it has been seen on our
+ * own unit's wire: this household's dishwasher (e2819f55) is not currently connected to the local
+ * bridge, and the 14-day frame-log retention (config.json's `frame_log_days`) has already rolled
+ * past its last confirmed connection (~2026-09-20), so there is nothing left to check it against
+ * right now. If the real frame never arrives (different opcode, different length, or this model
+ * simply doesn't send one), `processEnergyReport` below is just never called and the energy
+ * entities stay unpublished rather than publishing something wrong - no risk either way, but this
+ * paragraph should be updated (or the whole section pulled) the first time the unit is seen live
+ * again and this either confirms or fails to confirm.
  */
 
 const ACK_SUB = 0x32
@@ -137,6 +158,12 @@ const REC_COURSE_INDEX = 7
 const REC_RESERVATION_HOURS = 11
 const REC_OPTIONS = 14
 const REC_DRY = 17
+
+/** See the file header's ENERGY section - ported from upstream H11.ts, unverified against our
+ *  own unit. Same shape/length as FX___S.ts's own `0x3E` (sub-byte differs: `0x32` here vs
+ *  FX___S's `0x20`, matching this file's own ACK_SUB). */
+const MSG_ENERGY = 0x3e
+const ENERGY_LEN = 7
 
 const OPT_STEAM = 0x80
 const OPT_INTENSIVE_TOP = 0x40
@@ -204,6 +231,10 @@ export default class Device extends AABBDevice {
 
     /** (dir:tag) pairs already flagged as unrecognised, so a repeating one is noted once. */
     private seenUnknown = new Set<string>()
+
+    /** See the file header's ENERGY section - speculative, wired the same way FX___S.ts/
+     *  RD20_S.ts/2REF21EBNSX_3.ts/3REK2G03VI200S_2.ts wire theirs. */
+    private energy: energyAccumulator.EnergyTracker | undefined
 
     constructor(HA: Connection, thinq: Thinq2Device, meta: Metadata) {
         super(HA, thinq, false)
@@ -371,6 +402,49 @@ export default class Device extends AABBDevice {
                     icon: 'mdi:snowflake-melt',
                     entity_category: 'config',
                 },
+                // See the file header's ENERGY section - speculative, ported from upstream H11.ts,
+                // unverified against our own unit. Stays unpublished (not wrong) if the `32 3e`
+                // frame never actually arrives. Mirrors FX___S.ts's own four-entity shape exactly.
+                energy: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-energy',
+                    state_topic: '$this/energy',
+                    name: 'Energy this cycle',
+                    icon: 'mdi:lightning-bolt',
+                    device_class: 'energy',
+                    unit_of_measurement: 'Wh',
+                    state_class: 'total_increasing',
+                },
+                energy_hour: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-energy_hour',
+                    name: 'Energy this hour',
+                    icon: 'mdi:lightning-bolt',
+                    device_class: 'energy',
+                    unit_of_measurement: 'Wh',
+                    state_class: 'total',
+                    state_topic: '$this/energy_hour',
+                },
+                energy_day: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-energy_day',
+                    name: 'Energy today',
+                    icon: 'mdi:lightning-bolt',
+                    device_class: 'energy',
+                    unit_of_measurement: 'Wh',
+                    state_class: 'total',
+                    state_topic: '$this/energy_day',
+                },
+                energy_month: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-energy_month',
+                    name: 'Energy this month',
+                    icon: 'mdi:lightning-bolt',
+                    device_class: 'energy',
+                    unit_of_measurement: 'Wh',
+                    state_class: 'total',
+                    state_topic: '$this/energy_month',
+                },
             },
         })
 
@@ -380,11 +454,23 @@ export default class Device extends AABBDevice {
             this.id,
             'H01 (식기세척기) handler started - power, six settings toggles; see file header for what is decoded',
         )
+
+        // See the file header's ENERGY section. Wired here, not in start() - see FX___S.ts's
+        // identical constructor-placed wiring (and RD20_S.ts/2REF21EBNSX_3.ts/3REK2G03VI200S_2.ts)
+        // for why: a delta reaching processAABB then works from construction onward regardless of
+        // whether/when start() runs.
+        this.energy = energyAccumulator.attach(this.id, (property, value) => this.publishProperty(property, value))
     }
 
     start() {
         super.start()
         this.send(QUERY_FRAME)
+    }
+
+    cancelPendingWork() {
+        this.energy?.cancel()
+        this.energy = undefined
+        super.cancelPendingWork()
     }
 
     setProperty(prop: string, mqttValue: string) {
@@ -493,6 +579,18 @@ export default class Device extends AABBDevice {
         this.publishProperty('air_filter', settingsB & SETTINGS_B_AIR_FILTER_REMINDER ? 'ON' : 'OFF')
     }
 
+    /** See the file header's ENERGY section - speculative, ported from upstream H11.ts, unverified
+     *  against our own unit. Mirrors FX___S.ts's own `processEnergyReport` exactly: the accum field
+     *  becomes "energy this cycle" directly (the frame already carries it accumulated, same as
+     *  FX___S's `total`), and the delta field feeds the hour/day/month accumulator. */
+    processEnergyReport(payload: Buffer) {
+        const delta = payload.readUInt16BE(0)
+        const accum = payload.readUInt16BE(2)
+
+        this.publishProperty('energy', accum)
+        if (delta > 0) void this.energy?.recordDelta(delta)
+    }
+
     processAABB(buf: Buffer) {
         // ack: <sub=0x32> 00 26 00  (4 bytes) - nothing to publish, just confirms the write landed
         if (buf.length === 4 && buf[0] === ACK_SUB && buf[1] === 0x00 && buf[2] === ACK_OPCODE && buf[3] === 0x00)
@@ -501,6 +599,13 @@ export default class Device extends AABBDevice {
         // 0xEC dual-record status frame (new record last) / 0xEB single-record response to
         // QUERY_FRAME - same record shape either way. See the file header's STATUS RECORD section.
         if (this.processCommonStatus(buf, ACK_SUB, RECORD_LEN, this.publishRecord)) return
+
+        // See the file header's ENERGY section - speculative, ported from upstream H11.ts,
+        // unverified against our own unit.
+        if (buf.length === ENERGY_LEN && buf[0] === ACK_SUB && buf[1] === MSG_ENERGY) {
+            this.processEnergyReport(buf.subarray(2))
+            return
+        }
 
         // Anything else is a frame this handler does not parse yet (the course-name table, etc).
         // Note it once per shape so a future session has something to grep for, the same way
