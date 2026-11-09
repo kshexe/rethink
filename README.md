@@ -24,35 +24,37 @@ log for the individual pick-overs), while device handlers for models outside thi
 upstream rather than carried here unused. Each sync also walks every upstream issue and PR (open
 and closed) and every fork with commits of its own ahead of upstream, for anything useful beyond
 what a plain commit diff would show - not just new device handlers, but techniques, shared-infra
-fixes, or ideas from a PR that never got merged. **Last such review: 2026-11-03** - 19 upstream
-commits since 2026-10-26, none touching a device this fleet owns and none of the rest applicable
-either (`bridge/thinq1connection.ts`'s `0de21e2` destroy-bug fix doesn't apply here - this fork
-dropped ThinQ1 bridge support, `bridge/thinq1connection.ts`, entirely). One genuine gap found and
-fixed instead by walking open PRs/forks beyond the commit log: `anszom/rethink#70e1462` (open,
-unmerged) closed a real hole in `cloud/thinq2/device.ts`'s `mqtt()` - it accepted a
-`clip/message/devices/<did>` packet by re-deriving the "expected" topic from that same packet's
-own `did`, a tautology that let a payload with a forged `did` through as long as it was sent on
-the matching topic string. Routed by the topic assigned at provisioning instead, with 4 new tests.
-Also ported `anszom/rethink#bfbd227` (open, unmerged): records a device's `packageId` (some
-devices send it; influences which modelJSON LG's backend serves) and shows it in the management
-panel, bundled with `anszom/rethink#74fdc6c`'s HTML-escaping of the model name and monitor-link id
-in `html/panel.js` - fixed a casing bug in that upstream commit itself (`escapeHTML` called but
-`escapeHtml` defined) rather than carrying the typo over. `anszom/rethink#155` (open, unmerged:
-crash-risk fixes for `bridge/thinq1connection.ts`/`thinq2connection.ts`/`cloud/homeassistant.ts`)
-and an independent fork fix (`DanielJShen/rethink`, `cloud/homeassistant.ts` error listener) both
-turned out to already be covered here - this fork's own `bridge/thinq2connection.ts` and
-`cloud/homeassistant.ts` already have the same (and in the bridge case, a more complete) fix.
-Seen but deliberately _not_ applied: `anszom/rethink#269` (open, unmerged) adds a write-queue/
-serialization mechanism to the shared `cloud/devices/aabb_device.ts` base class that 7 of this
-fork's 8 device handlers extend - real technique, but a large behavioral addition to code nearly
-every owned device inherits, from an unmerged, unreviewed PR for a device (`MI2U7B`) this fleet
-doesn't have; better reconsidered once it's stable upstream or a concrete collision bug shows up
-here. `anszom/rethink#227`/`#289` (two new AABB-family dishwashers implementing course-selection
-writes) are a pointer for `H01`'s own known course-write gap below, but porting that needs a live
-capture against the actual H01 unit, not a port from a different model's code. Checked all 35
-forks pushed to since the prior review (of 163 total) for independent work ahead of upstream -
-only 4 had any, all already covered by the PR review above or, in `rtvanhook/rethink`'s case, predating it by
-weeks despite a fresh push. The next review only needs to look at what changed after this date.
+fixes, or ideas from a PR that never got merged. **Last such review: 2026-11-09** - 15 upstream
+commits since `0de21e2` (to `e99f494`), none touching a device this fleet owns: all are either new
+or unowned-model handlers (`S5MPC` styler, `WD722RH`/deviceType-103 water purifiers, `WM4000HWA`
+washer, `2REF11EBIVPC4` fridge - none of these files exist in this fork) or fixes to models this
+fork doesn't carry (`RAC_056905_WW`/`WIN_056905_WW` display-light and mode fixes; `dryer_common`'s
+new shared tables, which only ever touch `BDH_D30007_US`/`RC90U2_WW`/`RV13B6*` - `RD20_S`, this
+fork's own dryer, speaks a different key-value protocol entirely and isn't among them). One
+shared-infra commit, `7060fd6` ("introduce explicit connection multiplexing" - rewrites
+`cloud/devices/aabb_device.ts`, `cloud/thinq2/device.ts`, `bridge/index.ts`/`thinq2connection.ts`,
+`management/index.ts` into an explicit mux layer), was deliberately _not_ ported for the same
+reason as `#269` below: no concrete bug on an owned device, and its own stated motivation is
+groundwork for future write-arbitration on devices this fleet doesn't have - confirmed by its
+diff being behaviorally equivalent for AABB devices (same ack logic, just relocated). Walking
+issues/PRs past the prior cutoff surfaced nothing applicable either: `#302` (ThinQ Schedule fails
+for bridge-provisioned `RAC_056905_WW`) is specific to bridge mode and a model this fork doesn't
+own - this fleet's devices are natively supported, not bridged; `#310` ("ignore retained MQTT
+commands to prevent reconnect replay") was self-closed by its own author within the same day as
+speculative/unproven, deliberately keeping retained-command support; `#311` ("shared laundry
+write arbitration infrastructure") is draft-only, targets an unmerged branch, and is infrastructure
+for `MI2U7B` (a mini-washer model this fleet doesn't have, distinct from this fork's own `MI2D7B`).
+`#269` (SideKick write-queue/serialization on `aabb_device.ts`) remains open/unmerged and still
+deliberately unported for the same reason as always. Forks: `forks_count` is now **173** (up from
+163); of the 22 pushed to since the prior review, only 4 had real commits ahead of upstream -
+`martinemde/rethink` (81 ahead on its `main` branch: a fleshed-out version of the same `#311`
+laundry-multiplexer work plus new, unowned device handlers (`BDVG_FX0003_US`, `FAFXU22007`,
+`MI2U7B`) and monitor-UI tooling (`packet-decoder.js`/`packet-view.js`) - still nothing for an
+owned device, and the branch itself is 31 commits behind master), `rtvanhook/rethink` (still the
+same stale 2026-09-06 `WM4000HWA` content resurfacing on every fresh push, as in the prior two
+reviews), and `NadavK/rethink`/`undermark5/rethink` (one-commit new-device ports for
+`2REF11EBIVPC4` and `RV13B6AM_D_US_WIFI`, neither owned). The next review only needs to look at
+what changed after this date.
 
 #### Air conditioners
 
