@@ -125,6 +125,25 @@ import * as energyAccumulator from '../energy-accumulator'
  * out to just be independent noise, seen flipping on its own on a schedule unrelated to power or
  * anything else decoded here.
  *
+ * COURSE START (added 2026-11-09, UNVERIFIED AGAINST OUR OWN UNIT): this file's own POWER write
+ * (`f0 26 <state>`) and SETTINGS BITFIELD WRITE (`f0 26 00 00 <byte4> <byte5> ...`) already show
+ * `f0 26 <subcmd> ...` is this model's general command dispatch. Upstream `anszom/rethink`'s H11.ts
+ * (the same AABB/0x32 sibling this file's ENERGY section above was already ported from) and the
+ * newer N02.ts (PR #227, "same 0x32/0xEB/0xEC family as N17/D0211/H11") both confirm `subcmd 0x10`
+ * is course-start, with the identical shape on both:
+ *
+ *   f0 26 10 <course> <delayHours> 00 <opt3> <opt4> 00
+ *
+ * Ported here using this file's own ALREADY-confirmed course indices (see STATUS RECORD's
+ * record[7] note above: 자동=1, 강력=2, 표준=5, 통살균=9, 건조단독=15, 야간조용=16) with
+ * delay/opt3/opt4 all zeroed (start now, no extra options) - NOT because `f0 26 10` has been seen
+ * on our own unit's wire (it hasn't; no course start was captured in this unit's 14-day frame log
+ * either from this handler, which does not send it yet, or from the app), but on the strength of
+ * two independent same-family siblings agreeing on the exact byte shape. "다운로드" (download
+ * slot, index 11) is deliberately excluded from target_course - its index is not stable identity
+ * (see STATUS RECORD), so there is nothing fixed to start. If this does not work on the real unit,
+ * nothing else breaks: `start_course` just never progresses past "sent" with no effect.
+ *
  * ENERGY (added 2026-11-04, UNVERIFIED AGAINST OUR OWN UNIT - see the caveat below before trusting
  * this section): upstream anszom/rethink's `H11.ts` (a different dishwasher model, but the same
  * AABB envelope family and the same `0x32` sub-byte this file's own ACK_SUB already uses) decodes
@@ -164,6 +183,19 @@ const REC_DRY = 17
  *  FX___S's `0x20`, matching this file's own ACK_SUB). */
 const MSG_ENERGY = 0x3e
 const ENERGY_LEN = 7
+
+/** See the file header's COURSE START section - ported from upstream H11.ts/N02.ts, unverified
+ *  against our own unit. Course indices are this file's own, already confirmed on the read side
+ *  (STATUS RECORD's record[7] note) - "다운로드" excluded, see the file header. */
+const COURSE_START_SUB = 0x10
+const COURSES: Record<string, number> = {
+    자동: 1,
+    강력: 2,
+    표준: 5,
+    통살균: 9,
+    건조단독: 15,
+    야간조용: 16,
+}
 
 const OPT_STEAM = 0x80
 const OPT_INTENSIVE_TOP = 0x40
@@ -211,6 +243,12 @@ function buildSettingsWrite(byte4: number, byte5: number): Buffer {
     return Buffer.from([0xf0, 0x26, 0x00, 0x00, byte4, byte5, 0x00, 0x00, 0x00, 0x00])
 }
 
+/** See the file header's COURSE START section - UNVERIFIED AGAINST OUR OWN UNIT. delay/opt3/opt4
+ *  all zeroed: start now, no extra options. */
+function buildCourseStartWrite(course: number): Buffer {
+    return Buffer.from([0xf0, 0x26, COURSE_START_SUB, course, 0x00, 0x00, 0x00, 0x00, 0x00])
+}
+
 /** ACTIVE QUERY (2026-09-12, see RD20_S.ts's identical constant): this fridge-family query frame
  *  also elicits a real response here, even though nothing is read from it any more (see the
  *  processAABB comment below). Sent once on connect only, not on a repeating timer: this
@@ -224,6 +262,10 @@ const QUERY_FRAME = Buffer.from('f0ed1211010000010400', 'hex')
 
 export default class Device extends AABBDevice {
     power: boolean | undefined
+
+    /** See the file header's COURSE START section - UNVERIFIED AGAINST OUR OWN UNIT. Armed by
+     *  target_course, consumed by start_course. */
+    private targetCourse: number | undefined
 
     /** The most recently seen 26-byte status record (old or new copy, whichever arrived last) -
      *  see the file header's SETTINGS BITFIELD WRITE section for why a settings write needs this. */
@@ -445,6 +487,24 @@ export default class Device extends AABBDevice {
                     state_class: 'total',
                     state_topic: '$this/energy_month',
                 },
+                // See the file header's COURSE START section - UNVERIFIED AGAINST OUR OWN UNIT.
+                target_course: {
+                    platform: 'select',
+                    unique_id: '$deviceid-target_course',
+                    state_topic: '$this/target_course',
+                    command_topic: '$this/target_course/set',
+                    name: 'Target course (unverified)',
+                    icon: 'mdi:format-list-bulleted',
+                    options: Object.keys(COURSES),
+                },
+                start_course: {
+                    platform: 'button',
+                    unique_id: '$deviceid-start_course',
+                    command_topic: '$this/start_course/set',
+                    payload_press: '',
+                    name: 'Start course (unverified)',
+                    icon: 'mdi:play-circle-outline',
+                },
             },
         })
 
@@ -452,7 +512,7 @@ export default class Device extends AABBDevice {
         log(
             'status',
             this.id,
-            'H01 (식기세척기) handler started - power, six settings toggles; see file header for what is decoded',
+            'H01 (식기세척기) handler started - power, six settings toggles, target_course/start_course (unverified); see file header for what is decoded',
         )
 
         // See the file header's ENERGY section. Wired here, not in start() - see FX___S.ts's
@@ -496,6 +556,21 @@ export default class Device extends AABBDevice {
                 return this.setSetting('auto_select', 'autoSelect', mqttValue === 'ON')
             case 'cool_dry':
                 return this.setSetting('cool_dry', 'coolDry', mqttValue === 'ON')
+            // See the file header's COURSE START section - UNVERIFIED AGAINST OUR OWN UNIT.
+            case 'target_course': {
+                const course = COURSES[mqttValue]
+                if (course === undefined) return
+                this.targetCourse = course
+                this.publishProperty('target_course', mqttValue)
+                return
+            }
+            case 'start_course': {
+                if (this.targetCourse === undefined) {
+                    log('status', `${this.id}: start_course pressed before target_course was set - not sent`)
+                    return
+                }
+                return this.send(buildCourseStartWrite(this.targetCourse))
+            }
             default:
                 console.warn(`H01: attempting to set unknown property ${prop}`)
         }

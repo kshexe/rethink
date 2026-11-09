@@ -79,6 +79,10 @@ describe(MODEL_ID, () => {
             'energy_hour',
             'energy_day',
             'energy_month',
+            // See the file header's OPERATION section - pause/resume confirmed, start unverified.
+            'pause',
+            'resume',
+            'start',
             'notification',
         ])
         assert.equal(components.power.command_topic, '$this/power/set')
@@ -103,6 +107,33 @@ describe(MODEL_ID, () => {
             assert.equal(thinq.outbox.length, 1, `power=${value} sent one frame`)
             assert.equal(thinq.outbox[0].toString('hex'), want, `power=${value}`)
         }
+    })
+
+    /*
+     * REAL: captured off a real unit, 2026-10-30T11:27:15Z/11:28:10Z - see the file header's
+     * OPERATION section. The app was used to pause then resume an in-progress cycle.
+     */
+    test('pause/resume write reproduce the captured frames byte for byte', () => {
+        for (const [prop, want] of [
+            ['pause', 'aa0df0e5000201ff010302c1bb'],
+            ['resume', 'aa0df0e5000201ff010303c0bb'],
+        ] as [string, string][]) {
+            const { thinq, dev } = makeDevice()
+            thinq.resetRecorder()
+            dev.setProperty(prop, '')
+            assert.equal(thinq.outbox.length, 1, `${prop} sent one frame`)
+            assert.equal(thinq.outbox[0].toString('hex'), want, prop)
+        }
+    })
+
+    // UNVERIFIED AGAINST OUR OWN UNIT - see the file header's OPERATION section. Same KEY_OPERATION
+    // byte the real pause/resume captures above confirm, value 1 per FX___S.ts/upstream MI2U7B.ts.
+    test('start write follows the same OPERATION key as the confirmed pause/resume (unverified)', () => {
+        const { thinq, dev } = makeDevice()
+        thinq.resetRecorder()
+        dev.setProperty('start', '')
+        assert.equal(thinq.outbox.length, 1)
+        assert.equal(thinq.outbox[0].toString('hex'), 'aa0df0e5000201ff010301c6bb')
     })
 
     test('power is published optimistically as soon as it is set, not waiting on a device echo', () => {

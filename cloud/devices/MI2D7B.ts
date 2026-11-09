@@ -99,6 +99,23 @@ import * as energyAccumulator from '../energy-accumulator'
  * the official `lg_thinq` integration's own sensor) - published as a best-effort reading rather
  * than left undecoded, but treat a value from this field with a bit more caution than the rest of
  * this file until a full cycle confirms it reaches 0 at completion.
+ *
+ * OPERATION (pause/resume CONFIRMED 2026-11-09, start UNVERIFIED): mining this unit's own 14-day
+ * frame log for unmodelled `f0 e5` writes turned up a real app-driven pause/resume pair, byte for
+ * byte FX___S.ts's own `KEY_OPERATION`/`OP_PAUSE`/`OP_RESUME` convention:
+ *
+ *   to-device   aa 0d f0 e5 00 02 01 ff 01 03 02 <ck> bb   (2026-10-30T11:27:15Z, pause)
+ *   to-device   aa 0d f0 e5 00 02 01 ff 01 03 03 <ck> bb   (2026-10-30T11:28:10Z, resume)
+ *
+ * i.e. key 0x03 value 0x02 = pause, value 0x03 = resume - exactly FX___S.ts's own values, not
+ * just the same key number. `pause`/`resume` below are wired from this, not a guess. `OP_START`
+ * (value 0x01) is NOT in that capture - nobody started a cycle from the app in this window - but
+ * it is the same enum FX___S.ts and the upstream `martinemde/rethink` fork's MI2U7B.ts (a sibling
+ * TWINWash-family mini washer sharing this exact F0E5 vocabulary, including 0x03={1:start,
+ * 2:pause,3:resume}) both use, and this unit's own confirmed 2/3 values match that enum exactly -
+ * so `start` is wired the same way but marked UNVERIFIED AGAINST OUR OWN UNIT below. No course can
+ * be armed first (see NOT YET DECODED above - this appliance's course byte values are unknown),
+ * so `start` can only resume whatever course is already selected on the physical panel.
  */
 
 const FROM_DEVICE_ACK_OPCODE = 0xe5
@@ -110,6 +127,14 @@ const POWER_OFFSET = 46
 
 /** Shared with FX___S.ts's vocabulary for the same F0E5 protocol family. */
 const KEY_POWER = 0x02
+
+/** See the file header's OPERATION section. OP_PAUSE/OP_RESUME confirmed via a real captured
+ *  pause+resume on this unit; OP_START is the same FX___S.ts/upstream-MI2U7B enum, UNVERIFIED
+ *  against this unit specifically. */
+const KEY_OPERATION = 0x03
+const OP_START = 1
+const OP_PAUSE = 2
+const OP_RESUME = 3
 
 /** Builds the `f0 e5 00 02 01 ff <n> [<key> <value>]*n` payload AABBDevice.send() wraps and
  *  checksums. Every value here has been single-byte so far; this device has no 16-bit key
@@ -233,6 +258,35 @@ export default class Device extends AABBDevice {
                     state_class: 'total_increasing',
                     state_topic: '$this/energy_month',
                 },
+                // See the file header's OPERATION section - confirmed via a real captured
+                // pause+resume on this unit.
+                pause: {
+                    platform: 'button',
+                    unique_id: '$deviceid-pause',
+                    command_topic: '$this/pause/set',
+                    payload_press: '',
+                    name: 'Pause',
+                    icon: 'mdi:pause-circle-outline',
+                },
+                resume: {
+                    platform: 'button',
+                    unique_id: '$deviceid-resume',
+                    command_topic: '$this/resume/set',
+                    payload_press: '',
+                    name: 'Resume',
+                    icon: 'mdi:play-circle-outline',
+                },
+                // See the file header's OPERATION section - UNVERIFIED AGAINST OUR OWN UNIT. No
+                // course can be armed first (course byte values are unknown), so this can only
+                // resume whatever course is already selected on the physical panel.
+                start: {
+                    platform: 'button',
+                    unique_id: '$deviceid-start',
+                    command_topic: '$this/start/set',
+                    payload_press: '',
+                    name: 'Start (unverified)',
+                    icon: 'mdi:play-circle-outline',
+                },
                 // See the file header's NOTIFICATION section.
                 notification: {
                     platform: 'event',
@@ -256,7 +310,7 @@ export default class Device extends AABBDevice {
         log(
             'status',
             this.id,
-            'MI2D7B (미니워시) handler started - power on/off, remain_time_minutes, energy, notification, see file header',
+            'MI2D7B (미니워시) handler started - power on/off, remain_time_minutes, energy, notification, pause/resume (start unverified), see file header',
         )
         // Wired here, not in start(), so a delta reaching processAABB works from construction
         // onward regardless of whether/when start() runs - see the identical comment in
@@ -293,6 +347,15 @@ export default class Device extends AABBDevice {
                 if (!on) this.publishProperty('remain_time_minutes', 0)
                 return
             }
+            // See the file header's OPERATION section - confirmed via a real captured
+            // pause+resume on this unit.
+            case 'pause':
+                return this.send(buildSettingsWrite([[KEY_OPERATION, OP_PAUSE]]))
+            case 'resume':
+                return this.send(buildSettingsWrite([[KEY_OPERATION, OP_RESUME]]))
+            // UNVERIFIED AGAINST OUR OWN UNIT - see the file header's OPERATION section.
+            case 'start':
+                return this.send(buildSettingsWrite([[KEY_OPERATION, OP_START]]))
             default:
                 console.warn(`MI2D7B: attempting to set unknown property ${prop}`)
         }

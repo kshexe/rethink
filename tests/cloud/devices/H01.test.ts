@@ -129,6 +129,10 @@ describe(MODEL_ID, () => {
             'energy_hour',
             'energy_day',
             'energy_month',
+            // See the file header's COURSE START section - speculative, unverified against our
+            // own unit.
+            'target_course',
+            'start_course',
         ])
         const writable = [
             'power',
@@ -138,6 +142,8 @@ describe(MODEL_ID, () => {
             'time_indicator',
             'auto_select',
             'cool_dry',
+            'target_course',
+            'start_course',
         ]
         for (const key of writable) {
             assert.equal(components[key].command_topic, `$this/${key}/set`, `${key} has a command_topic`)
@@ -167,6 +173,29 @@ describe(MODEL_ID, () => {
         assert.equal(ha.devices[DEVICE_ID].properties.power, 'ON')
         dev.setProperty('power', 'OFF')
         assert.equal(ha.devices[DEVICE_ID].properties.power, 'OFF')
+    })
+
+    /*
+     * NOT A REAL CAPTURE - see the file header's COURSE START section. `f0 26 10 <course> ...` has
+     * never been seen on our own unit's wire; this only exercises this fork's own byte assembly
+     * against the shape upstream H11.ts/N02.ts confirm for the same 0x32 family, using this file's
+     * own already-confirmed course index for "표준" (5, see STATUS RECORD).
+     */
+    test('start_course is not sent before target_course is set', () => {
+        const { thinq, dev } = makeDevice()
+        thinq.resetRecorder()
+        dev.setProperty('start_course', '')
+        assert.equal(thinq.outbox.length, 0)
+    })
+
+    test('target_course is published optimistically, start_course then reproduces the UNVERIFIED shape', () => {
+        const { ha, thinq, dev } = makeDevice()
+        dev.setProperty('target_course', '표준')
+        assert.equal(ha.devices[DEVICE_ID].properties.target_course, '표준')
+        thinq.resetRecorder()
+        dev.setProperty('start_course', '')
+        assert.equal(thinq.outbox.length, 1)
+        assert.equal(thinq.outbox[0].toString('hex'), 'aa0df02610050000000000b7bb')
     })
 
     test('the ack frame is accepted and publishes nothing', () => {
