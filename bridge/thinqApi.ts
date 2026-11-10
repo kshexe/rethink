@@ -44,7 +44,12 @@ export async function apiFetch<T = unknown>(url: string, options: RequestInit): 
     }
 
     if (out.resultCode !== '0000') {
-        console.log(url, options, out)
+        // Deliberately not logging `options` here - it carries the live auth bearer
+        // (x-emp-token) in its headers, and this fires on every failed call. A device
+        // that's gone offline/unregistered but still gets polled on a timer (e.g. by
+        // snapshot-logger.ts) would otherwise dump that token into the log every cycle,
+        // forever.
+        console.log(url, out)
         throw new RemoteError(url, out.resultCode, out.result)
     }
 

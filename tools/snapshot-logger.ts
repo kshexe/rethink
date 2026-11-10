@@ -18,11 +18,24 @@
 // <out-dir>/<deviceId>.jsonl, each line {ts, deviceId, snapshot} (or {ts, deviceId, error}).
 // ts is an ISO string in UTC, matching the frame recorder's own `/share/rethink/frames/*.jsonl`
 // timestamps - the two logs are meant to be read side by side by device id + time.
+//
+// Only writes a line when the snapshot/error differs from the last one written for that
+// device (appendEvent dedupes in-memory, per device) - most devices sit in the same state
+// for far longer than the poll interval, and logging every unchanged poll grew these files
+// to multi-GB within weeks with nothing to show for it. A line's absence just means "still
+// the same as the previous line," so a gap's start time is read off the one line before it.
 
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { authenticate } from '@/util/lgcloud/monitor'
 import { loadState, saveState } from '@/util/lgcloud/state'
+import { RemoteError } from '@/bridge/thinqApi'
+
+// Device gone from the account (unregistered/disconnected) - re-authenticating can never fix
+// this, so retrying it after every single poll just doubles the wasted work and log noise.
+// Keep polling on the normal schedule (it recovers on its own once the device reconnects),
+// just skip the pointless reauth-and-retry step for this one error code.
+const PERMANENT_ERROR_CODE = '0101'
 
 let statePath: string | undefined
 let intervalMs = 20_000
@@ -46,7 +59,12 @@ function log(msg: string) {
     console.error(`[${new Date().toISOString()}] ${msg}`)
 }
 
+const lastWritten = new Map<string, string>()
+
 function appendEvent(deviceId: string, event: object) {
+    const key = JSON.stringify(event)
+    if (lastWritten.get(deviceId) === key) return
+    lastWritten.set(deviceId, key)
     const line = JSON.stringify({ ts: new Date().toISOString(), deviceId, ...event }) + '\n'
     fs.appendFileSync(path.join(outDir, `${deviceId}.jsonl`), line)
 }
@@ -112,12 +130,16 @@ async function main() {
                 const snapshot = await client.getDeviceStatus(id)
                 appendEvent(id, { snapshot })
             } catch (err) {
-                try {
-                    await reauth('after error: ' + (err instanceof Error ? err.message : String(err)))
-                    const snapshot = await client.getDeviceStatus(id)
-                    appendEvent(id, { snapshot })
-                } catch (err2) {
-                    appendEvent(id, { error: err2 instanceof Error ? err2.message : String(err2) })
+                if (err instanceof RemoteError && err.resultCode === PERMANENT_ERROR_CODE) {
+                    appendEvent(id, { error: err.message })
+                } else {
+                    try {
+                        await reauth('after error: ' + (err instanceof Error ? err.message : String(err)))
+                        const snapshot = await client.getDeviceStatus(id)
+                        appendEvent(id, { snapshot })
+                    } catch (err2) {
+                        appendEvent(id, { error: err2 instanceof Error ? err2.message : String(err2) })
+                    }
                 }
             }
             await new Promise((resolve) => setTimeout(resolve, staggerMs))
