@@ -24,37 +24,50 @@ log for the individual pick-overs), while device handlers for models outside thi
 upstream rather than carried here unused. Each sync also walks every upstream issue and PR (open
 and closed) and every fork with commits of its own ahead of upstream, for anything useful beyond
 what a plain commit diff would show - not just new device handlers, but techniques, shared-infra
-fixes, or ideas from a PR that never got merged. **Last such review: 2026-11-09** - 15 upstream
-commits since `0de21e2` (to `e99f494`), none touching a device this fleet owns: all are either new
-or unowned-model handlers (`S5MPC` styler, `WD722RH`/deviceType-103 water purifiers, `WM4000HWA`
-washer, `2REF11EBIVPC4` fridge - none of these files exist in this fork) or fixes to models this
-fork doesn't carry (`RAC_056905_WW`/`WIN_056905_WW` display-light and mode fixes; `dryer_common`'s
-new shared tables, which only ever touch `BDH_D30007_US`/`RC90U2_WW`/`RV13B6*` - `RD20_S`, this
-fork's own dryer, speaks a different key-value protocol entirely and isn't among them). One
-shared-infra commit, `7060fd6` ("introduce explicit connection multiplexing" - rewrites
-`cloud/devices/aabb_device.ts`, `cloud/thinq2/device.ts`, `bridge/index.ts`/`thinq2connection.ts`,
-`management/index.ts` into an explicit mux layer), was deliberately _not_ ported for the same
-reason as `#269` below: no concrete bug on an owned device, and its own stated motivation is
-groundwork for future write-arbitration on devices this fleet doesn't have - confirmed by its
-diff being behaviorally equivalent for AABB devices (same ack logic, just relocated). Walking
-issues/PRs past the prior cutoff surfaced nothing applicable either: `#302` (ThinQ Schedule fails
-for bridge-provisioned `RAC_056905_WW`) is specific to bridge mode and a model this fork doesn't
-own - this fleet's devices are natively supported, not bridged; `#310` ("ignore retained MQTT
-commands to prevent reconnect replay") was self-closed by its own author within the same day as
-speculative/unproven, deliberately keeping retained-command support; `#311` ("shared laundry
-write arbitration infrastructure") is draft-only, targets an unmerged branch, and is infrastructure
-for `MI2U7B` (a mini-washer model this fleet doesn't have, distinct from this fork's own `MI2D7B`).
-`#269` (SideKick write-queue/serialization on `aabb_device.ts`) remains open/unmerged and still
-deliberately unported for the same reason as always. Forks: `forks_count` is now **173** (up from
-163); of the 22 pushed to since the prior review, only 4 had real commits ahead of upstream -
-`martinemde/rethink` (81 ahead on its `main` branch: a fleshed-out version of the same `#311`
-laundry-multiplexer work plus new, unowned device handlers (`BDVG_FX0003_US`, `FAFXU22007`,
-`MI2U7B`) and monitor-UI tooling (`packet-decoder.js`/`packet-view.js`) - still nothing for an
-owned device, and the branch itself is 31 commits behind master), `rtvanhook/rethink` (still the
-same stale 2026-09-06 `WM4000HWA` content resurfacing on every fresh push, as in the prior two
-reviews), and `NadavK/rethink`/`undermark5/rethink` (one-commit new-device ports for
-`2REF11EBIVPC4` and `RV13B6AM_D_US_WIFI`, neither owned). The next review only needs to look at
-what changed after this date.
+fixes, or ideas from a PR that never got merged. **Last such review: 2026-11-13** - 1 upstream
+commit since the prior review's `e99f494` (to `635d8fe`): another `RAC_056905_WW` display-light
+checksum, same unowned-model bucket as every other RAC commit before it - no action. One
+correction to the 2026-11-09 review itself: `7cd73ba` (deviceType 103 added to the bridge setup
+UI's autocomplete list) had been bundled into that review's "unowned device" skip bucket, but it
+isn't a device handler at all - it's a one-line addition to `html/panel.js`, a file this fork
+already carries, and costs nothing regardless of whether this fleet owns a water purifier; ported
+now. Issues/PRs opened or updated since the prior cutoff: the 20 most recently touched are all
+either unowned-model PRs (SideKick `#269`, four more dryer/washer/fridge/microwave models, a water
+heater, an air filter) or `#319`/`#321` (`RAC_056905_WW`, not owned). `#317` ("newly provisioned
+devices never finish provisioning, missing `newProvisioning`") is a real general bug, not
+device-specific - but its own text confirms it only hits a device paired through rethink from
+scratch, never previously registered with the real LG app; every device this fleet owns was
+reverse-engineered by driving the official app first (see each file's own methodology notes), so
+none of them are exposed - worth remembering if a future device is ever paired cold, not an action
+item now.
+
+The substantive finding this round came from the household flagging `SdrgonLee/rethink` directly
+(it had already surfaced in a 2026-11-04 fork-wide sweep as the only fork anywhere carrying an
+`ML32PWFOTA.ts`, but its one genuinely new idea sat unactioned until now). `ML32PWFOTA.ts`'s own
+`40 eb` heartbeat decode (added back in `ee9a92a`) was captured only while the real ThinQ app had
+the oven's screen open, every session - the file's methodology notes confirm this throughout -
+so nothing here had ever tested whether the heartbeat keeps flowing once the app looks away.
+`SdrgonLee/rethink`, targeting this exact model, confirmed against a real unit that it does not:
+without something actively polling with `f0 ef 00 46` every ~30s (what the app itself sends while
+its screen is open), remaining_time arrives once and then stops - their own passive, capture-only
+handler hit exactly this. Ported their query as a new `STATUS_QUERY`, sent on `start()` and every
+30s - not yet independently verified against this fleet's own unit, so watch a real cook
+end-to-end after deploying to confirm `40 eb` keeps arriving throughout; adjust the query or
+interval if it doesn't. The 2026-11-04 sweep's only other fork-wide hit, `stkang/rethink`'s own
+`CST_570004_WW.ts` (193 lines), was checked too: every tag it decodes is already decoded in this
+fork's own 2127-line handler, nothing to port.
+
+Forks: `forks_count` is now **180** (up from 173). The ~19 forks that look new against the
+2026-11-04 snapshot (itself an incomplete list, so this is a fuzzy diff, not an exact one) were
+each checked for any of this fleet's own device filenames; none matched. Of the 4 forks with real
+commits ahead as of 2026-11-09: `martinemde/rethink` is now 87 ahead (was 81) / 14 behind (was 31)
+on its `main` branch - the 6 new commits are more of the same unowned-device/laundry-multiplexer
+work (SideKick support, KeepFresh, Smart Pairing, a bigger version of the same write-arbitration
+infrastructure `7060fd6`/`#311`/`#269` keep getting declined for above) and touch none of this
+fleet's device files; `rtvanhook/rethink` got a fresh push (2026-11-12) but its content is still
+the identical stale 2026-09-06/07 `WM4000HWA` commits, confirmed by commit timestamp - nothing
+new; `NadavK/rethink`/`undermark5/rethink` unchanged since the last review. The next review only
+needs to look at what changed after this date.
 
 #### Air conditioners
 
@@ -95,9 +108,9 @@ what changed after this date.
 
 #### Ovens and ranges
 
-| ThinQ model | Appliance                                             | Support                                                                                                                                                                                                                                                                                                                                                                    |
-| ----------- | ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| ML32PWFOTA  | (model name unknown), Combi Microwave Oven (광파오븐) | 👍 course select, cook time, target temperature, send/cancel, running status, active course, cleaning-function tracking, remaining time and notifications all mapped. Sending a course only ever queues it ("전송 완료") - a physical button press on the oven itself is required to actually start cooking, and this handler has no wire command that starts it remotely. |
+| ThinQ model | Appliance                                             | Support                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ----------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| ML32PWFOTA  | (model name unknown), Combi Microwave Oven (광파오븐) | 👍 course select, cook time, target temperature, send/cancel, running status, active course, cleaning-function tracking, remaining time and notifications all mapped. Sending a course only ever queues it ("전송 완료") - a physical button press on the oven itself is required to actually start cooking, and this handler has no wire command that starts it remotely. Periodically re-queries status on its own (`STATUS_QUERY`, every 30s) so remaining time keeps updating without the real ThinQ app open - see the upstream/fork review note above. |
 
 #### Stylers
 

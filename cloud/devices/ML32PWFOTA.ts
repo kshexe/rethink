@@ -196,6 +196,20 @@ import { note as recordNote } from '../frame-recorder'
  * frame this handler used to leave unmodelled too, turned out to be a plain periodic heartbeat
  * carrying the same 28-byte record as `40 ec`'s current half - see QUERY_OPCODE_LO - but `40 bf`
  * is a different shape and remains unexplained; `40 72` is decoded now, see NOTIFICATION below). A
+ *
+ * STATUS_QUERY (added 2026-11-13, not captured independently against this fork's own unit): the
+ * `40 eb` heartbeat above was only ever captured while the official ThinQ app had this oven's
+ * screen open - every capture session for this file was run with the app open throughout (see the
+ * methodology notes above). github.com/SdrgonLee/rethink, an independent fork also targeting this
+ * exact model (ML32PWFOTA), found and confirmed against a real unit that this heartbeat is not
+ * actually unconditional: the appliance only keeps emitting `40 eb`/remaining_time updates while
+ * something is actively polling it with `f0 ef 00 46`, which is what the app itself sends while
+ * its oven screen is open. Without that, their capture-only (passive) handler saw remaining_time
+ * arrive once and then stop - precisely the failure mode this file's own heartbeat comment did not
+ * anticipate. Adopted their query here (STATUS_QUERY, sent on start() and every
+ * STATUS_QUERY_INTERVAL_MS) so remaining_time keeps updating without the real app ever being open.
+ * Watch a real cook end-to-end after deploying this to confirm `40 eb` keeps arriving throughout -
+ * if it doesn't, the query itself (or its interval) may need adjusting for this unit's firmware.
  * real fault mid-cook. Whether the oven itself reports its own door open/closed the way the fridge
  * does. Also 스팀 mode pops a "물통을 채워주세요" (fill the water tank) confirm dialog in the UI
  * before it will send - not reproduced or needed here since this handler only ever queues a
@@ -229,6 +243,11 @@ const STATE_OPCODE_LO = 0xec
 /** The periodic single-record heartbeat sibling of `40 ec` - see processAABB's `40 eb` branch. */
 const QUERY_OPCODE_LO = 0xeb
 const STATE_RECORD_LEN = 28
+
+/** Keeps the `40 eb` heartbeat (and therefore remaining_time) flowing without the real ThinQ app
+ *  open - see the file header's STATUS_QUERY section. */
+const STATUS_QUERY = Buffer.from('f0ef0046', 'hex')
+const STATUS_QUERY_INTERVAL_MS = 30_000
 
 /** See the file header's NOTIFICATION section. */
 const NOTIFY_OPCODE = 0x72
@@ -476,6 +495,7 @@ export default class Device extends AABBDevice {
     cookTemp: number = COURSES[DEFAULT_COURSE].defaultTemp ?? 0
 
     private seenUnknown = new Set<string>()
+    private statusQueryTimer: ReturnType<typeof setInterval> | undefined
 
     /** Events do not go through publishProperty - not deduped (a repeat of the same event must
      *  still fire) and not retained (an event entity should not replay a stale past occurrence at
@@ -617,6 +637,18 @@ export default class Device extends AABBDevice {
             this.id,
             'ML32PWFOTA (광파오븐) handler started - course select + cook time + send/cancel, never start; see file header',
         )
+    }
+
+    start() {
+        super.start()
+        this.send(STATUS_QUERY)
+        this.statusQueryTimer = setInterval(() => this.send(STATUS_QUERY), STATUS_QUERY_INTERVAL_MS)
+    }
+
+    cancelPendingWork() {
+        clearInterval(this.statusQueryTimer)
+        this.statusQueryTimer = undefined
+        super.cancelPendingWork()
     }
 
     /** Clamps to the selected course's own real range (see COURSES) and publishes both controls -

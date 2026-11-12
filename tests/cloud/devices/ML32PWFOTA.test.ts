@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import DUT from '@/cloud/devices/ML32PWFOTA'
 import type { Metadata } from '@/cloud/thinq'
 import { MockHAConnection, MockThinq2Device, buf } from '@/tests/helpers/mocks'
+import { enableMockTimers, tickMockTimers } from '@/tests/helpers/timers'
 
 const DEVICE_ID = 'test-id'
 const MODEL_ID = 'ML32PWFOTA'
@@ -520,5 +521,23 @@ describe(MODEL_ID, () => {
             JSON.parse(String(ha.devices[DEVICE_ID].properties.notification)).event_type,
             'preheating_is_complete',
         )
+    })
+
+    // See the file header's STATUS_QUERY section: without this, remaining_time only ever arrived
+    // once (the real ThinQ app has to be left open on the oven's screen to keep it flowing).
+    test('start() queries status immediately and every 30s, stopping once dropped', (t) => {
+        enableMockTimers(t)
+        const { thinq, dev } = makeDevice()
+        thinq.resetRecorder()
+
+        dev.start()
+        assert.deepEqual(thinq.outbox, [buf('aa08f0ef004682bb')])
+
+        tickMockTimers(t, 30_000)
+        assert.deepEqual(thinq.outbox, [buf('aa08f0ef004682bb'), buf('aa08f0ef004682bb')])
+
+        dev.drop()
+        tickMockTimers(t, 30_000)
+        assert.equal(thinq.outbox.length, 2, 'drop() must stop the periodic query')
     })
 })
