@@ -274,6 +274,10 @@ function decodeStatus(b: number): string {
     return STATUS_NAMES[b] ?? `unknown_${b}`
 }
 
+/** The two statuses that mean a cycle is actually running (not merely queued/preheating/paused)
+ *  - see applyStateRecord's own comment for why total_time keys off exactly these two. */
+const RUNNING_STATUSES = new Set([0x02, 0x03])
+
 /** record[1] values confirmed live, one course at a time, against the frame log - see the file
  *  header's ACTIVE COURSE AND REMAINING TIME section. Only meaningful while record[0] is
  *  "cooking_in_progress" or "paused" - it reads a different, non-course value while queued or
@@ -496,6 +500,9 @@ export default class Device extends AABBDevice {
 
     private seenUnknown = new Set<string>()
     private statusQueryTimer: ReturnType<typeof setInterval> | undefined
+    /** See applyStateRecord's own comment - tracks the previous status so a fresh transition into
+     *  a RUNNING_STATUSES status can be told apart from an already-running cycle's next poll. */
+    private previousStatus: number | undefined
 
     /** Events do not go through publishProperty - not deduped (a repeat of the same event must
      *  still fire) and not retained (an event entity should not replay a stale past occurrence at
@@ -615,6 +622,20 @@ export default class Device extends AABBDevice {
                     device_class: 'duration',
                     unit_of_measurement: 's',
                 },
+                // See applyStateRecord's own comment: a snapshot of remaining_time taken the
+                // instant a cycle actually starts running, since cook_time_minutes/seconds (this
+                // handler's own inputs) never reflect a course started from the oven's physical
+                // buttons - adopted from SdrgonLee/rethink's own idea for this model, see the
+                // upstream/fork review note in README.md.
+                total_time: {
+                    platform: 'sensor',
+                    unique_id: '$deviceid-total_time',
+                    state_topic: '$this/total_time',
+                    name: 'Total time',
+                    icon: 'mdi:timer-sand',
+                    device_class: 'duration',
+                    unit_of_measurement: 's',
+                },
                 // See the file header's NOTIFICATION section.
                 notification: {
                     platform: 'event',
@@ -728,17 +749,41 @@ export default class Device extends AABBDevice {
         // (0x01) and preheating_is_done (0x06) carry the same record[1] course id as a real cook -
         // confirmed live with a 180C 오븐 preheat.
         if (status === 0x01 || status === 0x02 || status === 0x03 || status === 0x04 || status === 0x06) {
+            let remaining: number
             if (current[1] === CLEANING_MARKER) {
                 this.publishProperty('active_cleaning_function', decodeCleaningFunction(current[2]))
-                this.publishProperty('remaining_time', current[4] * 60 + current[5])
+                remaining = current[4] * 60 + current[5]
             } else if (current[1] === MY_RECIPE_MARKER) {
                 this.publishProperty('active_course', '내가 만든 레시피')
-                this.publishProperty('remaining_time', current[3] * 3600 + current[4] * 60 + current[5])
+                remaining = current[3] * 3600 + current[4] * 60 + current[5]
             } else {
                 this.publishProperty('active_course', decodeCourseId(current[1]))
-                this.publishProperty('remaining_time', current[3] * 3600 + current[4] * 60 + current[5])
+                remaining = current[3] * 3600 + current[4] * 60 + current[5]
             }
+            this.publishProperty('remaining_time', remaining)
+
+            // total_time: cook_time_minutes/seconds are this handler's own write-only inputs (see
+            // setCookTime) - a course started from the oven's physical buttons, not through
+            // rethink, never updates them, so they can't be trusted to show what's actually
+            // running. remaining_time alone can't say what the original total was either, since it
+            // only ever counts down. So this snapshots remaining_time the instant a cycle actually
+            // starts running (RUNNING_STATUSES, not merely queued/preheating) and holds it steady
+            // across the rest of that cycle, pause included - re-snapshotting on every poll while
+            // already running would just track remaining_time itself, which defeats the point.
+            if (RUNNING_STATUSES.has(status)) {
+                const wasAlreadyRunning = this.previousStatus !== undefined && RUNNING_STATUSES.has(this.previousStatus)
+                if (!wasAlreadyRunning) this.publishProperty('total_time', remaining)
+            } else if (status !== 0x04) {
+                // Preheating (0x01/0x06): not actually running yet, so no real total_time exists
+                // until it transitions into RUNNING_STATUSES above. Paused (0x04) is excluded here
+                // on purpose - it's the same cycle continuing, not a reason to clear the snapshot.
+                this.publishProperty('total_time', undefined)
+            }
+        } else {
+            this.publishProperty('total_time', undefined)
         }
+
+        this.previousStatus = status
     }
 
     processAABB(buf: Buffer) {

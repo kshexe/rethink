@@ -53,7 +53,18 @@ its screen is open), remaining_time arrives once and then stops - their own pass
 handler hit exactly this. Ported their query as a new `STATUS_QUERY`, sent on `start()` and every
 30s - not yet independently verified against this fleet's own unit, so watch a real cook
 end-to-end after deploying to confirm `40 eb` keeps arriving throughout; adjust the query or
-interval if it doesn't. The 2026-11-04 sweep's only other fork-wide hit, `stkang/rethink`'s own
+interval if it doesn't. A full read of the rest of their 202-line file (not just a tag-coverage
+diff, which this fork's own `0x`-prefixed-byte scan had already judged as "nothing else new" -
+too narrow a check, since it only catches different _constants_, not different _entities_) turned
+up one more real idea worth porting: a `total_time` sensor, snapshotting `remaining_time` the
+instant a cycle actually starts running. This fork's own `cook_time_minutes`/`cook_time_seconds`
+are write-only inputs for its own `send` - a course started from the oven's physical buttons never
+updates them, so nothing here could previously show what a remotely-unknown physical start's
+actual total duration was. Ported as this fork's own `total_time`, held fixed across a pause and
+cleared once done (their version clears/never-sets it via a literal `'None'` string on a
+`device_class: duration` sensor, which doesn't round-trip through HA - this fork's version uses
+`publishProperty(..., undefined)` instead, the existing convention this handler already uses for
+`oven_temperature`). The 2026-11-04 sweep's only other fork-wide hit, `stkang/rethink`'s own
 `CST_570004_WW.ts` (193 lines), was checked too: every tag it decodes is already decoded in this
 fork's own 2127-line handler, nothing to port.
 
@@ -108,9 +119,9 @@ needs to look at what changed after this date.
 
 #### Ovens and ranges
 
-| ThinQ model | Appliance                                             | Support                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| ----------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| ML32PWFOTA  | (model name unknown), Combi Microwave Oven (광파오븐) | 👍 course select, cook time, target temperature, send/cancel, running status, active course, cleaning-function tracking, remaining time and notifications all mapped. Sending a course only ever queues it ("전송 완료") - a physical button press on the oven itself is required to actually start cooking, and this handler has no wire command that starts it remotely. Periodically re-queries status on its own (`STATUS_QUERY`, every 30s) so remaining time keeps updating without the real ThinQ app open - see the upstream/fork review note above. |
+| ThinQ model | Appliance                                             | Support                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ----------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| ML32PWFOTA  | (model name unknown), Combi Microwave Oven (광파오븐) | 👍 course select, cook time, target temperature, send/cancel, running status, active course, cleaning-function tracking, remaining time and notifications all mapped. Sending a course only ever queues it ("전송 완료") - a physical button press on the oven itself is required to actually start cooking, and this handler has no wire command that starts it remotely. Periodically re-queries status on its own (`STATUS_QUERY`, every 30s) so remaining time keeps updating without the real ThinQ app open - see the upstream/fork review note above. Also tracks `total_time`: cook_time_minutes/seconds are write-only inputs for this handler's own `send`, so a course started from the oven's physical buttons never updates them - `total_time` snapshots `remaining_time` the instant a cycle actually starts running instead, held fixed across a pause, cleared once done. |
 
 #### Stylers
 

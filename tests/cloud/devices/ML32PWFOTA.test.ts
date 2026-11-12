@@ -166,6 +166,7 @@ describe(MODEL_ID, () => {
             'remaining_time',
             'send',
             'target_temperature',
+            'total_time',
         ])
         assert.deepEqual(components.course.options, ['구이', '레인지', '오븐', '스팀', '식품건조', '발효'])
     })
@@ -401,6 +402,41 @@ describe(MODEL_ID, () => {
         thinq.emit('data', STATE_OVEN_PAUSED_185)
         assert.equal(ha.devices[DEVICE_ID].properties.current_status, 'paused')
         assert.equal(ha.devices[DEVICE_ID].properties.oven_temperature, 185)
+    })
+
+    // total_time: see applyStateRecord's own comment - cook_time_minutes/seconds (this handler's
+    // write-only inputs) never reflect a course the real cook started from, so this snapshots
+    // remaining_time the instant a cycle actually starts running instead.
+    test('total_time snapshots remaining_time once a queued course actually starts running, then clears once done', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', STATE_PRE_RUN)
+        assert.equal(ha.devices[DEVICE_ID].properties.current_status, 'preference')
+        assert.equal(ha.devices[DEVICE_ID].properties.total_time, 'None', 'merely queued, not running yet')
+
+        thinq.emit('data', STATE_COOKING_10S)
+        assert.equal(ha.devices[DEVICE_ID].properties.remaining_time, 10)
+        assert.equal(ha.devices[DEVICE_ID].properties.total_time, 10)
+
+        thinq.emit('data', STATE_DONE)
+        assert.equal(ha.devices[DEVICE_ID].properties.total_time, 'None', 'cycle over, snapshot cleared')
+
+        thinq.emit('data', STATE_DONE_BACK_TO_INITIAL)
+        assert.equal(ha.devices[DEVICE_ID].properties.total_time, 'None')
+    })
+
+    test('total_time stays fixed across a pause instead of re-snapshotting to the smaller remaining value', () => {
+        const { ha, thinq } = makeDevice()
+        thinq.emit('data', STATE_OVEN_COOKING_185)
+        assert.equal(ha.devices[DEVICE_ID].properties.remaining_time, 10)
+        assert.equal(ha.devices[DEVICE_ID].properties.total_time, 10)
+
+        thinq.emit('data', STATE_OVEN_PAUSED_185)
+        assert.equal(
+            ha.devices[DEVICE_ID].properties.remaining_time,
+            5,
+            'remaining_time keeps reporting the real value',
+        )
+        assert.equal(ha.devices[DEVICE_ID].properties.total_time, 10, 'total_time is not re-snapshotted to 5')
     })
 
     test('a real maintenance-menu run (steam clean etc.) publishes cleaning', () => {
